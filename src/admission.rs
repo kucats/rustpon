@@ -342,7 +342,11 @@ mod tests {
                 let copied = admitted.copy_accepted(index, &mut content).unwrap();
                 if survivors.contains(&index) {
                     assert_eq!(copied, Some(content.len() as u64), "{label}");
-                    assert_eq!(content, if index == 0 { b"first" } else { b"second" }, "{label}");
+                    assert_eq!(
+                        content,
+                        if index == 0 { b"first" } else { b"second" },
+                        "{label}"
+                    );
                 } else {
                     assert_eq!(copied, None, "{label}");
                     assert!(content.is_empty(), "{label}");
