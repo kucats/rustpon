@@ -99,6 +99,62 @@ static void multipart_smoke(void) {
     assert(rmdir(spool) == 0);
 }
 
+static void stateful_multipart_smoke(void) {
+    char spool[] = "/tmp/rustpon-ffi-session-XXXXXX";
+    assert(mkdtemp(spool) != NULL);
+    const uint8_t entity[] =
+        "--b\r\nContent-Disposition: form-data; name=\"f\"; filename=\"old.bin\"\r\n\r\nOLD\r\n"
+        "--b\r\nContent-Disposition: form-data; name=\"f\"; filename=\"new.bin\"\r\n\r\nACCEPTED\r\n"
+        "--b--\r\n";
+    uint64_t handles[8] = {0};
+    for (size_t i = 0; i < 8; ++i) {
+        assert(rustpon_v1_multipart_session_open(
+            (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
+            (const uint8_t *)spool, strlen(spool), &handles[i]) == RUSTPON_OK);
+        assert(handles[i] > 0);
+    }
+    uint64_t excess = UINT64_MAX;
+    assert(rustpon_v1_multipart_session_open(
+        (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
+        (const uint8_t *)spool, strlen(spool), &excess) == RUSTPON_SESSIONS_FULL);
+    assert(excess == 0);
+
+    for (size_t i = 0; i < 8; ++i) {
+        size_t required = UINT64_MAX;
+        uint8_t buffer[32];
+        memset(buffer, 0xa5, sizeof(buffer));
+        assert(rustpon_v1_multipart_session_upload_copy(
+            handles[i], 0, buffer, sizeof(buffer), &required) == RUSTPON_NOT_ADMITTED);
+        assert(required == 0 && buffer[0] == 0xa5);
+        assert(rustpon_v1_multipart_session_upload_copy(
+            handles[i], 1, NULL, 0, &required) == RUSTPON_BUFFER_TOO_SMALL);
+        assert(required == 8);
+        size_t got = 0;
+        assert(rustpon_v1_multipart_session_upload_copy(
+            handles[i], 1, buffer, 7, &got) == RUSTPON_BUFFER_TOO_SMALL);
+        assert(got == 8 && buffer[0] == 0xa5);
+        assert(rustpon_v1_multipart_session_upload_copy(
+            handles[i], 1, buffer, sizeof(buffer), &got) == RUSTPON_OK);
+        assert(got == 8 && memcmp(buffer, "ACCEPTED", 8) == 0);
+        assert(rustpon_v1_multipart_session_files_json(
+            handles[i], NULL, 0, &got) == RUSTPON_BUFFER_TOO_SMALL);
+        assert(got > 0);
+        assert(rustpon_v1_multipart_session_close(handles[i]) == RUSTPON_OK);
+        assert(rustpon_v1_multipart_session_close(handles[i]) == RUSTPON_INVALID_HANDLE);
+        assert(rustpon_v1_multipart_session_upload_copy(
+            handles[i], 1, buffer, sizeof(buffer), &got) == RUSTPON_INVALID_HANDLE);
+        assert(got == 0);
+    }
+    assert(rustpon_v1_multipart_session_close(0) == RUSTPON_INVALID_HANDLE);
+    uint64_t renewed = 0;
+    assert(rustpon_v1_multipart_session_open(
+        (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
+        (const uint8_t *)spool, strlen(spool), &renewed) == RUSTPON_OK);
+    assert(renewed > handles[7]);
+    assert(rustpon_v1_multipart_session_close(renewed) == RUSTPON_OK);
+    assert(rmdir(spool) == 0);
+}
+
 int main(void) {
     assert(rustpon_ffi_abi_version() == 0x00010000);
     const uint8_t binary[] = "a=one&a=two&list[]=A&x=%00%ff&n[2]=z";
@@ -122,6 +178,7 @@ int main(void) {
     assert(required > 0);
     free(size_too_big);
     multipart_smoke();
-    puts("FFI C smoke: 128 form round trips, 64 multipart requests, errors and cleanup OK");
+    stateful_multipart_smoke();
+    puts("FFI C smoke: 128 form, 64 one-shot multipart, 8 stateful handles, quota/close checks OK");
     return 0;
 }
