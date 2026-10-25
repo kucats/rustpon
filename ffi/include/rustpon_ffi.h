@@ -35,7 +35,8 @@ enum rustpon_status {
     RUSTPON_POST_REJECTED = 3,
     RUSTPON_BUFFER_TOO_SMALL = 4,
     RUSTPON_PANIC = 5,
-    RUSTPON_OUTPUT_LIMIT = 6
+    RUSTPON_OUTPUT_LIMIT = 6,
+    RUSTPON_NOT_ADMITTED = 7
 };
 
 uint32_t rustpon_ffi_abi_version(void);
@@ -45,6 +46,42 @@ int32_t rustpon_v1_form_post_json(
     size_t input_len,
     uint8_t *output,
     size_t output_capacity,
+    size_t *required_len
+);
+
+/*
+ * Complete multipart body + trusted, existing private spool directory.
+ * boundary is raw bytes without "--". spool_dir is a UTF-8 byte path
+ * (not NUL terminated, may not contain NUL) that must be supplied by trusted
+ * server configuration, not an HTTP-controlled field.
+ *
+ * The parser stages uploads anonymously then closes them before returning.
+ * _files_json returns typed tagged JSON of the admitted $_FILES metadata.
+ * _upload_copy returns binary bytes for an admitted wire part index only.
+ * A zero-byte admitted upload returns OK with *required_len = 0.
+ * Invalid/rejected/overwritten indices return NOT_ADMITTED.
+ *
+ * Both calls are one-shot, re-parse on each query/copy invocation and have
+ * no retained handles. Never assume a request-specific resource persists.
+ * Accepted data is still copied, not transferred as a raw OS file descriptor.
+ * Same memory, pointer and output publication contract as form_post_json.
+ * Input and body each must be <= 256 KiB, boundary <= 70 bytes, spool path
+ * <= 4096 bytes. Only Linux/macOS prototype targets are supported.
+ */
+int32_t rustpon_v1_multipart_files_json(
+    const uint8_t *boundary, size_t boundary_len,
+    const uint8_t *body, size_t body_len,
+    const uint8_t *spool_dir, size_t spool_len,
+    uint8_t *output, size_t output_capacity,
+    size_t *required_len
+);
+
+int32_t rustpon_v1_multipart_upload_copy(
+    const uint8_t *boundary, size_t boundary_len,
+    const uint8_t *body, size_t body_len,
+    const uint8_t *spool_dir, size_t spool_len,
+    size_t wire_part_index,
+    uint8_t *output, size_t output_capacity,
     size_t *required_len
 );
 
