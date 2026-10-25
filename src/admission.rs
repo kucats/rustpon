@@ -311,7 +311,9 @@ mod tests {
     #[test]
     fn only_php_visible_uploads_survive_overwrites_and_nested_replacements() {
         let spool = Spool::new();
-        let cases: &[(&str, &[&[u8]], &[usize])] = &[
+        type UploadNames<'a> = &'a [&'a [u8]];
+        type Case<'a> = (&'a str, UploadNames<'a>, &'a [usize]);
+        let cases: &[Case<'_>] = &[
             ("flat-duplicate", &[b"f", b"f"], &[1]),
             ("nested-to-flat", &[b"f[x]", b"f"], &[1]),
             ("flat-to-nested", &[b"f", b"f[x]"], &[1]),
