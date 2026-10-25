@@ -10,20 +10,34 @@ function tagged(mixed $value): array {
         }
         return ['a', $entries];
     }
+    if (is_int($value)) { return ['i', (string)$value]; }
     if (!is_string($value)) { throw new RuntimeException('Unexpected type'); }
     return ['s', bin2hex($value)];
 }
 // Stable metadata-only view: int leaves are ASCII strings and server-side
 // temporary paths are replaced with a sentinel, including nested arrays.
-function normalized_files(mixed $value, bool $isTmpName = false): mixed {
+function normalized_files(
+    mixed $value,
+    int $depth = 0,
+    bool $isTmpName = false,
+    bool $preserveIntegers = false
+): mixed {
     if (is_array($value)) {
         foreach ($value as $key => $child) {
-            $value[$key] = normalized_files($child, $isTmpName || $key === 'tmp_name');
+            // tmp_name is an attribute in the second level only; an uploaded
+            // field can independently have a nested key literally tmp_name.
+            $isTmpColumn = $depth === 1 && $key === 'tmp_name';
+            $value[$key] = normalized_files(
+                $child, $depth + 1, $isTmpName || $isTmpColumn, $preserveIntegers
+            );
         }
         return $value;
     }
     if ($isTmpName) {
         return $value === '' ? '' : '__RUSTPON_STAGED__';
+    }
+    if ($preserveIntegers && is_int($value)) {
+        return $value;
     }
     return (string)$value;
 }
@@ -47,5 +61,6 @@ foreach ($_FILES as $name => $info) {
 }
 header('Content-Type: application/json');
 echo json_encode(['post_tree' => tagged($_POST), 'files' => $files,
-                  'files_tree' => tagged(normalized_files($_FILES))],
+                  'files_tree' => tagged(normalized_files($_FILES)),
+                  'files_tree_typed' => tagged(normalized_files($_FILES, 0, false, true))],
                  JSON_THROW_ON_ERROR), "\n";
