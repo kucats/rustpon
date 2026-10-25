@@ -48,6 +48,17 @@ jobs:
           php-version: '8.4'
           coverage: none
           tools: none
+      - name: Build and smoke-test PHP 8.4 RINIT/RSHUTDOWN extension (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          phpize -v
+          php-config --version
+          cd ffi/php_probe
+          phpize
+          ./configure --enable-rustpon-probe
+          make -j2
+          cd ../..
+          python3 tools/php_probe_lifecycle.py --module ffi/php_probe/modules/rustpon_probe.so --library ffi/target/debug/librustpon_ffi.so
       - name: Compare with PHP 8.4 parse_str (Linux)
         if: runner.os == 'Linux'
         run: |
