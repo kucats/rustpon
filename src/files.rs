@@ -335,8 +335,7 @@ mod tests {
 
     #[test]
     fn max_file_size_is_ordered_and_does_not_take_upload_ownership() {
-        let path =
-            std::env::temp_dir().join(format!("rustpon-max-form-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("rustpon-max-form-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let body = b"--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n2\r\n--b\r\nContent-Disposition: form-data; name=f; filename=x.txt\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n3\r\n--b\r\nContent-Disposition: form-data; name=g; filename=y.txt\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n--b--\r\n";
         let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
