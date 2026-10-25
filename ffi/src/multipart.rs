@@ -6,8 +6,8 @@
 //! is not a client-configurable path or a PHP upload registry.
 
 use super::{
-    BUFFER_TOO_SMALL, INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OK, OUTPUT_LIMIT, PANIC,
-    PARSE_REJECTED, POST_REJECTED, publish,
+    INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OUTPUT_LIMIT, PANIC, PARSE_REJECTED,
+    POST_REJECTED, publish,
 };
 use rustpon::admission::{self, Policy};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -57,12 +57,7 @@ fn parse(boundary: &[u8], body: &[u8], spool: &Path, mode: Mode) -> Result<Vec<u
     Ok(writer.bytes)
 }
 
-/// # Safety
-///
-/// All pointers must be live, properly aligned and pairwise non-overlapping
-/// over the entire declared range throughout the call. No concurrent mutation.
-/// The spool path is supplied by a trusted C caller, not an HTTP client.
-unsafe fn run(
+struct Call {
     boundary: *const u8,
     boundary_len: usize,
     body: *const u8,
@@ -72,8 +67,25 @@ unsafe fn run(
     output: *mut u8,
     output_capacity: usize,
     required_len: *mut usize,
-    mode: Mode,
-) -> i32 {
+}
+
+/// # Safety
+///
+/// All pointers must be live, properly aligned and pairwise non-overlapping
+/// over the entire declared range throughout the call. No concurrent mutation.
+/// The spool path is supplied by a trusted C caller, not an HTTP client.
+unsafe fn run(args: Call, mode: Mode) -> i32 {
+    let Call {
+        boundary,
+        boundary_len,
+        body,
+        body_len,
+        spool_dir,
+        spool_len,
+        output,
+        output_capacity,
+        required_len,
+    } = args;
     match catch_unwind(AssertUnwindSafe(|| {
         if required_len.is_null() {
             return INVALID_ARGUMENT;
@@ -142,15 +154,17 @@ pub unsafe extern "C" fn rustpon_v1_multipart_files_json(
     // SAFETY: Contract is identical to run; no pointers are retained.
     unsafe {
         run(
-            boundary,
-            boundary_len,
-            body,
-            body_len,
-            spool_dir,
-            spool_len,
-            output,
-            output_capacity,
-            required_len,
+            Call {
+                boundary,
+                boundary_len,
+                body,
+                body_len,
+                spool_dir,
+                spool_len,
+                output,
+                output_capacity,
+                required_len,
+            },
             Mode::Metadata,
         )
     }
@@ -183,15 +197,17 @@ pub unsafe extern "C" fn rustpon_v1_multipart_upload_copy(
     // SAFETY: Contract is identical to run; no pointers are retained.
     unsafe {
         run(
-            boundary,
-            boundary_len,
-            body,
-            body_len,
-            spool_dir,
-            spool_len,
-            output,
-            output_capacity,
-            required_len,
+            Call {
+                boundary,
+                boundary_len,
+                body,
+                body_len,
+                spool_dir,
+                spool_len,
+                output,
+                output_capacity,
+                required_len,
+            },
             Mode::Upload(wire_part_index),
         )
     }
@@ -200,6 +216,7 @@ pub unsafe extern "C" fn rustpon_v1_multipart_upload_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::{BUFFER_TOO_SMALL, OK};
     use std::fs;
     use std::os::unix::fs::DirBuilderExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
