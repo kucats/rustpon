@@ -27,6 +27,18 @@ jobs:
         run: cargo test --offline --locked --all-targets
       - name: Run Clippy
         run: cargo clippy --offline --locked --all-targets -- -D warnings
+      - name: FFI formatting
+        run: cargo fmt --manifest-path ffi/Cargo.toml -- --check
+      - name: FFI Rust tests
+        run: cargo test --manifest-path ffi/Cargo.toml --offline --all-targets
+      - name: FFI Clippy
+        run: cargo clippy --manifest-path ffi/Cargo.toml --offline --all-targets -- -D warnings
+      - name: FFI C caller smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --manifest-path ffi/Cargo.toml --offline
+          cc -std=c11 -Wall -Wextra -Werror -Iffi/include ffi/tests/abi_smoke.c -Lffi/target/debug -lrustpon_ffi -Wl,-rpath,"$PWD/ffi/target/debug" -o ffi/target/abi-smoke
+          ffi/target/abi-smoke
       - name: Set up PHP 8.4 reference (Linux)
         if: runner.os == 'Linux'
         uses: shivammathur/setup-php@v2
