@@ -662,3 +662,14 @@ ordered bytes, metadata, upload copies and staging cleanup. Linux CI builds
 and smoke-tests the harness; the PHP 8.4 CLI/SAPI oracle still runs separately.
 No continuous fuzz campaign or PHP-FPM production readiness is claimed.
 See [fuzz/README.md](fuzz/README.md) for usage and dependency licenses.
+
+## Bounded fuzz mutations and upload-copy ENOSPC fault matrix
+
+Linux CI now executes a short, reproducible libFuzzer mutation campaign
+(256 executions per target, 20-second cap) for both request parsers in
+addition to compiling the targets and running fixed seeds. The multipart
+harness injects destination `StorageFull` at four offsets for every
+accepted nonempty file, checks the partial output and retries the source
+copy byte-for-byte. This expands fault injection across generated multipart
+inputs; it is **not** a long-running sanitizer campaign or production PHP-FPM
+validation. See [fuzz/README.md](fuzz/README.md).

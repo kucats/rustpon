@@ -3,7 +3,7 @@ use rustpon::urlencoded::FormParser;
 use rustpon::{Error, Limits, Parser, Request, Stats, urlencoded};
 use std::fmt::Debug;
 use std::fs;
-use std::io::Cursor;
+use std::io::{self, Cursor, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -35,6 +35,29 @@ struct Snapshot {
     stats: Stats,
 }
 
+// A deterministic destination that accepts a prefix, then simulates ENOSPC.
+// The caller must discard its partial output; the source must remain retryable.
+struct FailAfter {
+    bytes: Vec<u8>,
+    budget: usize,
+}
+
+impl Write for FailAfter {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let available = self.budget.saturating_sub(self.bytes.len());
+        if available == 0 {
+            return Err(io::ErrorKind::StorageFull.into());
+        }
+        let count = data.len().min(available);
+        self.bytes.extend_from_slice(&data[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 fn snapshot(mut request: Request) -> Snapshot {
     let count = request.parts().len();
     let mut parts = Vec::with_capacity(count);
@@ -56,6 +79,23 @@ fn snapshot(mut request: Request) -> Snapshot {
                 upload.copy_to(&mut output).expect("staged copy"),
                 upload.len()
             );
+            // Inject write failure at several data-dependent offsets, then
+            // prove each failed copy leaves the staged source intact.
+            // The fuzz limit keeps the extra I/O and allocations bounded.
+            if !output.is_empty() {
+                for budget in [0, 1, output.len() / 2, output.len() - 1] {
+                    let mut sink = FailAfter {
+                        bytes: Vec::new(),
+                        budget,
+                    };
+                    let error = upload.copy_to(&mut sink).expect_err("injected ENOSPC");
+                    assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+                    assert_eq!(sink.bytes, output[..budget]);
+                    let mut retry = Vec::new();
+                    assert_eq!(upload.copy_to(&mut retry).expect("retry copy"), upload.len());
+                    assert_eq!(retry, output, "failed copy damaged staged source");
+                }
+            }
             output
         } else {
             value
@@ -180,6 +220,15 @@ mod tests {
         ] {
             exercise_urlencoded(input);
         }
+    }
+
+    #[test]
+    fn upload_copy_fault_offsets_across_buffer_boundaries() {
+        let mut data = b"0--b\r\nContent-Disposition: form-data; name=f; filename=f.bin\r\n\r\n".to_vec();
+        data.extend((0..4097).map(|i| (i % 256) as u8));
+        data.extend_from_slice(b"\r\n--b--\r\n");
+        assert!(data.len() <= MAX_INPUT + 1);
+        exercise_multipart(&data);
     }
 
     #[test]

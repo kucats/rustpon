@@ -28,3 +28,20 @@ seed tests. This does **not** mean long-running fuzz campaigns or sanitizers
 have completed. Existing PHP 8.4 CLI/SAPI differential tests remain the
 compatibility oracle. A PHP-FPM production rollout remains prohibited without
 further lifecycle testing and independent security review.
+
+## Bounded Linux CI mutation campaign
+
+Linux CI additionally **executes** both libFuzzer binaries with the checked-in
+seed corpora, fixed seed `20261026`, at most 256 executions per target and
+a 20-second time budget per target. This is a short mutation smoke campaign,
+not a long-running sanitizer or exhaustive coverage campaign. The binaries
+are built in the isolated fuzz workspace; no fuzzing dependency is introduced
+into the production parser or FFI.
+
+For every successfully parsed nonempty upload, the multipart harness injects
+destination `StorageFull` errors after 0, 1, half and all-but-one bytes.
+It checks the exact partial destination prefix, then copies the original
+staged upload again from offset zero and verifies the complete byte sequence.
+The spool is checked for leaked staged files after every parse. These checks
+exercise the caller-visible nontransactional copy contract; callers still
+must discard any partially written destination.
