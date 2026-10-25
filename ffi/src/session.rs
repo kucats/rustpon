@@ -15,6 +15,7 @@ use std::ptr;
 use std::sync::{Mutex, OnceLock};
 
 const MAX_SESSIONS: usize = 8;
+const MAX_SCOPES: usize = 8;
 const MAX_BOUNDARY: usize = 70;
 const MAX_SPOOL_PATH: usize = 4096;
 const INVALID_HANDLE: i32 = 8;
@@ -23,13 +24,18 @@ const NOT_ADMITTED: i32 = 7;
 
 struct Registry {
     next: u64,
-    active: Vec<(u64, AdmittedRequest)>,
+    next_scope: u64,
+    scopes: Vec<u64>,
+    // (session handle, owning scope or 0 for legacy/unscoped, request)
+    active: Vec<(u64, u64, AdmittedRequest)>,
 }
 
 impl Registry {
     fn new() -> Self {
         Self {
             next: 1,
+            next_scope: 1,
+            scopes: Vec::new(),
             active: Vec::new(),
         }
     }
@@ -77,6 +83,38 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_open(
     spool_len: usize,
     out_handle: *mut u64,
 ) -> i32 {
+    // SAFETY: identical ABI pointer preconditions to open_impl.
+    unsafe {
+        open_impl(
+            0,
+            boundary,
+            boundary_len,
+            body,
+            body_len,
+            spool_dir,
+            spool_len,
+            out_handle,
+        )
+    }
+}
+
+/// Internal common path for both legacy sessions and scoped sessions.
+/// The registry mutex serializes scope validation and session publication.
+///
+/// # Safety
+///
+/// Caller must supply valid, disjoint input buffers and a writable out_handle.
+#[allow(clippy::too_many_arguments)]
+unsafe fn open_impl(
+    scope: u64,
+    boundary: *const u8,
+    boundary_len: usize,
+    body: *const u8,
+    body_len: usize,
+    spool_dir: *const u8,
+    spool_len: usize,
+    out_handle: *mut u64,
+) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| {
         if out_handle.is_null() {
             return INVALID_ARGUMENT;
@@ -112,6 +150,9 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_open(
             Ok(guard) => guard,
             Err(_) => return PANIC,
         };
+        if scope != 0 && !guard.scopes.contains(&scope) {
+            return INVALID_HANDLE;
+        }
         if guard.active.len() >= MAX_SESSIONS {
             return SESSIONS_FULL;
         }
@@ -129,7 +170,7 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_open(
         }
         let handle = guard.next;
         guard.next += 1;
-        guard.active.push((handle, admitted));
+        guard.active.push((handle, scope, admitted));
         // SAFETY: pointer is a disjoint, writable u64.
         unsafe { ptr::write(out_handle, handle) };
         0
@@ -165,7 +206,7 @@ unsafe fn get(
             Ok(guard) => guard,
             Err(_) => return PANIC,
         };
-        let Some((_, admitted)) = guard.active.iter_mut().find(|(id, _)| *id == handle) else {
+        let Some((_, _, admitted)) = guard.active.iter_mut().find(|(id, _, _)| *id == handle) else {
             return INVALID_HANDLE;
         };
         let mut writer = LimitedOutput::new();
@@ -260,12 +301,116 @@ pub extern "C" fn rustpon_v1_multipart_session_close(handle: u64) -> i32 {
             Ok(guard) => guard,
             Err(_) => return PANIC,
         };
-        if let Some(index) = guard.active.iter().position(|(id, _)| *id == handle) {
+        if let Some(index) = guard.active.iter().position(|(id, _, _)| *id == handle) {
             guard.active.swap_remove(index);
             0
         } else {
             INVALID_HANDLE
         }
+    }) {
+        Ok(status) => status,
+        Err(_) => PANIC,
+    }
+}
+
+
+/// Start one PHP-request-scoped handle group. The returned integer must stay
+/// entirely inside the trusted C/PHP shim. No Rust pointers are exposed.
+///
+/// # Safety
+///
+/// out_scope is a live, aligned, writable u64 disjoint from any live input.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn rustpon_v1_scope_begin(out_scope: *mut u64) -> i32 {
+    match catch_unwind(AssertUnwindSafe(|| {
+        if out_scope.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: The C caller guarantees writable aligned result storage.
+        unsafe { ptr::write(out_scope, 0) };
+        let mut guard = match registry().lock() {
+            Ok(guard) => guard,
+            Err(_) => return PANIC,
+        };
+        if guard.scopes.len() >= MAX_SCOPES || guard.next_scope == u64::MAX {
+            return SESSIONS_FULL;
+        }
+        if guard.scopes.try_reserve(1).is_err() {
+            return POST_REJECTED;
+        }
+        let scope = guard.next_scope;
+        guard.next_scope += 1;
+        guard.scopes.push(scope);
+        // SAFETY: The result pointer remains writable and disjoint.
+        unsafe { ptr::write(out_scope, scope) };
+        0
+    })) {
+        Ok(status) => status,
+        Err(_) => PANIC,
+    }
+}
+
+/// Open an upload session attached to an existing request scope. A scope
+/// cannot be reused after end; open returns INVALID_HANDLE for stale scopes.
+///
+/// # Safety
+///
+/// All input spans and the result pointer must be live and disjoint; see
+/// rustpon_v1_multipart_session_open for the complete pointer contract.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)] // C ABI: stable scalar pointer/size pairs.
+pub unsafe extern "C" fn rustpon_v1_multipart_session_open_scoped(
+    scope: u64,
+    boundary: *const u8,
+    boundary_len: usize,
+    body: *const u8,
+    body_len: usize,
+    spool_dir: *const u8,
+    spool_len: usize,
+    out_handle: *mut u64,
+) -> i32 {
+    if scope == 0 {
+        if !out_handle.is_null() {
+            // SAFETY: The external caller guarantees an aligned writable u64.
+            unsafe { ptr::write(out_handle, 0) };
+        }
+        return INVALID_HANDLE;
+    }
+    // SAFETY: The pointer contract is identical to legacy open.
+    unsafe {
+        open_impl(
+            scope,
+            boundary,
+            boundary_len,
+            body,
+            body_len,
+            spool_dir,
+            spool_len,
+            out_handle,
+        )
+    }
+}
+
+/// End one request scope and synchronously destroy every session it owns.
+/// All accepted upload FDs from that scope are closed before returning.
+/// Sessions from other scopes, including legacy unscoped sessions, survive.
+/// This function is the intended primitive for the PHP RSHUTDOWN shim.
+#[unsafe(no_mangle)]
+pub extern "C" fn rustpon_v1_scope_end(scope: u64) -> i32 {
+    match catch_unwind(|| {
+        if scope == 0 {
+            return INVALID_HANDLE;
+        }
+        let mut guard = match registry().lock() {
+            Ok(guard) => guard,
+            Err(_) => return PANIC,
+        };
+        let Some(index) = guard.scopes.iter().position(|candidate| *candidate == scope) else {
+            return INVALID_HANDLE;
+        };
+        guard.scopes.swap_remove(index);
+        guard.active.retain(|(_, owner, _)| *owner != scope);
+        0
     }) {
         Ok(status) => status,
         Err(_) => PANIC,
