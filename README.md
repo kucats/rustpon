@@ -673,3 +673,19 @@ accepted nonempty file, checks the partial output and retries the source
 copy byte-for-byte. This expands fault injection across generated multipart
 inputs; it is **not** a long-running sanitizer campaign or production PHP-FPM
 validation. See [fuzz/README.md](fuzz/README.md).
+
+## Admission-boundary fuzzing and PHP SAPI collision oracle
+
+The isolated `fuzz/admission` target now exercises the **consuming**
+`admission::admit` boundary, independently comparing typed FILES projections
+and admitted payload bytes against the parsed wire request. It verifies
+overwritten/rejected upload indices are inaccessible, then injects server
+body-size, upload-size and metadata-quota denials with per-request staging
+cleanup checks. The Linux fuzz smoke campaign runs 256 additional mutations
+without adding a runtime dependency. Three new PHP 8.4 SAPI differential
+cases cover client MAX_FILE_SIZE changes followed by duplicate filenames,
+zero-length overwritten uploads and zero/binary array uploads.
+
+This is a bounded research harness, not a guarantee of memory safety under
+arbitrary I/O failures, exhaustive fuzz coverage, or a production Zend/FPM
+integration.

@@ -41,6 +41,7 @@ jobs:
           cargo build --manifest-path fuzz/Cargo.toml --bins
           fuzz/target/debug/urlencoded -runs=256 -max_len=8192 -max_total_time=20 -seed=20261026 fuzz/corpus/urlencoded
           fuzz/target/debug/multipart -runs=256 -max_len=8193 -max_total_time=20 -seed=20261026 fuzz/corpus/multipart
+          fuzz/target/debug/admission -runs=256 -max_len=8193 -max_total_time=20 -seed=20261026 fuzz/corpus/admission
       - name: FFI formatting
         run: cargo fmt --manifest-path ffi/Cargo.toml -- --check
       - name: FFI Rust tests

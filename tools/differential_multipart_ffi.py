@@ -35,6 +35,8 @@ OVERRIDES = {
     "max-case-insensitive": [],
     "max-nested": [],
     "max-changed": [3],
+    "max-collision-recovery": [3],
+    "file-zero-overwritten": [1],
 }
 
 

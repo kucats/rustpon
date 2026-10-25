@@ -1,6 +1,6 @@
 //! Bounded libFuzzer invariants and CI seed tests for request parsers.
 use rustpon::urlencoded::FormParser;
-use rustpon::{Error, Limits, Parser, Request, Stats, urlencoded};
+use rustpon::{Error, Limits, Parser, Request, Stats, admission, files, urlencoded};
 use std::fmt::Debug;
 use std::fs;
 use std::io::{self, Cursor, Write};
@@ -210,6 +210,142 @@ pub fn exercise_multipart(data: &[u8]) {
     spool.assert_empty();
 }
 
+/// Exercise the authorization boundary as well as the wire parser.
+/// Admission consumes its Request; every path must close staged descriptors.
+pub fn exercise_admission(data: &[u8]) {
+    if data.is_empty() || data.len() > MAX_INPUT + 1 {
+        return;
+    }
+    const BOUNDARIES: [&[u8]; 4] = [b"b", b"AaB03x", b"----rustpon", b"long-boundary-0123456789"];
+    let boundary = BOUNDARIES[(data[0] % 4) as usize];
+    let body = &data[1..];
+    let spool = Spool::new();
+    let Ok(mut raw) =
+        rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
+    else {
+        spool.assert_empty();
+        return;
+    };
+    let body_bytes = raw.stats().body_bytes;
+    let mut originals = Vec::new();
+    for index in 0..raw.parts().len() {
+        let is_file = raw
+            .parts()
+            .nth(index)
+            .expect("part index")
+            .file_bytes
+            .is_some();
+        if is_file {
+            let mut bytes = Vec::new();
+            raw.upload_mut(index)
+                .expect("staged upload")
+                .copy_to(&mut bytes)
+                .expect("raw copy");
+            originals.push(Some(bytes));
+        } else {
+            originals.push(None);
+        }
+    }
+
+    // Independently project PHP-shaped metadata before consuming raw.
+    let projected = files::project(&raw, files::Limits::default()).map(|tree| {
+        let mut json = Vec::new();
+        tree.write_php_files_json(&mut json).expect("projection JSON");
+        json
+    });
+    match (projected, admission::admit(raw, admission::Policy::default())) {
+        (Ok(expected_json), Ok(mut admitted)) => {
+            let mut actual_json = Vec::new();
+            admitted
+                .metadata()
+                .write_php_files_json(&mut actual_json)
+                .expect("admitted JSON");
+            assert_eq!(actual_json, expected_json, "admission changed FILES metadata");
+
+            let accepted: Vec<_> = admitted.accepted_indices().collect();
+            for (index, original) in originals.iter().enumerate() {
+                let mut copied = Vec::new();
+                let result = admitted
+                    .copy_accepted(index, &mut copied)
+                    .expect("admitted copy");
+                if accepted.contains(&index) {
+                    let expected = original.as_ref().expect("accepted non-file");
+                    assert_eq!(result, Some(expected.len() as u64));
+                    assert_eq!(&copied, expected, "admission changed upload bytes");
+                    let file = admitted.accepted_file(index).expect("typed accepted file");
+                    assert_eq!(file.size, expected.len() as i64);
+                    assert_eq!(file.error, 0);
+                } else {
+                    assert_eq!(result, None, "rejected upload became copyable");
+                    assert!(admitted.accepted_file(index).is_none());
+                    assert!(copied.is_empty());
+                }
+            }
+            drop(admitted);
+        }
+        (Err(_), Err(_)) => {} // Invalid PHP metadata fails closed.
+        (expected, actual) => {
+            panic!("metadata/admission disagreement: {expected:?} vs {actual:?}")
+        }
+    }
+    spool.assert_empty();
+
+    // Strictly smaller server body quota must reject before exposing data.
+    if body_bytes > 0 {
+        let raw = rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
+            .expect("repeat parse");
+        assert!(matches!(
+            admission::admit(
+                raw,
+                admission::Policy {
+                    max_body_bytes: body_bytes - 1,
+                    ..admission::Policy::default()
+                }
+            ),
+            Err(admission::Error::BodyTooLarge)
+        ));
+        spool.assert_empty();
+    }
+
+    // Server upload size takes precedence over client MAX_FILE_SIZE.
+    let largest = originals.iter().flatten().map(Vec::len).max().unwrap_or(0);
+    if largest > 0 {
+        let raw = rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
+            .expect("repeat parse");
+        assert!(matches!(
+            admission::admit(
+                raw,
+                admission::Policy {
+                    max_file_bytes: (largest - 1) as u64,
+                    ..admission::Policy::default()
+                }
+            ),
+            Err(admission::Error::FileTooLarge)
+        ));
+        spool.assert_empty();
+    }
+
+    // Metadata quota failure cannot publish FILES or retain descriptors.
+    if originals.iter().any(Option::is_some) {
+        let raw = rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
+            .expect("repeat parse");
+        assert!(
+            admission::admit(
+                raw,
+                admission::Policy {
+                    metadata: files::Limits {
+                        metadata_bytes: 0,
+                        ..files::Limits::default()
+                    },
+                    ..admission::Policy::default()
+                }
+            )
+            .is_err()
+        );
+        spool.assert_empty();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,6 +369,17 @@ mod tests {
         data.extend_from_slice(b"\r\n--b--\r\n");
         assert!(data.len() <= MAX_INPUT + 1);
         exercise_multipart(&data);
+    }
+
+    #[test]
+    fn admission_rejects_oversize_and_closes_overwritten_uploads() {
+        for input in [
+            b"0--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n2\r\n--b\r\nContent-Disposition: form-data; name=f; filename=first.bin\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n10\r\n--b\r\nContent-Disposition: form-data; name=f; filename=second.bin\r\n\r\n\0\xff\r\n--b--\r\n".as_slice(),
+            b"0--b\r\nContent-Disposition: form-data; name=f[]; filename=zero.bin\r\n\r\n\r\n--b\r\nContent-Disposition: form-data; name=f[]; filename=two.bin\r\n\r\n\0\xff\r\n--b--\r\n".as_slice(),
+            b"0--b\r\nContent-Disposition: form-data; name=f; filename=bad.bin\r\n\r\ntruncated".as_slice(),
+        ] {
+            exercise_admission(input);
+        }
     }
 
     #[test]

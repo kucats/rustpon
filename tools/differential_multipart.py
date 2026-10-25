@@ -71,6 +71,14 @@ CASES = [
                      (b"first", b"abc", b"x.txt"),
                      (b"MAX_FILE_SIZE", b"10", None),
                      (b"second", b"abc", b"y.txt")]),
+    ("max-collision-recovery", [(b"MAX_FILE_SIZE", b"1", None),
+                                (b"f", b"blocked", b"one.bin"),
+                                (b"MAX_FILE_SIZE", b"100", None),
+                                (b"f", b"\x00\xff", b"two.bin")]),
+    ("file-zero-overwritten", [(b"f", b"", b"zero.bin"),
+                               (b"f", b"\x00\xff", b"two.bin")]),
+    ("file-append-zero-binary", [(b"f[]", b"", b"zero.bin"),
+                                 (b"f[]", b"\x00\xff", b"two.bin")]),
 
 ]
 

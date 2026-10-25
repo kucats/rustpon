@@ -1,0 +1,17 @@
+0--b
+Content-Disposition: form-data; name=MAX_FILE_SIZE
+
+2
+--b
+Content-Disposition: form-data; name=f; filename=first.bin
+
+abc
+--b
+Content-Disposition: form-data; name=MAX_FILE_SIZE
+
+10
+--b
+Content-Disposition: form-data; name=f; filename=second.bin
+
+ok
+--b--

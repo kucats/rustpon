@@ -1,0 +1,4 @@
+0--b
+Content-Disposition: form-data; name=f; filename=bad.bin
+
+truncated

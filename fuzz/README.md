@@ -45,3 +45,23 @@ staged upload again from offset zero and verifies the complete byte sequence.
 The spool is checked for leaked staged files after every parse. These checks
 exercise the caller-visible nontransactional copy contract; callers still
 must discard any partially written destination.
+
+## Admission boundary fuzz target
+
+`admission` fuzzes the **consuming** server-policy handoff, not just the
+wire decoder. It compares independently projected typed FILES metadata,
+checks byte-for-byte accepted upload copies, and asserts rejected/overwritten
+wire indices cannot be copied. For every parsable body it replays the request
+under a one-byte-too-small server body limit, a one-byte-too-small file limit
+(when applicable), and a zero-byte FILES metadata budget. Each denial must
+release staged descriptors and leave the private spool empty. Inputs remain
+bounded to 8192 body bytes and no external dependency is added.
+
+```sh
+cargo +nightly fuzz run admission -- -max_len=8193 -max_total_time=120
+```
+
+CI also executes a fixed-seed 256-run mutation smoke campaign for this target.
+The existing PHP 8.4 SAPI oracle includes advisory MAX_FILE_SIZE collisions,
+zero-byte uploads and binary replacements. Short smoke runs do not establish
+long-term coverage or native PHP-FPM safety.
