@@ -156,6 +156,16 @@ impl<'a> Parser<'a> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
         }
+        // PHP lexes adjacent ++ and -- as increment/decrement tokens,
+        // not as two independent arithmetic signs. This slice has no
+        // variables or increment/decrement semantics, so reject both.
+        if self
+            .source
+            .windows(2)
+            .any(|pair| pair == b"++" || pair == b"--")
+        {
+            return Err(EvalError::Syntax);
+        }
         self.skip_space();
         if self.source[self.offset..].starts_with(b"<?php") {
             self.offset += 5;
@@ -238,6 +248,8 @@ mod tests {
         assert_eq!(eval("echo 1 / 2;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo $x;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1+;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo 1--2;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo 1++2;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1; echo 2;"), Err(EvalError::TrailingInput));
         assert_eq!(
             eval("echo 9223372036854775807+1;"),
