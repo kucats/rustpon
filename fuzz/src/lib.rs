@@ -250,17 +250,24 @@ pub fn exercise_admission(data: &[u8]) {
     // Independently project PHP-shaped metadata before consuming raw.
     let projected = files::project(&raw, files::Limits::default()).map(|tree| {
         let mut json = Vec::new();
-        tree.write_php_files_json(&mut json).expect("projection JSON");
+        tree.write_php_files_json(&mut json)
+            .expect("projection JSON");
         json
     });
-    match (projected, admission::admit(raw, admission::Policy::default())) {
+    match (
+        projected,
+        admission::admit(raw, admission::Policy::default()),
+    ) {
         (Ok(expected_json), Ok(mut admitted)) => {
             let mut actual_json = Vec::new();
             admitted
                 .metadata()
                 .write_php_files_json(&mut actual_json)
                 .expect("admitted JSON");
-            assert_eq!(actual_json, expected_json, "admission changed FILES metadata");
+            assert_eq!(
+                actual_json, expected_json,
+                "admission changed FILES metadata"
+            );
 
             let accepted: Vec<_> = admitted.accepted_indices().collect();
             for (index, original) in originals.iter().enumerate() {
