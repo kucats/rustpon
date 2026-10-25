@@ -714,3 +714,15 @@ Two synthetic seeds and deterministic unit regressions cover accepted,
 truncated and binary-upload requests. Linux CI runs a bounded 256-input
 SanitizerCoverage/AddressSanitizer campaign for this fourth target.
 These are parser-level lifecycle invariants, not PHP-FPM shutdown tests.
+
+### Known PHP 8.4 multipart delimiter ambiguity
+
+A differential probe found that PHP 8.4.27's built-in SAPI truncates an
+uploaded file at `\\r\\n--rustpon-diffX` when the declared boundary is
+`rustpon-diff`, even though the suffix `X` is neither CRLF nor `--`.
+The strict Rust parser retains those bytes as payload. This malformed
+boundary-prefix ambiguity is intentionally **excluded from the compatible
+corpus** and remains a documented behavioral difference. Do not substitute
+the parser for PHP's production SAPI without an explicit ingress policy and
+review of this discrepancy. A separate near-match with an incorrect boundary
+byte (`rustpon-difx`) remains in the live PHP SAPI differential suite.
