@@ -144,3 +144,24 @@ This decoder is a standalone prototype: no Cookie parser, configurable
 `arg_separator.input`, SAPI entry point, FFI, or `$_GET` publication has
 been implemented. PHP runtime memory and request-lifecycle vulnerabilities
 are not fixed by this addition.
+
+
+## PHP 8.4 URL-encoded differential test
+
+Linux CI now compares the Rust URL-encoded POST tree with real PHP 8.4
+`parse_str()` using binary-safe tagged JSON (typed keys, original insertion
+order and hexadecimal field values). The synthetic corpus contains 28 fixed
+cases plus 64 deterministic generated cases, covering duplicates, percent
+escapes, binary/Unicode values, scalar/array collisions and integer keys.
+
+```sh
+cargo build --offline --locked --bin urlencoded
+python3 tools/differential_urlencoded.py --rust-bin target/debug/urlencoded
+```
+
+Three strict rejections (decoded NUL name and excessive raw name/value sizes)
+are tested separately. PHP 8.4 is selected by family and CI prints the exact
+installed patch version. It is not pinned to precisely PHP 8.4.27. Tests
+cover `parse_str()` semantics, not HTTP SAPI registration, `$_FILES`, session
+upload progress or Rust/Zend FFI. These boundaries remain future integration
+work.
