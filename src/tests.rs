@@ -671,10 +671,7 @@ fn upload_copy_fault_injection_preserves_retry_and_bytes() {
     );
     assert_eq!(stall.calls, MAX_CONSECUTIVE_INTERRUPTS);
     let mut zero = Vec::new();
-    assert_eq!(
-        upload.copy_to(&mut zero).unwrap(),
-        payload.len() as u64
-    );
+    assert_eq!(upload.copy_to(&mut zero).unwrap(), payload.len() as u64);
     assert_eq!(zero, payload);
     drop(request);
     spool.empty();
