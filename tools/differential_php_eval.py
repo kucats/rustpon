@@ -59,7 +59,7 @@ def main():
         delta = rng.randrange(0, 20)
         subtract = rng.randrange(-10, 11)
         variable_programs.append(
-            f"$x={start}; $y={delta}; $x=$x+$y; echo ($x-{subtract})*2;"
+            f"$x={start}; $y={delta}; $x=$x+$y; echo ($x - ({subtract}))*2;"
         )
     cases = [f"echo {expr};" for expr in expressions] + variable_programs
     failures = 0
