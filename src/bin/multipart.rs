@@ -49,7 +49,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .map_err(|error| format!("admission: {error:?}"))?;
         let mut out = io::BufWriter::new(io::stdout().lock());
-        write!(out, "{\"files_tree\":")?;
+        write!(out, "{{\"files_tree\":")?;
         admitted.metadata().write_json(&mut out)?;
         write!(out, ",\"accepted_indices\":[")?;
         let mut first_index = true;
