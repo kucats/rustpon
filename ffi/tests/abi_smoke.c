@@ -35,7 +35,8 @@ int main(void) {
     assert(rustpon_ffi_abi_version() == 0x00010000);
     const uint8_t binary[] = "a=one&a=two&list[]=A&x=%00%ff&n[2]=z";
     const uint8_t invalid[] = "bad%00name=value";
-    const uint8_t size_too_big[] = "a=x";
+    uint8_t *size_too_big = calloc(262145, sizeof(uint8_t));
+    assert(size_too_big != NULL);
     size_t required = SIZE_MAX;
 
     for (int i = 0; i < 128; ++i) {
@@ -51,6 +52,7 @@ int main(void) {
     assert(rustpon_v1_form_post_json(NULL, 0, NULL, 0,
                                     &required) == RUSTPON_BUFFER_TOO_SMALL);
     assert(required > 0);
+    free(size_too_big);
     puts("FFI C smoke: 128 round trips, failures and cleanup OK");
     return 0;
 }
