@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Compare one-shot C ABI multipart metadata/copy to a live PHP 8.4 SAPI."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import ctypes
 import json
 import os
@@ -207,6 +208,15 @@ def main():
                         else:
                             assert code == NOT_ADMITTED and not payload, (label, index, code)
                         stateful_copies += 1
+                    if label == "two-files":
+                        # ctypes releases the GIL; concurrent accesses to one
+                        # handle must serialize the file seek+read operation.
+                        with ThreadPoolExecutor(max_workers=4) as workers:
+                            concurrent = list(workers.map(
+                                lambda _: copy(session_upload, (handle.value, 0)),
+                                range(48),
+                            ))
+                        assert all(record == (OK, b"first") for record in concurrent), label
                     assert len(os.listdir("/proc/self/fd")) == baseline, (label, "FD leak while active")
                 finally:
                     assert session_close(handle.value) == OK, label
