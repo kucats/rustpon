@@ -95,10 +95,10 @@ pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Er
     if request.stats().body_bytes > policy.max_body_bytes {
         return Err(Error::BodyTooLarge);
     }
-    if request
-        .parts()
-        .any(|part| part.file_bytes.is_some_and(|len| len > policy.max_file_bytes))
-    {
+    if request.parts().any(|part| {
+        part.file_bytes
+            .is_some_and(|len| len > policy.max_file_bytes)
+    }) {
         return Err(Error::FileTooLarge);
     }
 
@@ -125,8 +125,7 @@ pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Er
                     Payload::File(upload) => upload.len(),
                     Payload::Field(_) => unreachable!("file branch"),
                 };
-                filename.is_empty()
-                    || (form_max != 0 && (form_max < 0 || length > form_max as u64))
+                filename.is_empty() || (form_max != 0 && (form_max < 0 || length > form_max as u64))
             }
         };
         if rejected {
@@ -248,8 +247,9 @@ mod tests {
                 max_body_bytes: bytes,
                 max_file_bytes: 3,
                 ..Policy::default()
-            }
-        ).unwrap();
+            },
+        )
+        .unwrap();
         let mut data = Vec::new();
         assert_eq!(admitted.copy_accepted(3, &mut data).unwrap(), Some(3));
         assert_eq!(data, b"xyz");
