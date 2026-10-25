@@ -165,3 +165,27 @@ installed patch version. It is not pinned to precisely PHP 8.4.27. Tests
 cover `parse_str()` semantics, not HTTP SAPI registration, `$_FILES`, session
 upload progress or Rust/Zend FFI. These boundaries remain future integration
 work.
+
+
+## PHP multipart SAPI differential coverage
+
+A second differential suite exercises PHP's real HTTP request registration
+via the CLI built-in server bound to `127.0.0.1`. The client sends actual
+`multipart/form-data` requests, then compares the PHP `$_POST` tree
+against Rust's `multipart --post` CLI projection. For flat file fields,
+the same suite also compares submitted filenames, MIME types, lengths,
+and actual upload bytes read from `$_FILES` temporary files with the
+raw Rust multipart IR. Server-side temporary paths are excluded from
+test output and from the repository.
+
+```sh
+cargo build --offline --locked --bin multipart
+python3 tools/differential_multipart.py --rust-bin target/debug/multipart
+```
+
+The corpus includes deterministic synthetic examples, nested and
+duplicate field names, binary values, upload parts and pseudorandom
+combinations. PHP 8.4 is selected at the major/minor version level in CI.
+The file comparisons currently cover distinct flat file-field names;
+nested `$_FILES` registration, upload error codes, `MAX_FILE_SIZE`,
+session upload progress and PHP/Zend integration remain future work.
