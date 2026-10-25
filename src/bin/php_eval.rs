@@ -3,7 +3,8 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded local integer assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, unary +/-, parentheses and +, -, *.
+//! variables, unary +/-, parentheses and +, -, *, /, %.
+//! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
 
@@ -22,6 +23,8 @@ enum EvalError {
     Syntax,
     TrailingInput,
     Overflow,
+    DivisionByZero,
+    UnsupportedFloat,
     DepthLimit,
     WorkLimit,
     UnknownVariable,
@@ -233,10 +236,41 @@ impl<'a> Parser<'a> {
 
     fn multiplicative(&mut self, depth: usize) -> Result<i64, EvalError> {
         let mut lhs = self.unary(depth)?;
-        while self.consume(b'*') {
+        loop {
+            self.skip_space();
+            let op = match self.peek() {
+                Some(b'*' | b'/' | b'%') => self.peek().ok_or(EvalError::Syntax)?,
+                _ => break,
+            };
+            self.offset += 1;
             self.charge()?;
             let rhs = self.unary(depth)?;
-            lhs = lhs.checked_mul(rhs).ok_or(EvalError::Overflow)?;
+            lhs = match op {
+                b'*' => lhs.checked_mul(rhs).ok_or(EvalError::Overflow)?,
+                b'/' => {
+                    if rhs == 0 {
+                        return Err(EvalError::DivisionByZero);
+                    }
+                    let quotient = lhs.checked_div(rhs).ok_or(EvalError::UnsupportedFloat)?;
+                    if lhs % rhs != 0 {
+                        return Err(EvalError::UnsupportedFloat);
+                    }
+                    quotient
+                }
+                b'%' => {
+                    if rhs == 0 {
+                        return Err(EvalError::DivisionByZero);
+                    }
+                    // PHP defines PHP_INT_MIN % -1 as zero; Rust's
+                    // checked_rem rejects the signed overflow case.
+                    if rhs == -1 {
+                        0
+                    } else {
+                        lhs.checked_rem(rhs).ok_or(EvalError::Overflow)?
+                    }
+                }
+                _ => return Err(EvalError::Syntax),
+            };
         }
         Ok(lhs)
     }
@@ -357,6 +391,31 @@ mod tests {
     }
 
     #[test]
+    fn php84_exact_division_and_signed_remainder() {
+        assert_eq!(eval("echo 8/4;"), Ok(2));
+        assert_eq!(eval("echo 0/2;"), Ok(0));
+        assert_eq!(eval("echo 7%3;"), Ok(1));
+        assert_eq!(eval("echo -7%3;"), Ok(-1));
+        assert_eq!(eval("echo 7%-3;"), Ok(1));
+        assert_eq!(eval("echo -7%-3;"), Ok(-1));
+        assert_eq!(eval("echo 8/2*3%5;"), Ok(2));
+        assert_eq!(eval("echo 3+8/4*5;"), Ok(13));
+        assert_eq!(eval("$x=20; $y=3; echo $x%$y;"), Ok(2));
+        assert_eq!(eval("echo (0-9223372036854775807-1)%-1;"), Ok(0));
+        assert_eq!(eval("echo (0-9223372036854775807-1)/2;"), Ok(i64::MIN / 2));
+    }
+
+    #[test]
+    fn reject_fractional_and_zero_division_without_output() {
+        assert_eq!(eval("echo 1/2;"), Err(EvalError::UnsupportedFloat));
+        assert_eq!(eval("echo -3/2;"), Err(EvalError::UnsupportedFloat));
+        assert_eq!(eval("echo 1/0;"), Err(EvalError::DivisionByZero));
+        assert_eq!(eval("echo 1%0;"), Err(EvalError::DivisionByZero));
+        assert_eq!(eval("echo (0-9223372036854775807-1)/-1;"), Err(EvalError::UnsupportedFloat));
+        assert_eq!(eval("echo 2/0+1;"), Err(EvalError::DivisionByZero));
+    }
+
+    #[test]
     fn php84_integer_radices_and_separators() {
         for (literal, expected) in [
             ("0", 0),
@@ -446,7 +505,7 @@ mod tests {
     #[test]
     fn reject_unsupported_syntax_without_partial_result() {
         assert_eq!(eval("echo 08;"), Err(EvalError::Syntax));
-        assert_eq!(eval("echo 1 / 2;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo 1 / 2;"), Err(EvalError::UnsupportedFloat));
         assert_eq!(eval("echo $x;"), Err(EvalError::UnknownVariable));
         assert_eq!(eval("echo 1+;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1--2;"), Err(EvalError::Syntax));

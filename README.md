@@ -506,3 +506,20 @@ the installed PHP 8.4 CLI. PHP itself promotes overflowing integer literals
 to floating-point; this bounded integer-only prototype intentionally rejects
 those cases instead of emulating float promotion. No Zend numeric conversion
 or dynamic typing is implied.
+
+
+## Exact integer division and PHP signed remainder (research evaluator)
+
+The bounded `php_eval` grammar now supports `/` and `%` at the same
+precedence and left associativity as `*`. Exact signed integer division
+matches PHP 8.4's integer result. Fractional division and integer division
+overflow (which PHP promotes to floating point) are **explicitly rejected**
+rather than rounded or misrepresented. Division and remainder by zero fail
+closed; the PHP-specific `PHP_INT_MIN % -1 == 0` case is handled without
+triggering Rust's signed remainder overflow. For other negative operands,
+the remainder follows the sign of the dividend, as in PHP.
+
+The PHP CLI oracle exercises deterministic positive/negative quotient and
+remainder cases, including the minimum signed 64-bit integer boundary, plus
+fractional/zero-divisor rejections. These tests do not implement PHP floating
+point, exceptions, typed zvals or full PHP runtime error reporting.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic PHP CLI oracle for the deliberately narrow php_eval prototype.
 
-Only supported integer expressions are compared. Rejections are asserted
+Only supported integer expressions, exact division and signed remainder are compared. Rejections are asserted
 separately; this is not evidence of general PHP language compatibility.
 """
 import argparse
@@ -98,7 +98,23 @@ def main():
         radix = rng.choice([2, 8, 10, 16, 80])
         literal = radix_literal(value, radix, separator=bool(rng.randrange(2)))
         radix_programs.append(f"$x={literal}; echo $x*2;")
-    cases = [f"echo {expr};" for expr in expressions] + variable_programs + radix_programs
+    arithmetic_programs = [
+        "echo 8/4;", "echo 0/2;", "echo 7%3;", "echo -7%3;",
+        "echo 7%-3;", "echo -7%-3;", "echo 8/2*3%5;",
+        "echo 3+8/4*5;", "$x=20; $y=3; echo $x%$y;",
+        "echo (0-9223372036854775807-1)%-1;",
+        "echo (0-9223372036854775807-1)/2;",
+    ]
+    for _ in range(128):
+        quotient = rng.randrange(-1000, 1001)
+        divisor = rng.choice([n for n in range(-20, 21) if n])
+        dividend = quotient * divisor
+        arithmetic_programs.append(f"echo ({dividend})/({divisor});")
+    for _ in range(128):
+        dividend = rng.randrange(-1000, 1001)
+        divisor = rng.choice([n for n in range(-20, 21) if n])
+        arithmetic_programs.append(f"$x={dividend}; $y={divisor}; echo $x%$y;")
+    cases = [f"echo {expr};" for expr in expressions] + variable_programs + radix_programs + arithmetic_programs
     failures = 0
     for index, program in enumerate(cases):
         code = ("<?php " + program).encode("ascii")
@@ -137,6 +153,10 @@ def main():
         b"<?php echo 0x8000000000000000;",
         b"<?php echo 0xffffffffffffffff;",
         b"<?php echo 1/2;",
+        b"<?php echo -3/2;",
+        b"<?php echo 1/0;",
+        b"<?php echo 1%0;",
+        b"<?php echo (0-9223372036854775807-1)/-1;",
         b"<?php echo $x;",
         b"<?php echo 1+;",
         b"<?php echo 1--2;",
