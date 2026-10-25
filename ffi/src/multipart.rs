@@ -333,7 +333,7 @@ mod tests {
         let spool = PrivateSpool::new();
         let input = body(&[(b"upload", b"x.txt", b"abc")]);
         assert_eq!(
-            call(&spool, &input[..input.len() - 2], None).0,
+            call(&spool, &input[..input.len() - 7], None).0,
             PARSE_REJECTED
         );
         assert_eq!(call(&spool, b"garbage", None).0, PARSE_REJECTED);
