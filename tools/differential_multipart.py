@@ -37,6 +37,7 @@ CASES = [
     ("file-overwrite", [(b"f", b"first", b"one.bin"),
                         (b"f", b"second", b"two.bin")]),
     ("empty-upload-name", [(b"f", b"", b"")]),
+    ("path-filename", [(b"f", b"payload", b"folder/item.bin")]),
 
 ]
 
@@ -136,7 +137,9 @@ def main():
                         continue
                     wire = json.loads(raw.stdout)["parts"]
                     expected_files = [
-                        [part["name_hex"], part["filename_hex"],
+                        [part["name_hex"],
+                         bytes.fromhex(part["filename_hex"])
+                              .replace(b"\\", b"/").split(b"/")[-1].hex(),
                          part["content_type_hex"] or "",
                          len(bytes.fromhex(part["data_hex"])), part["data_hex"]]
                         for part in wire if part["filename_hex"] is not None
