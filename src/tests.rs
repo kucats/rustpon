@@ -681,11 +681,13 @@ fn deterministic_mutation_and_arbitrary_bytes_smoke() {
     }
 }
 
-
 #[test]
 fn delimiter_comparison_quota_is_exact_and_fails_transactionally() {
     let spool = Spool::new();
-    let bytes = body(&[(FIELD, b"some bytes"), (FILE, b"binary\r\n--AaB03xX! value")]);
+    let bytes = body(&[
+        (FIELD, b"some bytes"),
+        (FILE, b"binary\r\n--AaB03xX! value"),
+    ]);
     let baseline = parse(&bytes, Limits::default(), &spool).unwrap();
     let comparisons = baseline.stats().boundary_comparisons;
     assert!(comparisons > 0);
@@ -717,9 +719,7 @@ fn adversarial_near_boundary_patterns_exhaust_cpu_budget_and_release_uploads() {
     let mut bytes = Vec::new();
     bytes.extend_from_slice(b"--");
     bytes.extend_from_slice(&boundary);
-    bytes.extend_from_slice(
-        b"\r\nContent-Disposition: form-data; name=f; filename=x\r\n\r\n",
-    );
+    bytes.extend_from_slice(b"\r\nContent-Disposition: form-data; name=f; filename=x\r\n\r\n");
     // Every prefix almost matches the maximum-length boundary. The required
     // suffix does not match, so this remains file data rather than framing.
     for _ in 0..80 {
@@ -755,5 +755,8 @@ fn adversarial_near_boundary_patterns_exhaust_cpu_budget_and_release_uploads() {
     // A fresh request gets a fresh work budget and cannot observe the failed
     // request's field data or upload descriptors.
     let second = parse(&body(&[(FIELD, b"next")]), Limits::default(), &spool).unwrap();
-    assert_eq!(second.parts().next().unwrap().value, Some(b"next".as_slice()));
+    assert_eq!(
+        second.parts().next().unwrap().value,
+        Some(b"next".as_slice())
+    );
 }
