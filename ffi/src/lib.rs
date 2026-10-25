@@ -4,11 +4,11 @@
 //! pointers; no C callback, Rust-owned allocation or Zend pointer crosses the
 //! ABI. No function here calls PHP or preserves input across calls.
 
+use rustpon::post;
+use rustpon::urlencoded::FormParser;
 use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
-use rustpon::post;
-use rustpon::urlencoded::FormParser;
 
 const ABI_VERSION: u32 = 0x0001_0000;
 const MAX_INPUT: usize = 256 * 1024;
@@ -50,8 +50,7 @@ impl Write for LimitedOutput {
 }
 
 fn parse(bytes: &[u8]) -> Result<Vec<u8>, i32> {
-    let mut parser = FormParser::new(rustpon::Limits::default())
-        .map_err(|_| PARSE_REJECTED)?;
+    let mut parser = FormParser::new(rustpon::Limits::default()).map_err(|_| PARSE_REJECTED)?;
     parser.feed(bytes).map_err(|_| PARSE_REJECTED)?;
     let request = parser.finish().map_err(|_| PARSE_REJECTED)?;
     let post = request
@@ -134,13 +133,7 @@ mod tests {
         let mut needed = usize::MAX;
         // SAFETY: All pointers in these tests are live, aligned and disjoint.
         let probe = unsafe {
-            rustpon_v1_form_post_json(
-                input.as_ptr(),
-                input.len(),
-                ptr::null_mut(),
-                0,
-                &mut needed,
-            )
+            rustpon_v1_form_post_json(input.as_ptr(), input.len(), ptr::null_mut(), 0, &mut needed)
         };
         if probe != BUFFER_TOO_SMALL {
             return (probe, Vec::new());
