@@ -387,10 +387,27 @@ mod tests {
     #[test]
     fn invalid_integer_literals_fail_without_output() {
         for literal in [
-            "08", "09", "0_8", "00_8", "0o8", "0b102", "0o78",
-            "0x", "0b", "0o", "0x_1", "0b_1", "0o_1",
-            "1_", "1__0", "0x1_", "0b1_", "0o7_",
-            "0x1g", "0x8000000000000000", "0xffffffffffffffff",
+            "08",
+            "09",
+            "0_8",
+            "00_8",
+            "0o8",
+            "0b102",
+            "0o78",
+            "0x",
+            "0b",
+            "0o",
+            "0x_1",
+            "0b_1",
+            "0o_1",
+            "1_",
+            "1__0",
+            "0x1_",
+            "0b1_",
+            "0o7_",
+            "0x1g",
+            "0x8000000000000000",
+            "0xffffffffffffffff",
             "9223372036854775808",
         ] {
             assert!(eval(&format!("echo {literal};")).is_err(), "{literal}");
