@@ -192,7 +192,7 @@ mod tests {
         assert!(rejected.is_empty());
         // Only one live upload file descriptor remains.
         let mut retained = 0;
-        for entry in admitted.accepted_indices() {
+        for entry in indices {
             let mut sink = io::sink();
             retained += admitted.copy_accepted(entry, &mut sink).unwrap().unwrap();
         }
