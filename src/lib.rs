@@ -40,6 +40,7 @@ pub enum Limit {
     FileBytesTotal,
     RetainedBytes,
     MemoryCapacity,
+    BoundaryComparisons,
 }
 
 /// Fixed-size errors: no attacker strings or formatted diagnostics are stored.
@@ -80,6 +81,9 @@ pub struct Limits {
     pub field_bytes_total: usize,
     pub file_bytes: u64,
     pub file_bytes_total: u64,
+    /// Maximum byte comparisons performed by the multipart delimiter matcher.
+    /// This is a CPU-work quota, independent of the input byte budget.
+    pub boundary_comparisons: u64,
     /// Preallocated arena capacity for names, content types and field values.
     pub retained_bytes: usize,
     /// Parser object + arena/part/path capacities. Excludes allocator/kernel
@@ -105,6 +109,7 @@ impl Default for Limits {
             field_bytes_total: 256 * 1024,
             file_bytes: 32 * 1024 * 1024,
             file_bytes_total: 64 * 1024 * 1024,
+            boundary_comparisons: 16 * 66 * 1024 * 1024,
             retained_bytes: 1024 * 1024,
             memory_capacity: 2 * 1024 * 1024,
         }
@@ -581,7 +586,12 @@ impl Parser {
         }
         let mut delimiter = true;
         for index in 0..self.marker_len {
-            let comparisons = self.request().stats.boundary_comparisons.saturating_add(1);
+            let comparisons = add_u64(
+                self.request().stats.boundary_comparisons,
+                1,
+                self.limits.boundary_comparisons,
+                Limit::BoundaryComparisons,
+            )?;
             self.request().stats.boundary_comparisons = comparisons;
             if self.window[(self.window_start + index) % WINDOW] != self.marker[index] {
                 delimiter = false;
