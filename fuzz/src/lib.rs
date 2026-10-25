@@ -228,7 +228,8 @@ pub fn exercise_admission(data: &[u8]) {
     };
     let body_bytes = raw.stats().body_bytes;
     let mut originals = Vec::new();
-    for index in 0..raw.parts().len() {
+    let part_count = raw.parts().len();
+    for index in 0..part_count {
         let is_file = raw
             .parts()
             .nth(index)
