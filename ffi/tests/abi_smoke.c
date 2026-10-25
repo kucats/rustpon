@@ -1,3 +1,4 @@
+#define _XOPEN_SOURCE 700
 /* C caller smoke test: no PHP linked or callbacks. Synthetic data only. */
 #include "rustpon_ffi.h"
 #include <assert.h>
@@ -5,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void round_trip(const uint8_t *input, size_t len) {
     size_t required = SIZE_MAX;
@@ -31,6 +33,72 @@ static void round_trip(const uint8_t *input, size_t len) {
     free(output);
 }
 
+
+static void multipart_smoke(void) {
+    char spool[] = "/tmp/rustpon-ffi-c-XXXXXX";
+    assert(mkdtemp(spool) != NULL);
+    const uint8_t boundary[] = "b";
+    const uint8_t entity[] =
+        "--b\r\nContent-Disposition: form-data; name=\"f\"; filename=\"old.bin\"\r\n"
+        "\r\nOLD\r\n"
+        "--b\r\nContent-Disposition: form-data; name=\"f\"; filename=\"new.bin\"\r\n"
+        "\r\nNEW-DATA\r\n"
+        "--b\r\nContent-Disposition: form-data; name=\"none\"; filename=\"\"\r\n"
+        "\r\n\r\n"
+        "--b--\r\n";
+    const size_t entity_len = sizeof(entity) - 1;
+    const size_t dir_len = strlen(spool);
+    size_t required = 0;
+    for (size_t iteration = 0; iteration < 64; ++iteration) {
+        assert(rustpon_v1_multipart_files_json(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len,
+            NULL, 0, &required) == RUSTPON_BUFFER_TOO_SMALL);
+        assert(required > 0 && required <= 1024 * 1024);
+        uint8_t *json = malloc(required + 1);
+        assert(json != NULL);
+        memset(json, 0xa5, required + 1);
+        size_t written = 0;
+        assert(rustpon_v1_multipart_files_json(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len,
+            json, required, &written) == RUSTPON_OK);
+        assert(written == required && json[required] == 0xa5);
+        assert(json[0] == '[');
+        free(json);
+
+        /* Original part 0 has been superseded by part 1. */
+        uint8_t payload[9] = {0};
+        memset(payload, 0xa5, sizeof(payload));
+        required = 18;
+        assert(rustpon_v1_multipart_upload_copy(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len, 0,
+            payload, sizeof(payload), &required) == RUSTPON_NOT_ADMITTED);
+        assert(required == 0);
+        for (size_t i = 0; i < sizeof(payload); ++i) {
+            assert(payload[i] == 0xa5);
+        }
+        assert(rustpon_v1_multipart_upload_copy(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len, 1,
+            NULL, 0, &required) == RUSTPON_BUFFER_TOO_SMALL);
+        assert(required == 8);
+        memset(payload, 0xa5, sizeof(payload));
+        written = 0;
+        assert(rustpon_v1_multipart_upload_copy(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len, 1,
+            payload, 7, &written) == RUSTPON_BUFFER_TOO_SMALL);
+        assert(written == 8 && payload[0] == 0xa5);
+        written = 0;
+        assert(rustpon_v1_multipart_upload_copy(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len, 1,
+            payload, 8, &written) == RUSTPON_OK);
+        assert(written == 8 && memcmp(payload, "NEW-DATA", 8) == 0);
+        assert(payload[8] == 0xa5);
+        assert(rustpon_v1_multipart_upload_copy(
+            boundary, 1, entity, entity_len, (uint8_t *)spool, dir_len, 2,
+            payload, sizeof(payload), &written) == RUSTPON_NOT_ADMITTED);
+    }
+    assert(rmdir(spool) == 0);
+}
+
 int main(void) {
     assert(rustpon_ffi_abi_version() == 0x00010000);
     const uint8_t binary[] = "a=one&a=two&list[]=A&x=%00%ff&n[2]=z";
@@ -53,6 +121,7 @@ int main(void) {
                                     &required) == RUSTPON_BUFFER_TOO_SMALL);
     assert(required > 0);
     free(size_too_big);
-    puts("FFI C smoke: 128 round trips, failures and cleanup OK");
+    multipart_smoke();
+    puts("FFI C smoke: 128 form round trips, 64 multipart requests, errors and cleanup OK");
     return 0;
 }
