@@ -3,6 +3,7 @@
 import argparse
 import ctypes
 import json
+import os
 import random
 import socket
 import subprocess
@@ -109,6 +110,32 @@ def main():
         ctypes.POINTER(ctypes.c_size_t),
     ]
     upload.restype = ctypes.c_int32
+
+    session_open = dll.rustpon_v1_multipart_session_open
+    session_open.argtypes = [
+        ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_uint64),
+    ]
+    session_open.restype = ctypes.c_int32
+    session_files = dll.rustpon_v1_multipart_session_files_json
+    session_files.argtypes = [
+        ctypes.c_uint64, ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    session_files.restype = ctypes.c_int32
+    session_upload = dll.rustpon_v1_multipart_session_upload_copy
+    session_upload.argtypes = [
+        ctypes.c_uint64, ctypes.c_size_t,
+        ctypes.c_void_p, ctypes.c_size_t,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    session_upload.restype = ctypes.c_int32
+    session_close = dll.rustpon_v1_multipart_session_close
+    session_close.argtypes = [ctypes.c_uint64]
+    session_close.restype = ctypes.c_int32
+
     router = Path(__file__).resolve().with_name("multipart_projection.php")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -146,6 +173,7 @@ def main():
             pathbuf = buf(raw_path)
             boundary = buf(BOUNDARY)
             tested_copies = 0
+            stateful_copies = 0
             for label, parts in cases:
                 body = corpus.body_for(parts)
                 bodybuf = buf(body)
@@ -157,6 +185,33 @@ def main():
                 typed = json.loads(encoded)
                 assert typed == actual_php["files_tree_typed"], (label, typed, actual_php["files_tree_typed"])
                 assert list(Path(spool).iterdir()) == [], (label, "staging directory leak")
+
+                handle = ctypes.c_uint64(0)
+                status = session_open(*fixed, ctypes.byref(handle))
+                assert status == OK and handle.value > 0, (label, status)
+                baseline = len(os.listdir("/proc/self/fd"))
+                try:
+                    status, stateful_metadata = run(session_files, (handle.value,))
+                    assert status == OK and stateful_metadata == encoded, (label, status)
+                    # Session API must not reparse between size query and copy.
+                    eligible = OVERRIDES.get(
+                        label,
+                        [i for i, (_, _, filename) in enumerate(parts) if filename is not None],
+                    )
+                    for index, (_, data, filename) in enumerate(parts):
+                        if filename is None:
+                            continue
+                        code, payload = copy(session_upload, (handle.value, index))
+                        if index in eligible:
+                            assert code == OK and payload == data, (label, index, code)
+                        else:
+                            assert code == NOT_ADMITTED and not payload, (label, index, code)
+                        stateful_copies += 1
+                    assert len(os.listdir("/proc/self/fd")) == baseline, (label, "FD leak while active")
+                finally:
+                    assert session_close(handle.value) == OK, label
+                assert session_close(handle.value) == 8, (label, "stale handle")
+                assert list(Path(spool).iterdir()) == [], (label, "session cleanup")
 
                 eligible = OVERRIDES.get(
                     label,
@@ -173,7 +228,9 @@ def main():
                     tested_copies += 1
                     assert list(Path(spool).iterdir()) == [], (label, "post-copy leak")
             print(f"FFI/PHP multipart: {len(cases)} typed FILES trees, "
-                  f"{tested_copies} upload copies/rejections, zero staged file leaks")
+                  f"{tested_copies} one-shot copies/rejections, "
+                  f"{stateful_copies} stateful copies/rejections, "
+                  "zero staged file leaks")
     finally:
         server.terminate()
         try:
