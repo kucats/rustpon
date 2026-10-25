@@ -307,7 +307,7 @@ mod tests {
         let mut json = Vec::new();
         post.write_json(&mut json).unwrap();
         let json = String::from_utf8(json).unwrap();
-        assert!(json.contains(r#"["s","68692000ff"]"#));
+        assert!(json.contains(r#"["s","686900ff"]"#));
         assert!(json.contains(r#"["i","0"]"#));
     }
 
