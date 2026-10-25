@@ -65,3 +65,28 @@ CI also executes a fixed-seed 256-run mutation smoke campaign for this target.
 The existing PHP 8.4 SAPI oracle includes advisory MAX_FILE_SIZE collisions,
 zero-byte uploads and binary replacements. Short smoke runs do not establish
 long-term coverage or native PHP-FPM safety.
+
+## Instrumented sanitizer-coverage CI (Linux)
+
+The `fuzz-sanitized` GitHub Actions job uses **nightly Rust** and the
+version-pinned `cargo-fuzz 0.12.0` CLI. Unlike directly running a
+`cargo build`-produced libFuzzer binary, `cargo fuzz run` enables
+libFuzzer's **SanitizerCoverage** feedback and **AddressSanitizer** for
+the fuzz harness and Rust parser dependency. The job executes all three
+targets (`urlencoded`, `multipart`, `admission`) with deterministic
+seed `20261026`, 256 executions and a 30-second safety limit each.
+The separate Linux/macOS stable-toolchain checks continue to run.
+
+A failing fuzz run stops CI and uploads any `fuzz/artifacts/` crash
+inputs as a GitHub Actions artifact (14-day retention). These inputs
+are **untrusted**: reproduce in an isolated environment, minimize using
+`cargo +nightly fuzz tmin <target> <crash-file>`, then add a synthetic,
+bounded, deterministic regression to the checked-in corpus or unit tests.
+Never add private request bodies or credentials to the corpus.
+
+For a local instrumented reproduction, install the pinned CLI with
+`cargo install cargo-fuzz --version 0.12.0 --locked`, install nightly,
+and run `cargo +nightly fuzz run --sanitizer address admission -- -runs=256`.
+The campaign is deliberately short: a successful run does not prove
+complete coverage, leak freedom, or PHP-FPM safety. The regular PHP 8.4
+CLI/SAPI differential tests remain independent of sanitizer findings.

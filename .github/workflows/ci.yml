@@ -35,13 +35,6 @@ jobs:
         run: |
           cargo check --manifest-path fuzz/Cargo.toml --bins
           cargo test --manifest-path fuzz/Cargo.toml --lib
-      - name: Bounded libFuzzer mutation campaign (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          cargo build --manifest-path fuzz/Cargo.toml --bins
-          fuzz/target/debug/urlencoded -runs=256 -max_len=8192 -max_total_time=20 -seed=20261026 fuzz/corpus/urlencoded
-          fuzz/target/debug/multipart -runs=256 -max_len=8193 -max_total_time=20 -seed=20261026 fuzz/corpus/multipart
-          fuzz/target/debug/admission -runs=256 -max_len=8193 -max_total_time=20 -seed=20261026 fuzz/corpus/admission
       - name: FFI formatting
         run: cargo fmt --manifest-path ffi/Cargo.toml -- --check
       - name: FFI Rust tests
@@ -100,3 +93,30 @@ jobs:
           php -l tools/multipart_projection.php
           cargo build --offline --locked --bin multipart
           python3 tools/differential_multipart.py --rust-bin target/debug/multipart
+
+  fuzz-sanitized:
+    name: Coverage-guided libFuzzer + ASan (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # cargo-fuzz supplies sanitizer-coverage instrumentation and enables
+      # AddressSanitizer for the fuzz target AND its Rust dependencies.
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz (isolated research tooling)
+        run: cargo install cargo-fuzz --version 0.12.0 --locked
+      - name: Instrumented libFuzzer campaign (3 targets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly fuzz run --sanitizer address urlencoded -- -runs=256 -max_len=8192 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address multipart -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address admission -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
+      - name: Preserve minimized candidates for crash triage
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustpon-fuzz-artifacts-${{ github.sha }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

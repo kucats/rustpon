@@ -689,3 +689,16 @@ zero-length overwritten uploads and zero/binary array uploads.
 This is a bounded research harness, not a guarantee of memory safety under
 arbitrary I/O failures, exhaustive fuzz coverage, or a production Zend/FPM
 integration.
+
+## SanitizerCoverage + AddressSanitizer fuzz CI
+
+A dedicated Linux CI job now runs all three isolated request-parser fuzz
+targets using pinned `cargo-fuzz 0.12.0`, nightly Rust, libFuzzer
+SanitizerCoverage feedback and AddressSanitizer. Each target has a
+deterministic 256-execution/30-second budget. Crash inputs are uploaded
+as short-retention CI artifacts for local minimization and checked-in
+regression tests; no application secrets belong in a fuzz corpus.
+The stable Linux/macOS test matrix and real PHP 8.4 CLI/SAPI oracles remain
+unchanged. This is a bounded fuzz smoke campaign, not long-duration coverage
+evidence, a CVE fix, or authorization for native PHP-FPM deployment.
+See [fuzz/README.md](fuzz/README.md).
