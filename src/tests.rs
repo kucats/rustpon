@@ -680,3 +680,80 @@ fn deterministic_mutation_and_arbitrary_bytes_smoke() {
         spool.empty();
     }
 }
+
+
+#[test]
+fn delimiter_comparison_quota_is_exact_and_fails_transactionally() {
+    let spool = Spool::new();
+    let bytes = body(&[(FIELD, b"some bytes"), (FILE, b"binary\r\n--AaB03xX! value")]);
+    let baseline = parse(&bytes, Limits::default(), &spool).unwrap();
+    let comparisons = baseline.stats().boundary_comparisons;
+    assert!(comparisons > 0);
+    drop(baseline);
+    let limits = Limits {
+        boundary_comparisons: comparisons,
+        ..Limits::default()
+    };
+    assert!(parse(&bytes, limits, &spool).is_ok());
+    assert_eq!(
+        parse(
+            &bytes,
+            Limits {
+                boundary_comparisons: comparisons - 1,
+                ..limits
+            },
+            &spool
+        )
+        .unwrap_err(),
+        Error::Limit(Limit::BoundaryComparisons)
+    );
+    spool.empty();
+}
+
+#[test]
+fn adversarial_near_boundary_patterns_exhaust_cpu_budget_and_release_uploads() {
+    let spool = Spool::new();
+    let boundary = [b'a'; 70];
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"--");
+    bytes.extend_from_slice(&boundary);
+    bytes.extend_from_slice(
+        b"\r\nContent-Disposition: form-data; name=f; filename=x\r\n\r\n",
+    );
+    // Every prefix almost matches the maximum-length boundary. The required
+    // suffix does not match, so this remains file data rather than framing.
+    for _ in 0..80 {
+        bytes.extend_from_slice(b"\r\n--");
+        bytes.extend_from_slice(&boundary[..69]);
+        bytes.push(b'X');
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(b"\r\n--");
+    bytes.extend_from_slice(&boundary);
+    bytes.extend_from_slice(b"--\r\n");
+
+    let limits = Limits {
+        boundary_comparisons: 200,
+        ..Limits::default()
+    };
+    let mut parser = Parser::new(&boundary, limits, &spool.0).unwrap();
+    assert_eq!(
+        parser.feed(&bytes),
+        Err(Error::Limit(Limit::BoundaryComparisons))
+    );
+    assert!(parser.request.is_none());
+    assert!(parser.active.is_none());
+    assert_eq!(
+        parser.feed(b""),
+        Err(Error::Limit(Limit::BoundaryComparisons))
+    );
+    assert!(matches!(
+        parser.finish(),
+        Err(Error::Limit(Limit::BoundaryComparisons))
+    ));
+    spool.empty();
+    // A fresh request gets a fresh work budget and cannot observe the failed
+    // request's field data or upload descriptors.
+    let second = parse(&body(&[(FIELD, b"next")]), Limits::default(), &spool).unwrap();
+    assert_eq!(second.parts().next().unwrap().value, Some(b"next".as_slice()));
+}
