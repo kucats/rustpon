@@ -1,9 +1,11 @@
 # Experimental C ABI: URL-encoded POST projection
 
 The `ffi/` crate is separate from the core Rust library. The core keeps
-`#![forbid(unsafe_code)]`; all raw-pointer operations are confined to the
-small `ffi/src/lib.rs` boundary. **This is not a PHP extension, SAPI
-integration or a fix for PHP security vulnerabilities.**
+`#![forbid(unsafe_code)]`; all raw-pointer operations are confined to
+the isolated FFI crate. **The ABI alone is not a PHP extension or a
+security fix.** An optional PHP 8.4 RINIT/RSHUTDOWN lifecycle probe is
+now available in [`php_probe/`](php_probe/README.md). This probe does
+not replace SAPI parsing or register PHP uploads.
 
 ## ABI v1
 
@@ -170,4 +172,31 @@ allowed handles, checks that each accepted upload FD remains open while
 the handle is live, verifies FD counts after every close, and rejects
 stale/double closes. Linux also compares the stateful metadata and
 36 payload copy/rejection cases to PHP 8.4 SAPI within the existing
-78-case multipart corpus. No native PHP extension is present.
+78-case multipart corpus. A **research-only native PHP 8.4 probe module**
+now verifies 32 reused HTTP requests via genuine RINIT/RSHUTDOWN callbacks.
+It is not a replacement SAPI upload handler.
+
+
+## PHP request scopes and actual RSHUTDOWN hook
+
+New process-local `rustpon_v1_scope_begin`,
+`rustpon_v1_multipart_session_open_scoped` and `rustpon_v1_scope_end`
+create a PHP-request-scoped group of upload sessions. `scope_end` drops
+only the FDs belonging to the identified group; other groups and legacy
+unscoped sessions survive. A scope ID is not a secret or an HTTP
+authorization token.
+
+A compiled C test uses a **C-only setjmp/longjmp** to simulate a bailout
+only after Rust has returned, then invokes the equivalent of RSHUTDOWN.
+The test verifies 48 bailout cleanups, cross-request isolation, eight
+simultaneously live scope quota, stale-scope rejection and open-FD
+counts returning to baseline.
+
+The separate [PHP 8.4 probe extension](php_probe/README.md) attaches these
+scope operations to **real PHP RINIT and RSHUTDOWN** callbacks and exercises
+32 requests in one built-in PHP HTTP-server worker, covering normal return,
+explicit exit, multiple admitted sessions and unhandled exceptions.
+The module only exposes test functions that accept a fully buffered
+multipart body and return byte strings/JSON. PHP-FPM FastCGI lifetime
+verification, real input-handler integration, native Zend arrays and
+native upload registry behavior remain future work.
