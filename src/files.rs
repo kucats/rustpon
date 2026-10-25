@@ -230,10 +230,8 @@ mod tests {
 
     #[test]
     fn metadata_and_projection_budgets_are_exact() {
-        let path = std::env::temp_dir().join(format!(
-            "rustpon-files-budget-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rustpon-files-budget-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let body = b"--b\r\nContent-Disposition: form-data; name=\"f[x]\"; filename=\"a.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npayload\r\n--b--\r\n";
         let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
@@ -291,7 +289,11 @@ mod tests {
         let mut original = request;
         let mut content = Vec::new();
         assert_eq!(
-            original.upload_mut(0).unwrap().copy_to(&mut content).unwrap(),
+            original
+                .upload_mut(0)
+                .unwrap()
+                .copy_to(&mut content)
+                .unwrap(),
             7
         );
         assert_eq!(content, b"payload");
@@ -299,5 +301,4 @@ mod tests {
         assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
         fs::remove_dir(&path).unwrap();
     }
-
 }
