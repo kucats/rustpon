@@ -180,3 +180,153 @@ pub unsafe extern "C" fn rustpon_v1_multipart_upload_copy(
         )
     }
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::os::unix::fs::DirBuilderExt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+    struct PrivateSpool(std::path::PathBuf);
+
+    impl PrivateSpool {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "rustpon-ffi-multipart-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+            Self(path)
+        }
+
+        fn path(&self) -> &[u8] {
+            self.0.to_str().unwrap().as_bytes()
+        }
+
+        fn assert_empty(&self) {
+            assert_eq!(fs::read_dir(&self.0).unwrap().count(), 0);
+        }
+    }
+
+    impl Drop for PrivateSpool {
+        fn drop(&mut self) {
+            self.assert_empty();
+            fs::remove_dir(&self.0).unwrap();
+        }
+    }
+
+    fn body(parts: &[(&[u8], &[u8], &[u8])]) -> Vec<u8> {
+        let mut input = Vec::new();
+        for (name, filename, content) in parts {
+            input.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"");
+            input.extend_from_slice(name);
+            input.extend_from_slice(b"\"; filename=\"");
+            input.extend_from_slice(filename);
+            input.extend_from_slice(b"\"\r\n\r\n");
+            input.extend_from_slice(content);
+            input.extend_from_slice(b"\r\n");
+        }
+        input.extend_from_slice(b"--b--\r\n");
+        input
+    }
+
+    fn call(spool: &PrivateSpool, input: &[u8], index: Option<usize>) -> (i32, Vec<u8>) {
+        let mut needed = usize::MAX;
+        let path = spool.path();
+        let invoke = |output: *mut u8, capacity: usize, required: &mut usize| {
+            if let Some(index) = index {
+                // SAFETY: All spans are live and non-overlapping for this call.
+                unsafe {
+                    rustpon_v1_multipart_upload_copy(
+                        b"b".as_ptr(), 1, input.as_ptr(), input.len(),
+                        path.as_ptr(), path.len(), index,
+                        output, capacity, required,
+                    )
+                }
+            } else {
+                // SAFETY: All spans are live and non-overlapping for this call.
+                unsafe {
+                    rustpon_v1_multipart_files_json(
+                        b"b".as_ptr(), 1, input.as_ptr(), input.len(),
+                        path.as_ptr(), path.len(),
+                        output, capacity, required,
+                    )
+                }
+            }
+        };
+        let status = invoke(ptr::null_mut(), 0, &mut needed);
+        spool.assert_empty();
+        if status != BUFFER_TOO_SMALL {
+            return (status, Vec::new());
+        }
+        let mut output = vec![0u8; needed];
+        let mut written = 0;
+        let status = invoke(output.as_mut_ptr(), output.len(), &mut written);
+        assert_eq!(written, needed);
+        spool.assert_empty();
+        (status, output)
+    }
+
+    #[test]
+    fn accepted_upload_copy_rejects_overwritten_and_no_file_indices() {
+        let spool = PrivateSpool::new();
+        let input = body(&[
+            (b"f", b"a.bin", b"first"),
+            (b"f", b"b.bin", b"second"),
+            (b"f[]", b"third.bin", b"third"),
+            (b"empty", b"", b""),
+            (b"zero", b"zero.bin", b""),
+        ]);
+        // The final f[] assignment overwrites f's previous scalar file.
+        let (status, metadata) = call(&spool, &input, None);
+        assert_eq!(status, OK);
+        let json = String::from_utf8(metadata).unwrap();
+        assert!(json.contains(r#"["i","0"]"#)); // PHP upload error code
+        assert!(json.contains(r#"["i","5"]"#)); // third.bin size
+        assert!(json.contains(r#"["i","4"]"#)); // empty-name upload error
+        assert_eq!(call(&spool, &input, Some(0)).0, NOT_ADMITTED);
+        assert_eq!(call(&spool, &input, Some(1)).0, NOT_ADMITTED);
+        assert_eq!(call(&spool, &input, Some(2)), (OK, b"third".to_vec()));
+        assert_eq!(call(&spool, &input, Some(3)).0, NOT_ADMITTED);
+        assert_eq!(call(&spool, &input, Some(4)), (OK, Vec::new()));
+        assert_eq!(call(&spool, &input, Some(999)).0, NOT_ADMITTED);
+        for _ in 0..24 {
+            assert_eq!(call(&spool, &input, Some(2)), (OK, b"third".to_vec()));
+        }
+    }
+
+    #[test]
+    fn fail_closed_on_invalid_boundary_truncation_and_spool() {
+        let spool = PrivateSpool::new();
+        let input = body(&[(b"upload", b"x.txt", b"abc")]);
+        assert_eq!(call(&spool, &input[..input.len() - 2], None).0, PARSE_REJECTED);
+        assert_eq!(call(&spool, b"garbage", None).0, PARSE_REJECTED);
+        let mut required = 23;
+        // SAFETY: Readable body/boundary/spool and disjoint writable size.
+        let invalid = unsafe {
+            rustpon_v1_multipart_files_json(
+                b"b".as_ptr(), 1, input.as_ptr(), input.len(),
+                b"/nonexistent/spool".as_ptr(), b"/nonexistent/spool".len(),
+                ptr::null_mut(), 0, &mut required,
+            )
+        };
+        assert_eq!(invalid, PARSE_REJECTED);
+        assert_eq!(required, 0);
+        // SAFETY: Invalid null boundary is checked before any dereference.
+        let null_boundary = unsafe {
+            rustpon_v1_multipart_files_json(
+                ptr::null(), 1, input.as_ptr(), input.len(),
+                spool.path().as_ptr(), spool.path().len(),
+                ptr::null_mut(), 0, &mut required,
+            )
+        };
+        assert_eq!(null_boundary, INVALID_ARGUMENT);
+        assert_eq!(required, 0);
+        spool.assert_empty();
+    }
+}
