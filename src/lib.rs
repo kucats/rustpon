@@ -508,6 +508,7 @@ impl Parser {
                     self.limits.name_bytes,
                     Limit::NameBytes,
                     self.limits.retained_bytes,
+                    true,
                 )?);
                 if let Some(filename) = filename {
                     self.headers.filename = Some(store_param(
@@ -516,6 +517,7 @@ impl Parser {
                         self.limits.filename_bytes,
                         Limit::FilenameBytes,
                         self.limits.retained_bytes,
+                        false,
                     )?);
                 }
             }
@@ -723,12 +725,13 @@ fn store_param(
     max: usize,
     limit: Limit,
     retained: usize,
+    unescape_quoted: bool,
 ) -> Result<Range<usize>, Error> {
     let start = arena.len();
     let mut escaped = false;
     let mut count = 0;
     for &byte in param.bytes {
-        if param.quoted && byte == b'\\' && !escaped {
+        if unescape_quoted && param.quoted && byte == b'\\' && !escaped {
             escaped = true;
             continue;
         }
