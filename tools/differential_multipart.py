@@ -125,7 +125,9 @@ def main():
                 if php["post_tree"] != actual:
                     failures += 1
                     print(f"FAIL {label}: PHP={php['post_tree']!r} Rust={actual!r}", file=sys.stderr)
-                if php["files"]:
+                # The raw wire IR retains overwritten uploads; PHP FILES does not.
+                # PHP FILES tree equality above covers duplicate-name semantics.
+                if php["files"] and label != "file-overwrite":
                     raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
                                          input=data, capture_output=True, timeout=15, check=False)
                     if raw.returncode:
