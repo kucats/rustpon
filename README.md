@@ -465,3 +465,27 @@ arrays, register/move uploads, or exercise an actual PHP-FPM FastCGI worker.
 The follow-up production gates remain PHP-FPM lifecycle tests, protocol
 integration, concurrency and resource fault campaigns, and independent
 security review.
+
+
+## Bounded scalar variables in the research PHP evaluator
+
+The `php_eval` binary now accepts up to 64 assignments to at most 32
+case-sensitive, ASCII-named local integer variables before its one final
+`echo` statement. Expressions can read previously initialized variables,
+use integer unary `+`/`-`, parentheses and `+`/`-`/`*`, and reassign
+existing variables. Each name is capped at 64 bytes, while the existing source,
+AST-depth-equivalent recursion, and work budgets remain active. Unknown
+variables, unsupported expressions and resource exhaustion fail closed without
+producing output. The PHP special variable `$GLOBALS` is intentionally rejected.
+
+```sh
+printf '%s' '<?php $x=7; $x=$x+2; echo $x*3;' |
+  cargo run --offline --locked --bin php_eval
+# stdout: 27
+```
+
+`tools/differential_php_eval.py` compares deterministic single-expression
+and variable-assignment programs against actual PHP CLI. This **does not**
+provide general PHP lexing/AST, PHP scope or reference semantics, dynamic
+types, superglobals, arbitrary statements, or Zend/SAPI execution. The
+interpreter has no file/network access and is not connected to the FFI layer.

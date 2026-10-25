@@ -19,6 +19,18 @@ FIXED = [
 ]
 
 
+ASSIGNMENT_PROGRAMS = [
+    "$x=7; echo $x;",
+    "$x=7; $x=$x+2; echo $x*3;",
+    "$foo_1=3; $_bar=4; echo $foo_1*$_bar;",
+    "$A=5; $a=2; echo $A-$a;",
+    "$zero=0; echo -$zero;",
+    "$x=1; $x=2; $x=3; echo $x;",
+    "$x=5; $y=$x*2; echo $y-$x;",
+    "$first=10; $second=$first-7; echo ($first+$second)*2;",
+]
+
+
 def generated(rng, depth):
     if depth == 0:
         return str(rng.randrange(0, 10))
@@ -40,16 +52,25 @@ def main():
     args = cli.parse_args()
 
     rng = random.Random(0x52555354504F4E)
-    cases = FIXED + [generated(rng, rng.randrange(1, 5)) for _ in range(128)]
+    expressions = FIXED + [generated(rng, rng.randrange(1, 5)) for _ in range(128)]
+    variable_programs = list(ASSIGNMENT_PROGRAMS)
+    for _ in range(64):
+        start = rng.randrange(-50, 51)
+        delta = rng.randrange(0, 20)
+        subtract = rng.randrange(-10, 11)
+        variable_programs.append(
+            f"$x={start}; $y={delta}; $x=$x+$y; echo ($x-{subtract})*2;"
+        )
+    cases = [f"echo {expr};" for expr in expressions] + variable_programs
     failures = 0
-    for index, expr in enumerate(cases):
-        code = ("<?php echo " + expr + ";").encode("ascii")
+    for index, program in enumerate(cases):
+        code = ("<?php " + program).encode("ascii")
         php = execute([args.php_bin, "-d", "display_errors=0"], code)
         rust = execute([str(args.rust_bin)], code)
         if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
             failures += 1
             print(
-                f"FAIL case={index} expr={expr!r} "
+                f"FAIL case={index} program={program!r} "
                 f"php={php.returncode}:{php.stdout!r} "
                 f"rust={rust.returncode}:{rust.stdout!r} "
                 f"stderr={rust.stderr[:160]!r}",
@@ -68,6 +89,15 @@ def main():
         b"<?php echo " + b"(" * 33 + b"1" + b")" * 33 + b";",
         b"<?php echo " + b"+".join([b"1"] * 130) + b";",
         b"<?php echo 1;" + b" " * 4096,
+        b"<?php echo $missing;",
+        b"<?php $x=1; echo $missing;",
+        b"<?php $x=$x+1; echo $x;",
+        b"<?php $x==1; echo $x;",
+        b"<?php $GLOBALS=2; echo 1;",
+        b"<?php $x=1; echo $x; $x=2;",
+        b"<?php $" + b"a" * 65 + b"=1; echo 1;",
+        b"<?php " + b"".join(f"$v{i}={i};".encode("ascii") for i in range(33)) + b"echo 1;",
+        b"<?php " + b"$x=1;" * 65 + b"echo $x;",
     ]
     for index, code in enumerate(invalid):
         rust = execute([str(args.rust_bin)], code)
@@ -79,7 +109,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-expression differential: {len(cases)} compatible "
+        f"PHP CLI integer/variable differential: {len(cases)} compatible "
         f"cases, {len(invalid)} strict rejections, {failures} failures"
     )
     return int(failures != 0)
