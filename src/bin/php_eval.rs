@@ -273,10 +273,7 @@ impl<'a> Parser<'a> {
                 .ok_or(EvalError::UnknownVariable)
         } else {
             self.skip_space();
-            for (literal, value) in [
-                (b"true".as_slice(), true),
-                (b"false".as_slice(), false),
-            ] {
+            for (literal, value) in [(b"true".as_slice(), true), (b"false".as_slice(), false)] {
                 let remaining = &self.source[self.offset..];
                 if remaining
                     .get(..literal.len())
@@ -393,12 +390,14 @@ impl<'a> Parser<'a> {
             self.offset += 1;
             self.charge()?;
             let rhs = self.multiplicative(depth)?.as_int();
-            lhs = Value::Int(if op == b'+' {
-                lhs.as_int().checked_add(rhs)
-            } else {
-                lhs.as_int().checked_sub(rhs)
-            }
-            .ok_or(EvalError::Overflow)?);
+            lhs = Value::Int(
+                if op == b'+' {
+                    lhs.as_int().checked_add(rhs)
+                } else {
+                    lhs.as_int().checked_sub(rhs)
+                }
+                .ok_or(EvalError::Overflow)?,
+            );
         }
         Ok(lhs)
     }
@@ -528,9 +527,7 @@ mod tests {
     use super::*;
 
     fn eval(source: &str) -> Result<i64, EvalError> {
-        Parser::new(source.as_bytes())
-            .evaluate()
-            .map(Value::as_int)
+        Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
     }
 
     #[test]
@@ -573,7 +570,11 @@ mod tests {
             ("$x=2<1; $x=$x+5; echo $x;", Value::Int(5)),
             ("$x=1<2; $x=3; echo $x;", Value::Int(3)),
         ] {
-            assert_eq!(Parser::new(program.as_bytes()).evaluate(), Ok(expected), "{program}");
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
         }
         assert_eq!(Value::Bool(true).echo(), "1");
         assert_eq!(Value::Bool(false).echo(), "");
