@@ -344,7 +344,11 @@ mod tests {
                     assert_eq!(copied, Some(content.len() as u64), "{label}");
                     assert_eq!(
                         content,
-                        if index == 0 { &b"first"[..] } else { &b"second"[..] },
+                        if index == 0 {
+                            &b"first"[..]
+                        } else {
+                            &b"second"[..]
+                        },
                         "{label}"
                     );
                 } else {
