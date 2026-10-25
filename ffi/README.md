@@ -111,3 +111,63 @@ Zend `zval` bridge. A native C/Zend registry layer is still required.
 Linux CI compiles a C caller exercising 64 repeated multipart requests.
 The PHP 8.4 SAPI differential suite tests 78 typed metadata projections and
 36 upload copies/rejections with no remaining staging directory entries.
+
+
+## Single-parse multipart session API (experimental)
+
+The new `ffi/src/session.rs` provides an optional **stateful** C ABI that
+avoids reparsing for every FILES metadata query or payload copy:
+
+`rustpon_v1_multipart_session_open` takes the complete multipart body,
+raw boundary and a *trusted* spool path, and writes a nonzero `uint64_t`
+process-local handle. `rustpon_v1_multipart_session_files_json` and
+`rustpon_v1_multipart_session_upload_copy` accept that handle, and
+`rustpon_v1_multipart_session_close` irrevocably releases the session's
+admitted request and any remaining upload FDs. The caller must close a
+successful handle **exactly once**, even on every application error path.
+
+### Ownership and limits
+
+- Session IDs are opaque integers, not raw pointers and **not secrets**.
+  They are monotonically allocated per process and must **never** be
+  exposed to untrusted clients or transferred across PHP-FPM workers.
+  Stale/unknown handles return `RUSTPON_INVALID_HANDLE=8`.
+- No more than **8 active sessions** are allowed per process. Additional
+  opens return `RUSTPON_SESSIONS_FULL=9` without retaining another request.
+  All operations use one process-local mutex. Operations on a single
+  handle, including close, are serialized. There are no Rust-to-C
+  callbacks while this mutex is held.
+- The parser reads the complete body exactly **once**, and admission
+  closes rejected or overwritten descriptors. Accepted uploads remain
+  open until close. This eliminates repeated parsing but **introduces
+  request-scope state** and a hard obligation to release handles.
+- The open call resets `*out_handle` to zero on error. An unsuccessful
+  metadata/payload call resets `*required_len` to zero except for
+  `RUSTPON_BUFFER_TOO_SMALL`, which reports its exact required size.
+  The caller owns every output buffer and all output remains untouched
+  on undersized-buffer errors.
+- The same 256 KiB body, 70-byte boundary, 4096-byte spool path and
+  1 MiB serialized output quotas apply as in the one-shot ABI.
+  Transport ingress controls still need to enforce time and body limits.
+- A Rust panic while the registry lock is held can poison its mutex;
+  future calls fail closed and leaked request FDs may persist until
+  process shutdown. This needs a deliberate PHP-FPM failure policy
+  before production use. Invalid C pointers and process aborts remain
+  outside the guarantees.
+
+### PHP runtime integration constraint
+
+**Do not integrate this API into PHP request handling until RSHUTDOWN
+or an equivalent guaranteed finally/cleanup mechanism invokes close**
+for every opened handle, including Zend exception and bailout paths.
+Neither a C `goto cleanup` on a normal return nor a destructor in an
+ordinary stack frame guarantees cleanup after Zend `longjmp`.
+The C shim must never execute Zend allocator, exception or bailout
+functions while a Rust call or registry mutex is active.
+
+The session test suite includes a real C caller that opens all eight
+allowed handles, checks that each accepted upload FD remains open while
+the handle is live, verifies FD counts after every close, and rejects
+stale/double closes. Linux also compares the stateful metadata and
+36 payload copy/rejection cases to PHP 8.4 SAPI within the existing
+78-case multipart corpus. No native PHP extension is present.
