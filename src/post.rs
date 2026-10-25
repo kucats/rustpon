@@ -521,7 +521,7 @@ fn forbidden(key: &[u8], original: &[u8]) -> bool {
         .any(|prefix| key.starts_with(prefix) && !original.starts_with(prefix))
 }
 
-fn valid_upload_name(name: &[u8]) -> bool {
+pub(crate) fn valid_upload_name(name: &[u8]) -> bool {
     let mut brackets = 0usize;
     for (index, byte) in name.iter().enumerate() {
         match byte {
