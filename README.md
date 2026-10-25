@@ -416,3 +416,28 @@ SAPI differential comparison (78 metadata cases, 36 payload
 copies/rejections), checking staging cleanup. See
 [`ffi/README.md`](ffi/README.md) for the pointer safety contract and
 remaining PHP integration requirements.
+
+
+## Bounded, single-parse multipart sessions
+
+The experimental FFI also supports a **stateful** multipart lifecycle:
+`rustpon_v1_multipart_session_open` returns a process-local 64-bit
+session ID. `session_files_json` and `session_upload_copy` access the
+same admitted parser result without reparsing. `session_close` destroys
+the request and closes all remaining anonymous upload FDs.
+
+The registry permits at most eight live requests per process, serializes
+operations under a mutex and rejects stale handles. Session IDs are **not
+secrets**, and no native Rust pointers are passed to C. A successful
+open must be closed on every application path. **Production PHP-FPM
+integration requires mandatory RSHUTDOWN cleanup**; a Zend `longjmp` may
+skip normal stack-based cleanup. A poisoned registry fails closed but
+can retain OS resources until the worker terminates.
+
+Linux CI compares **78** stateful typed FILES projections and **36**
+stateful upload copies/rejections with PHP 8.4 SAPI. A real C caller
+verifies the eight-handle cap, invalid/duplicate close rejection,
+and OS-level FD counts returning to their baseline on close.
+
+This is experimental and not yet a PHP extension or complete
+Zend upload-registry integration. See [`ffi/README.md`](ffi/README.md).
