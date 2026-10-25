@@ -493,9 +493,9 @@ interpreter has no file/network access and is not connected to the FFI layer.
 
 ## PHP 8.4 integer literal lexical compatibility
 
-The research-only \`php_eval\` interpreter recognizes bounded PHP 8.4
-integer literal forms: decimal, legacy leading-zero octal, explicit \`0o\`
-octal, \`0b\` binary and \`0x\` hexadecimal (including uppercase prefixes).
+The research-only `php_eval` interpreter recognizes bounded PHP 8.4
+integer literal forms: decimal, legacy leading-zero octal, explicit `0o`
+octal, `0b` binary and `0x` hexadecimal (including uppercase prefixes).
 Underscores are accepted **only between digits valid for that radix**.
 Values are checked against signed 64-bit integer bounds before any output.
 Invalid digits, dangling separators and missing digits are rejected.
