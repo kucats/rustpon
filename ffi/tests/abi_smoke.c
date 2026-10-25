@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 static void round_trip(const uint8_t *input, size_t len) {
     size_t required = SIZE_MAX;
@@ -135,6 +136,9 @@ static void stateful_multipart_smoke(void) {
         (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
         (const uint8_t *)spool, strlen(spool), &excess) == RUSTPON_SESSIONS_FULL);
     assert(excess == 0);
+    /* Anonymous FDs keep their payload after the configured spool directory
+     * disappears. If session copy reparses, these reads would fail. */
+    assert(rmdir(spool) == 0);
 
     for (size_t i = 0; i < 8; ++i) {
         size_t required = UINT64_MAX;
@@ -164,6 +168,7 @@ static void stateful_multipart_smoke(void) {
         assert(got == 0);
     }
     assert(rustpon_v1_multipart_session_close(0) == RUSTPON_INVALID_HANDLE);
+    assert(mkdir(spool, 0700) == 0);
     uint64_t renewed = 0;
     assert(rustpon_v1_multipart_session_open(
         (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
