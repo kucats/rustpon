@@ -92,7 +92,10 @@ fn snapshot(mut request: Request) -> Snapshot {
                     assert_eq!(error.kind(), io::ErrorKind::StorageFull);
                     assert_eq!(sink.bytes, output[..budget]);
                     let mut retry = Vec::new();
-                    assert_eq!(upload.copy_to(&mut retry).expect("retry copy"), upload.len());
+                    assert_eq!(
+                        upload.copy_to(&mut retry).expect("retry copy"),
+                        upload.len()
+                    );
                     assert_eq!(retry, output, "failed copy damaged staged source");
                 }
             }
@@ -224,7 +227,8 @@ mod tests {
 
     #[test]
     fn upload_copy_fault_offsets_across_buffer_boundaries() {
-        let mut data = b"0--b\r\nContent-Disposition: form-data; name=f; filename=f.bin\r\n\r\n".to_vec();
+        let mut data =
+            b"0--b\r\nContent-Disposition: form-data; name=f; filename=f.bin\r\n\r\n".to_vec();
         data.extend((0..4097).map(|i| (i % 256) as u8));
         data.extend_from_slice(b"\r\n--b--\r\n");
         assert!(data.len() <= MAX_INPUT + 1);
