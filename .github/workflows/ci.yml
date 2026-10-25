@@ -59,6 +59,11 @@ jobs:
           make -j2
           cd ../..
           python3 tools/php_probe_lifecycle.py --module ffi/php_probe/modules/rustpon_probe.so --library ffi/target/debug/librustpon_ffi.so
+      - name: Compare bounded PHP integer evaluator with PHP CLI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin php_eval
+          python3 tools/differential_php_eval.py --rust-bin target/debug/php_eval
       - name: Compare with PHP 8.4 parse_str (Linux)
         if: runner.os == 'Linux'
         run: |
