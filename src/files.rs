@@ -251,7 +251,7 @@ fn value_for(part: &crate::PartView<'_>, attribute: &[u8], error: u8) -> Vec<u8>
     let filename = part.filename.expect("file parts only");
     match attribute {
         b"name" => filename
-            .rsplit(|byte| *byte == b'/' || *byte == b'\\\\')
+            .rsplit(|byte| *byte == b'/' || *byte == b'\\')
             .next()
             .unwrap_or(filename)
             .to_vec(),
