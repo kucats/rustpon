@@ -22,11 +22,12 @@ impl<W: Write> Write for HexWriter<W> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().collect();
     let post_mode = args.len() == 4 && args[1] == "--post";
-    if args.len() != 3 && !post_mode {
-        eprintln!("usage: multipart [--post] BOUNDARY PRIVATE_SPOOL_DIR < body.bin");
+    let files_mode = args.len() == 4 && args[1] == "--files";
+    if args.len() != 3 && !post_mode && !files_mode {
+        eprintln!("usage: multipart [--post|--files] BOUNDARY PRIVATE_SPOOL_DIR < body.bin");
         std::process::exit(2);
     }
-    let first = if post_mode { 2 } else { 1 };
+    let first = if post_mode || files_mode { 2 } else { 1 };
     let boundary = args[first].to_str().ok_or("boundary must be ASCII")?;
     let mut request = match parse_reader(
         &mut io::stdin().lock(),
@@ -40,6 +41,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
+    if files_mode {
+        let files = rustpon::files::project(&request, rustpon::files::Limits::default())
+            .map_err(|error| format!("files: {error:?}"))?;
+        let mut out = io::BufWriter::new(io::stdout().lock());
+        write!(out, "{{\"files_tree\":")?;
+        files.write_json(&mut out)?;
+        writeln!(out, "}}")?;
+        out.flush()?;
+        return Ok(());
+    }
     if post_mode {
         let post = match request.into_post(post::Limits::default()) {
             Ok(post) => post,
