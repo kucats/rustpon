@@ -46,6 +46,11 @@ CASES = [
                               (b"a_b", b"second", b"two.bin")]),
     ("file-append-both", [(b"f[]", b"first", b"one.bin"),
                            (b"f[]", b"second", b"two.bin")]),
+    ("nested-tmp-name-key", [(b"f[tmp_name]", b"data", b"one.bin")]),
+    ("nested-error-key", [(b"f[error]", b"data", b"one.bin")]),
+    ("nested-size-key", [(b"f[size]", b"data", b"one.bin")]),
+    ("empty-file-data", [(b"f", b"", b"zero.bin")]),
+    ("windows-filename", [(b"f", b"content", b"C:\\fakepath\\leaf.bin")]),
     ("empty-upload-name", [(b"f", b"", b"")]),
     ("path-filename", [(b"f", b"payload", b"folder/item.bin")]),
     ("max-before-exceeded", [(b"MAX_FILE_SIZE", b"2", None),
@@ -147,7 +152,11 @@ def main():
                     failures += 1
                     print(f"FAIL {label}: Rust files projection {projected.stderr[:200]!r}", file=sys.stderr)
                     continue
-                actual_files_tree = json.loads(projected.stdout)["files_tree"]
+                projected_data = json.loads(projected.stdout)
+                actual_files_tree = projected_data["files_tree"]
+                if projected_data["files_tree_typed"] != php["files_tree_typed"]:
+                    failures += 1
+                    print(f"FAIL {label}: PHP typed FILES={php['files_tree_typed']!r} Rust={projected_data['files_tree_typed']!r}", file=sys.stderr)
                 admitted = subprocess.run(
                     [str(opt.rust_bin), "--admit", BOUNDARY.decode(), spool],
                     input=data, capture_output=True, timeout=15, check=False)
@@ -156,6 +165,9 @@ def main():
                     print(f"FAIL {label}: admission {admitted.stderr[:200]!r}", file=sys.stderr)
                     continue
                 admission_data = json.loads(admitted.stdout)
+                if admission_data["files_tree_typed"] != php["files_tree_typed"]:
+                    failures += 1
+                    print(f"FAIL {label}: admitted typed FILES tree differs from PHP", file=sys.stderr)
                 if admission_data["files_tree"] != php["files_tree"]:
                     failures += 1
                     print(f"FAIL {label}: admitted FILES tree disagrees with PHP", file=sys.stderr)
