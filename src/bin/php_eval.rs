@@ -239,7 +239,10 @@ mod tests {
         assert_eq!(eval("echo $x;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1+;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1; echo 2;"), Err(EvalError::TrailingInput));
-        assert_eq!(eval("echo 9223372036854775807+1;"), Err(EvalError::Overflow));
+        assert_eq!(
+            eval("echo 9223372036854775807+1;"),
+            Err(EvalError::Overflow)
+        );
         assert_eq!(eval("echo 9223372036854775808;"), Err(EvalError::Overflow));
         assert_eq!(eval("<?phpecho 1;"), Err(EvalError::Syntax));
     }
