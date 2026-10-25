@@ -6,8 +6,8 @@
 //! Numeric PHP metadata values are encoded as ASCII string leaves in this
 //! testing projection. A future Zend adapter must preserve native zval types.
 
-use crate::{Limit as WireLimit, Part, Payload, Request, Stats, store};
 use crate::post;
+use crate::{Limit as WireLimit, Part, Payload, Request, Stats, store};
 use std::ops::Range;
 
 const ATTRIBUTES: [&[u8]; 6] = [
@@ -65,7 +65,9 @@ impl From<post::Error> for Error {
 /// before the returned tree is visible to the caller.
 pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, Error> {
     let file_count = request.parts().filter(|p| p.filename.is_some()).count();
-    let parts_count = file_count.checked_mul(ATTRIBUTES.len()).ok_or(Error::InvalidLimits)?;
+    let parts_count = file_count
+        .checked_mul(ATTRIBUTES.len())
+        .ok_or(Error::InvalidLimits)?;
     let mut needed = 0usize;
     for part in request.parts().filter(|p| p.filename.is_some()) {
         if !post::valid_upload_name(part.name) {
@@ -73,9 +75,15 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
         }
         for &attr in &ATTRIBUTES {
             let value = value_for(&part, attr);
-            let prefix_len = part.name.iter().position(|c| *c == b'[').unwrap_or(part.name.len());
+            let prefix_len = part
+                .name
+                .iter()
+                .position(|c| *c == b'[')
+                .unwrap_or(part.name.len());
             // root + "[" + attr + "]" + original bracket suffix + value
-            let entry_len = part.name.len()
+            let entry_len = part
+                .name
+                .len()
                 .checked_add(attr.len() + 2)
                 .and_then(|n| n.checked_add(value.len()))
                 .ok_or(Error::InvalidLimits)?;
@@ -89,18 +97,32 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
         }
     }
     let requested = needed
-        .checked_add(parts_count.checked_mul(size_of::<Part>()).ok_or(Error::InvalidLimits)?)
+        .checked_add(
+            parts_count
+                .checked_mul(size_of::<Part>())
+                .ok_or(Error::InvalidLimits)?,
+        )
         .and_then(|n| n.checked_add(size_of::<Request>()))
         .ok_or(Error::InvalidLimits)?;
     if requested > limits.memory_capacity {
         return Err(Error::MemoryCapacity);
     }
     let mut arena = Vec::<u8>::new();
-    arena.try_reserve_exact(needed).map_err(|_| Error::Allocation)?;
+    arena
+        .try_reserve_exact(needed)
+        .map_err(|_| Error::Allocation)?;
     let mut parts = Vec::<Part>::new();
-    parts.try_reserve_exact(parts_count).map_err(|_| Error::Allocation)?;
-    let actual = arena.capacity()
-        .checked_add(parts.capacity().checked_mul(size_of::<Part>()).ok_or(Error::InvalidLimits)?)
+    parts
+        .try_reserve_exact(parts_count)
+        .map_err(|_| Error::Allocation)?;
+    let actual = arena
+        .capacity()
+        .checked_add(
+            parts
+                .capacity()
+                .checked_mul(size_of::<Part>())
+                .ok_or(Error::InvalidLimits)?,
+        )
         .and_then(|n| n.checked_add(size_of::<Request>()))
         .ok_or(Error::InvalidLimits)?;
     if actual > limits.memory_capacity {
@@ -108,7 +130,11 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
     }
 
     for part in request.parts().filter(|p| p.filename.is_some()) {
-        let root_len = part.name.iter().position(|c| *c == b'[').unwrap_or(part.name.len());
+        let root_len = part
+            .name
+            .iter()
+            .position(|c| *c == b'[')
+            .unwrap_or(part.name.len());
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
             let start = arena.len();
@@ -123,7 +149,10 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
             store(&mut arena, &value, limits.metadata_bytes).map_err(map_wire_error)?;
             let value_end = arena.len();
             parts.push(Part {
-                name: Range { start, end: name_end },
+                name: Range {
+                    start,
+                    end: name_end,
+                },
                 filename: None,
                 content_type: None,
                 payload: Payload::Field(name_end..value_end),
@@ -178,7 +207,8 @@ mod tests {
 
     #[test]
     fn nested_upload_shape_and_empty_filename() {
-        let path = std::env::temp_dir().join(format!("rustpon-files-projection-{}", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("rustpon-files-projection-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let body = b"--b\r\nContent-Disposition: form-data; name=\"f[x][]\"; filename=\"one.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nhello\r\n--b\r\nContent-Disposition: form-data; name=\"f[x][]\"; filename=\"two.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nworld\r\n--b--\r\n";
         let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
