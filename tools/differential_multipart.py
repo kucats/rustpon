@@ -30,6 +30,14 @@ CASES = [
     ("file-only", [(b"upload", b"DATA", b"sample.bin")]),
     ("two-files", [(b"upload", b"first", b"one.bin"),
                    (b"attachment", b"second", b"two.bin")]),
+    ("nested-files", [(b"f[x][]", b"first", b"one.bin"),
+                      (b"f[x][]", b"second", b"two.bin")]),
+    ("file-indices", [(b"f[00]", b"first", b"one.bin"),
+                      (b"f[0]", b"second", b"two.bin")]),
+    ("file-overwrite", [(b"f", b"first", b"one.bin"),
+                        (b"f", b"second", b"two.bin")]),
+    ("empty-upload-name", [(b"f", b"", b"")]),
+
 ]
 
 def body_for(parts):
@@ -103,6 +111,17 @@ def main():
                     print(f"FAIL {label}: Rust {rust.returncode} {rust.stderr[:200]!r}", file=sys.stderr)
                     continue
                 actual = json.loads(rust.stdout)["post_tree"]
+                projected = subprocess.run(
+                    [str(opt.rust_bin), "--files", BOUNDARY.decode(), spool],
+                    input=data, capture_output=True, timeout=15, check=False)
+                if projected.returncode:
+                    failures += 1
+                    print(f"FAIL {label}: Rust files projection {projected.stderr[:200]!r}", file=sys.stderr)
+                    continue
+                actual_files_tree = json.loads(projected.stdout)["files_tree"]
+                if php["files_tree"] != actual_files_tree:
+                    failures += 1
+                    print(f"FAIL {label}: PHP FILES tree={php['files_tree']!r} Rust={actual_files_tree!r}", file=sys.stderr)
                 if php["post_tree"] != actual:
                     failures += 1
                     print(f"FAIL {label}: PHP={php['post_tree']!r} Rust={actual!r}", file=sys.stderr)
