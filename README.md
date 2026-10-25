@@ -134,6 +134,12 @@ The input byte limit and temporary retained-capacity limit apply to raw
 encoded bytes. Name/value limits also apply to raw encoded lengths, which
 is stricter than PHP for heavily percent-encoded input.
 
+To exercise the same POST projection from a shell:
+
+\`\`\`sh
+printf '%s' 'x=hello+world&a%5By%5D=2' | cargo run --offline --locked --bin urlencoded
+\`\`\`
+
 This decoder is a standalone prototype: no Cookie parser, configurable
 \`arg_separator.input\`, SAPI entry point, FFI, or \`$_GET\` publication has
 been implemented. PHP runtime memory and request-lifecycle vulnerabilities
