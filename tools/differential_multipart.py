@@ -36,6 +36,16 @@ CASES = [
                       (b"f[0]", b"second", b"two.bin")]),
     ("file-overwrite", [(b"f", b"first", b"one.bin"),
                         (b"f", b"second", b"two.bin")]),
+    ("file-nested-then-flat", [(b"f[x]", b"first", b"one.bin"),
+                               (b"f", b"second", b"two.bin")]),
+    ("file-flat-then-nested", [(b"f", b"first", b"one.bin"),
+                               (b"f[x]", b"second", b"two.bin")]),
+    ("file-same-index", [(b"f[0]", b"first", b"one.bin"),
+                          (b"f[0]", b"second", b"two.bin")]),
+    ("file-normalized-root", [(b"a.b", b"first", b"one.bin"),
+                              (b"a_b", b"second", b"two.bin")]),
+    ("file-append-both", [(b"f[]", b"first", b"one.bin"),
+                           (b"f[]", b"second", b"two.bin")]),
     ("empty-upload-name", [(b"f", b"", b"")]),
     ("path-filename", [(b"f", b"payload", b"folder/item.bin")]),
     ("max-before-exceeded", [(b"MAX_FILE_SIZE", b"2", None),
@@ -158,6 +168,12 @@ def main():
                     "max-case-insensitive": [],
                     "max-nested": [],
                     "max-changed": [3],
+                    "file-overwrite": [1],
+                    "file-nested-then-flat": [1],
+                    "file-flat-then-nested": [1],
+                    "file-same-index": [1],
+                    "file-normalized-root": [1],
+                    "file-append-both": [0, 1],
                     "empty-upload-name": [],
                 }
                 if label in expected_accepted and admission_data["accepted_indices"] != expected_accepted[label]:
@@ -173,7 +189,9 @@ def main():
                 # The raw wire IR retains overwritten uploads; PHP FILES does not.
                 # PHP FILES tree equality above covers duplicate-name semantics.
                 # Wire IR also retains uploads rejected by MAX_FILE_SIZE.
-                if php["files"] and label not in ("file-overwrite", "max-changed"):
+                if php["files"] and label not in ("file-overwrite", "max-changed",
+                        "file-nested-then-flat", "file-flat-then-nested",
+                        "file-same-index", "file-normalized-root"):
                     raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
                                          input=data, capture_output=True, timeout=15, check=False)
                     if raw.returncode:
