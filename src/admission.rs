@@ -258,6 +258,55 @@ mod tests {
     }
 
     #[test]
+    fn file_descriptor_count_returns_to_baseline_after_admission() {
+        const CHILD: &str = "RUSTPON_ADMISSION_FD_TEST_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let child = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "admission::tests::file_descriptor_count_returns_to_baseline_after_admission",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                child.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&child.stdout),
+                String::from_utf8_lossy(&child.stderr)
+            );
+            return;
+        }
+        let fd_path = if std::path::Path::new("/proc/self/fd").is_dir() {
+            "/proc/self/fd"
+        } else {
+            "/dev/fd"
+        };
+        let count = || fs::read_dir(fd_path).unwrap().count();
+        let spool = Spool::new();
+        let baseline = count();
+        for _ in 0..32 {
+            let raw = spool.parse(BODY);
+            assert_eq!(count(), baseline + 3);
+            let admitted = admit(raw, Policy::default()).unwrap();
+            assert_eq!(count(), baseline + 1);
+            assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![3]);
+            drop(admitted);
+            assert_eq!(count(), baseline);
+            let denied = admit(
+                spool.parse(BODY),
+                Policy {
+                    max_file_bytes: 1,
+                    ..Policy::default()
+                },
+            );
+            assert!(matches!(denied, Err(Error::FileTooLarge)));
+            assert_eq!(count(), baseline);
+        }
+    }
+
+    #[test]
     fn repeated_requests_do_not_retain_rejected_descriptors() {
         let spool = Spool::new();
         for _ in 0..32 {
