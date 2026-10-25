@@ -36,7 +36,9 @@ enum rustpon_status {
     RUSTPON_BUFFER_TOO_SMALL = 4,
     RUSTPON_PANIC = 5,
     RUSTPON_OUTPUT_LIMIT = 6,
-    RUSTPON_NOT_ADMITTED = 7
+    RUSTPON_NOT_ADMITTED = 7,
+    RUSTPON_INVALID_HANDLE = 8,
+    RUSTPON_SESSIONS_FULL = 9
 };
 
 uint32_t rustpon_ffi_abi_version(void);
@@ -84,6 +86,37 @@ int32_t rustpon_v1_multipart_upload_copy(
     uint8_t *output, size_t output_capacity,
     size_t *required_len
 );
+
+/*
+ * Experimental stateful multipart sessions: one parse + one admission.
+ * Integer handles are NOT secrets and must never be exposed to web clients.
+ * At most 8 sessions may be live per process. A session owns anonymous
+ * upload descriptors until explicitly closed; callers MUST close in a
+ * request-shutdown/finally path, including on Zend bailout. Leaked handles
+ * retain FDs until process termination and exhaust the pool.
+ *
+ * Operations are serialized by a process-local mutex. No callbacks into
+ * Zend occur while holding it. These functions are not currently wired into
+ * PHP-FPM; worker request-shutdown integration needs separate review.
+ * A stale, invalid, already closed handle returns INVALID_HANDLE (8).
+ * Full handle pool returns SESSIONS_FULL (9).
+ * All input/output pointers follow the same C ABI validity requirements.
+ */
+int32_t rustpon_v1_multipart_session_open(
+    const uint8_t *boundary, size_t boundary_len,
+    const uint8_t *body, size_t body_len,
+    const uint8_t *spool_dir, size_t spool_len,
+    uint64_t *out_handle
+);
+int32_t rustpon_v1_multipart_session_files_json(
+    uint64_t handle, uint8_t *output, size_t output_capacity,
+    size_t *required_len
+);
+int32_t rustpon_v1_multipart_session_upload_copy(
+    uint64_t handle, size_t wire_part_index,
+    uint8_t *output, size_t output_capacity, size_t *required_len
+);
+int32_t rustpon_v1_multipart_session_close(uint64_t handle);
 
 #ifdef __cplusplus
 }
