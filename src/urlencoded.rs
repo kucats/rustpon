@@ -135,8 +135,7 @@ impl FormParser {
                 Limit::FieldBytesTotal,
             )?;
         } else {
-            self.raw_name =
-                add_usize(self.raw_name, 1, self.limits.name_bytes, Limit::NameBytes)?;
+            self.raw_name = add_usize(self.raw_name, 1, self.limits.name_bytes, Limit::NameBytes)?;
         }
         add_usize(
             self.request().arena.len(),
@@ -153,7 +152,8 @@ impl FormParser {
         let value_start = self.value_start.unwrap_or(end);
         if self.field_start == value_start {
             // PHP ignores blank pairs and pairs with an empty name.
-            self.request().arena.truncate(self.field_start);
+            let discard_from = self.field_start;
+            self.request().arena.truncate(discard_from);
         } else {
             let part_count = add_usize(
                 self.request().stats.parts,
@@ -338,13 +338,62 @@ mod tests {
     #[test]
     fn limits_abort_before_publication() {
         let cases = [
-            (b"ab=1".as_slice(), Limits { name_bytes: 1, ..Limits::default() }, Limit::NameBytes),
-            (b"a=xyz", Limits { field_bytes: 2, ..Limits::default() }, Limit::FieldBytes),
-            (b"a=12&b=34", Limits { field_bytes_total: 3, ..Limits::default() }, Limit::FieldBytesTotal),
-            (b"a=1&b=2", Limits { parts: 1, ..Limits::default() }, Limit::Parts),
-            (b"a=1&b=2", Limits { fields: 1, ..Limits::default() }, Limit::Fields),
-            (b"a=1", Limits { body_bytes: 2, ..Limits::default() }, Limit::BodyBytes),
-            (b"a=1", Limits { retained_bytes: 2, ..Limits::default() }, Limit::RetainedBytes),
+            (
+                b"ab=1".as_slice(),
+                Limits {
+                    name_bytes: 1,
+                    ..Limits::default()
+                },
+                Limit::NameBytes,
+            ),
+            (
+                b"a=xyz",
+                Limits {
+                    field_bytes: 2,
+                    ..Limits::default()
+                },
+                Limit::FieldBytes,
+            ),
+            (
+                b"a=12&b=34",
+                Limits {
+                    field_bytes_total: 3,
+                    ..Limits::default()
+                },
+                Limit::FieldBytesTotal,
+            ),
+            (
+                b"a=1&b=2",
+                Limits {
+                    parts: 1,
+                    ..Limits::default()
+                },
+                Limit::Parts,
+            ),
+            (
+                b"a=1&b=2",
+                Limits {
+                    fields: 1,
+                    ..Limits::default()
+                },
+                Limit::Fields,
+            ),
+            (
+                b"a=1",
+                Limits {
+                    body_bytes: 2,
+                    ..Limits::default()
+                },
+                Limit::BodyBytes,
+            ),
+            (
+                b"a=1",
+                Limits {
+                    retained_bytes: 2,
+                    ..Limits::default()
+                },
+                Limit::RetainedBytes,
+            ),
         ];
         for (body, limits, expected) in cases {
             assert_eq!(parse(body, limits).unwrap_err(), Error::Limit(expected));
@@ -354,17 +403,29 @@ mod tests {
         parser.cancel();
         assert_eq!(parser.feed(b"&b=2"), Err(Error::Cancelled));
         assert!(matches!(parser.finish(), Err(Error::Cancelled)));
-        assert_eq!(parse(b"a%00b=1", Limits::default()).unwrap_err(), Error::Malformed);
+        assert_eq!(
+            parse(b"a%00b=1", Limits::default()).unwrap_err(),
+            Error::Malformed
+        );
         assert_eq!(fields(&parse(b"&&", Limits::default()).unwrap()), vec![]);
     }
 
     #[test]
     fn capacity_and_reader_errors() {
-        let baseline = parse(b"a=1", Limits::default()).unwrap().stats().memory_capacity;
-        let limits = Limits { memory_capacity: baseline, ..Limits::default() };
+        let baseline = parse(b"a=1", Limits::default())
+            .unwrap()
+            .stats()
+            .memory_capacity;
+        let limits = Limits {
+            memory_capacity: baseline,
+            ..Limits::default()
+        };
         assert!(FormParser::new(limits).is_ok());
         assert!(matches!(
-            FormParser::new(Limits { memory_capacity: baseline - 1, ..limits }),
+            FormParser::new(Limits {
+                memory_capacity: baseline - 1,
+                ..limits
+            }),
             Err(Error::Limit(Limit::MemoryCapacity))
         ));
         struct Broken;
@@ -373,6 +434,9 @@ mod tests {
                 Err(std::io::ErrorKind::BrokenPipe.into())
             }
         }
-        assert_eq!(parse_reader(&mut Broken, Limits::default()).unwrap_err(), Error::Io(std::io::ErrorKind::BrokenPipe));
+        assert_eq!(
+            parse_reader(&mut Broken, Limits::default()).unwrap_err(),
+            Error::Io(std::io::ErrorKind::BrokenPipe)
+        );
     }
 }
