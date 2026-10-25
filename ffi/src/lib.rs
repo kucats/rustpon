@@ -11,6 +11,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
 mod multipart;
+mod session;
 
 const ABI_VERSION: u32 = 0x0001_0000;
 const MAX_INPUT: usize = 256 * 1024;
