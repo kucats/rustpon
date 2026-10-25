@@ -1,0 +1,117 @@
+#!/usr/bin/env python3
+"""Compare PHP's real multipart HTTP registration with rustpon's POST adapter."""
+import argparse
+import http.client
+import json
+import random
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+BOUNDARY = b"rustpon-diff"
+# (field name, bytes, optional filename). No personal or external fixtures.
+CASES = [
+    ("empty", []),
+    ("single", [(b"alpha", b"one", None)]),
+    ("empty-value", [(b"alpha", b"", None)]),
+    ("binary", [(b"bytes", b"a\x00\xffz", None)]),
+    ("utf8", [(b"message", "日本語".encode(), None)]),
+    ("duplicates", [(b"alpha", b"old", None), (b"alpha", b"new", None)]),
+    ("append", [(b"a[]", b"one", None), (b"a[]", b"two", None)]),
+    ("nested", [(b"a[x][y]", b"nested", None)]),
+    ("integer", [(b"a[0]", b"zero", None), (b"a[2]", b"two", None)]),
+    ("negative-append", [(b"a[-2]", b"neg", None), (b"a[]", b"next", None)]),
+    ("normalize", [(b"first.name", b"old", None), (b"first_name", b"new", None)]),
+    ("replace", [(b"a[x]", b"old", None), (b"a", b"mid", None), (b"a[]", b"new", None)]),
+    ("file-and-field", [(b"upload", b"DATA", b"sample.bin"), (b"message", b"yes", None)]),
+    ("file-only", [(b"upload", b"DATA", b"sample.bin")]),
+]
+
+def body_for(parts):
+    output = bytearray()
+    for name, data, filename in parts:
+        output.extend(b"--" + BOUNDARY + b"\r\n")
+        output.extend(b'Content-Disposition: form-data; name="' + name + b'"')
+        if filename is not None:
+            output.extend(b'; filename="' + filename + b'"')
+        output.extend(b"\r\n\r\n")
+        output.extend(data)
+        output.extend(b"\r\n")
+    output.extend(b"--" + BOUNDARY + b"--\r\n")
+    return bytes(output)
+
+def php_post(port, data):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
+    try:
+        conn.request("POST", "/", body=data, headers={
+            "Content-Type": "multipart/form-data; boundary=" + BOUNDARY.decode()})
+        response = conn.getresponse()
+        output = response.read()
+        if response.status != 200:
+            raise RuntimeError(f"PHP status {response.status}: {output[:200]!r}")
+        return json.loads(output)["post_tree"]
+    finally:
+        conn.close()
+
+def main():
+    cli = argparse.ArgumentParser()
+    cli.add_argument("--rust-bin", type=Path, required=True)
+    cli.add_argument("--php-bin", default="php")
+    opt = cli.parse_args()
+    router = Path(__file__).resolve().with_name("multipart_projection.php")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = subprocess.Popen([opt.php_bin, "-d", "max_input_vars=10000",
+                               "-S", f"127.0.0.1:{port}", str(router)],
+                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                              stderr=subprocess.DEVNULL)
+    try:
+        for _ in range(100):
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                    break
+            except OSError:
+                if server.poll() is not None:
+                    raise RuntimeError("PHP SAPI server exited")
+                time.sleep(0.05)
+        else:
+            raise RuntimeError("PHP SAPI server failed to start")
+        rng = random.Random(0x4D554C5449504152)
+        names = [b"alpha", b"beta", b"a[]", b"a[0]", b"a[x]", b"words.here", b"n[-2]"]
+        values = [b"", b"hello", b"\x00\xff", b"equal=sign", "東京".encode()]
+        cases = list(CASES)
+        for i in range(40):
+            fields = [(rng.choice(names), rng.choice(values), None)
+                      for _ in range(rng.randrange(1, 6))]
+            cases.append((f"generated-{i:03d}", fields))
+        failures = 0
+        with tempfile.TemporaryDirectory(prefix="rustpon-multipart-") as spool:
+            for label, parts in cases:
+                data = body_for(parts)
+                php = php_post(port, data)
+                rust = subprocess.run([str(opt.rust_bin), "--post", BOUNDARY.decode(), spool],
+                                      input=data, capture_output=True, timeout=15, check=False)
+                if rust.returncode:
+                    failures += 1
+                    print(f"FAIL {label}: Rust {rust.returncode} {rust.stderr[:200]!r}", file=sys.stderr)
+                    continue
+                actual = json.loads(rust.stdout)["post_tree"]
+                if php != actual:
+                    failures += 1
+                    print(f"FAIL {label}: PHP={php!r} Rust={actual!r}", file=sys.stderr)
+        print(f"PHP SAPI multipart: {len(cases)} cases, {failures} failures")
+        return int(failures != 0)
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()
+            server.wait()
+
+if __name__ == "__main__":
+    sys.exit(main())
