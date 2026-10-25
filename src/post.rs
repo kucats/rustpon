@@ -516,6 +516,20 @@ impl PostRequest {
     /// Byte strings use ["s", "hex"]; integers use ["i", "decimal"].
     /// Bounded explicit traversal; caller output buffering is outside the budget.
     pub fn write_json(&self, output: &mut impl Write) -> io::Result<()> {
+        self.write_json_impl(output, false)
+    }
+
+    /// Tagged JSON for FILES metadata: PHP integer leaves for `size` and
+    /// `error`, preserving all nested indices. This method must only be used
+    /// with the synthetic FILES projection, not arbitrary POST fields.
+    ///
+    /// Integer leaves are validated before emitting their JSON representation.
+    /// No PHP objects or Zend-managed memory are created.
+    pub fn write_php_files_json(&self, output: &mut impl Write) -> io::Result<()> {
+        self.write_json_impl(output, true)
+    }
+
+    fn write_json_impl(&self, output: &mut impl Write, php_file_numbers: bool) -> io::Result<()> {
         let Value::Array(root) = self.nodes[0].value else {
             unreachable!()
         };
@@ -524,6 +538,9 @@ impl PostRequest {
             first: true,
         }; MAX_DEPTH + 2];
         stack[0].next = root.first;
+        // Track FILES numeric attributes through nested array indices.
+        // The attribute name occurs precisely one level below the file root.
+        let mut numeric_attribute = [false; MAX_DEPTH + 2];
         let mut depth = 0;
         output.write_all(b"[\"a\",[")?;
         loop {
@@ -548,14 +565,38 @@ impl PostRequest {
                 Key::Bytes(span) => write_hex_value(output, span.bytes(&self.keys))?,
             }
             output.write_all(b",")?;
+            let is_numeric = if !php_file_numbers {
+                false
+            } else if depth == 1 {
+                match node.key {
+                    Key::Bytes(key) => {
+                        matches!(key.bytes(&self.keys), b"error" | b"size")
+                    }
+                    Key::Integer(_) => false,
+                }
+            } else {
+                numeric_attribute[depth]
+            };
             match node.value {
                 Value::Bytes(span) => {
-                    write_hex_value(output, span.bytes(&self.request.arena))?;
+                    if is_numeric {
+                        let bytes = span.bytes(&self.request.arena);
+                        let number = std::str::from_utf8(bytes)
+                            .ok()
+                            .and_then(|text| text.parse::<i64>().ok())
+                            .ok_or_else(|| {
+                                io::Error::new(io::ErrorKind::InvalidData, "invalid FILES integer")
+                            })?;
+                        write!(output, "[\"i\",\"{number}\"]")?;
+                    } else {
+                        write_hex_value(output, span.bytes(&self.request.arena))?;
+                    }
                     output.write_all(b"]")?;
                 }
                 Value::Array(array) => {
                     output.write_all(b"[\"a\",[")?;
                     depth += 1;
+                    numeric_attribute[depth] = is_numeric;
                     stack[depth] = Frame {
                         next: array.first,
                         first: true,
