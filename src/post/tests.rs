@@ -1,0 +1,347 @@
+use super::*;
+use crate::{Limits as WireLimits, Parser};
+use std::fs;
+use std::os::unix::fs::DirBuilderExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::Ordering;
+
+struct Spool(PathBuf);
+impl Spool {
+    fn new() -> Self {
+        let path = std::env::temp_dir().join(format!(
+            "php-post-test-{}-{}",
+            std::process::id(),
+            crate::NEXT_UPLOAD.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        Self(path)
+    }
+}
+impl Drop for Spool {
+    fn drop(&mut self) {
+        assert_eq!(fs::read_dir(&self.0).unwrap().count(), 0);
+        fs::remove_dir(&self.0).unwrap();
+    }
+}
+
+fn request(spool: &Spool, fields: &[(&[u8], &[u8])], file: bool) -> Request {
+    let mut bytes = Vec::new();
+    if file {
+        bytes.extend_from_slice(
+            b"--b\r\nContent-Disposition: form-data; name=f; filename=x\r\n\r\nfile\r\n",
+        );
+    }
+    for (name, value) in fields {
+        bytes.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"");
+        bytes.extend_from_slice(name);
+        bytes.extend_from_slice(b"\"\r\n\r\n");
+        bytes.extend_from_slice(value);
+        bytes.extend_from_slice(b"\r\n");
+    }
+    bytes.extend_from_slice(b"--b--\r\n");
+    let mut parser = Parser::new(b"b", WireLimits::default(), &spool.0).unwrap();
+    parser.feed(&bytes).unwrap();
+    parser.finish().unwrap()
+}
+
+fn json(request: &PostRequest) -> String {
+    let mut output = Vec::new();
+    request.write_json(&mut output).unwrap();
+    String::from_utf8(output).unwrap()
+}
+
+#[test]
+fn ordered_tree_normalizes_keys_preserves_binary_and_replaces_in_place() {
+    let spool = Spool::new();
+    let post = request(
+        &spool,
+        &[
+            (b" a.b[ \tx.y ]", b"\0\xff"),
+            (b"other", b"a"),
+            (b"a_b[x.y ]", b"last"),
+        ],
+        false,
+    )
+    .into_post(Limits::default())
+    .unwrap();
+    assert_eq!(
+        json(&post),
+        r#"["a",[[["s","615f62"],["a",[[["s","782e7920"],["s","6c617374"]]]]],[["s","6f74686572"],["s","61"]]]]"#
+    );
+    assert_eq!(post.stats().nodes, 4);
+    // The field bytes refer to their original ranges, including replaced data.
+    assert_eq!(
+        post.wire().parts().next().unwrap().value,
+        Some(b"\0\xff".as_slice())
+    );
+}
+
+#[test]
+fn numeric_keys_follow_signed_64_bit_php_rules() {
+    for (input, expected) in [
+        ("0", Some(0)),
+        ("-1", Some(-1)),
+        ("00", None),
+        ("-0", None),
+        ("+1", None),
+        ("01", None),
+        ("1.0", None),
+        ("1e2", None),
+        ("9223372036854775807", Some(i64::MAX)),
+        ("-9223372036854775808", Some(i64::MIN)),
+        ("9223372036854775808", None),
+        ("-9223372036854775809", None),
+        ("", None),
+    ] {
+        assert_eq!(numeric(input.as_bytes()), expected, "{input}");
+    }
+    let spool = Spool::new();
+    let post = request(&spool, &[(b"a[-5]", b"x"), (b"a[]", b"y")], false)
+        .into_post(Limits::default())
+        .unwrap();
+    assert_eq!(
+        json(&post),
+        r#"["a",[[["s","61"],["a",[[["i","-5"],["s","78"]],[["i","-4"],["s","79"]]]]]]]"#
+    );
+}
+
+#[test]
+fn detached_nodes_remain_charged_and_scalar_array_resets_append() {
+    let spool = Spool::new();
+    let parts: &[(&[u8], &[u8])] = &[(b"a[x]", b"old"), (b"a", b"scalar"), (b"a[]", b"new")];
+    let post = request(&spool, parts, false)
+        .into_post(Limits::default())
+        .unwrap();
+    assert_eq!(post.stats().nodes, 4); // root, a, abandoned x, new integer child
+    assert_eq!(
+        json(&post),
+        r#"["a",[[["s","61"],["a",[[["i","0"],["s","6e6577"]]]]]]]"#
+    );
+    assert!(matches!(
+        request(&spool, parts, false).into_post(Limits {
+            nodes: 3,
+            ..Limits::default()
+        }),
+        Err(Error::Nodes)
+    ));
+}
+
+#[test]
+fn exact_and_plus_one_adapter_budgets() {
+    let spool = Spool::new();
+    let fields: &[(&[u8], &[u8])] = &[(b"a[x]", b"hello"), (b"b", b"world")];
+    let baseline = request(&spool, fields, false)
+        .into_post(Limits::default())
+        .unwrap()
+        .stats();
+    type Case = (Error, fn(&mut Limits, usize), usize);
+    let cases: &[Case] = &[
+        (Error::Depth, |l, n| l.depth = n, 1),
+        (Error::NameBytes, |l, n| l.name_bytes = n, 4),
+        (Error::Nodes, |l, n| l.nodes = n, baseline.nodes),
+        (Error::KeyBytes, |l, n| l.key_bytes = n, baseline.key_bytes),
+        (
+            Error::Work,
+            |l, n| l.work = n as u64,
+            baseline.work as usize,
+        ),
+        (
+            Error::MemoryCapacity,
+            |l, n| l.memory_capacity = n,
+            baseline.memory_capacity,
+        ),
+    ];
+    for &(error, set, exact) in cases {
+        let mut limits = Limits::default();
+        set(&mut limits, exact);
+        assert!(
+            request(&spool, fields, false).into_post(limits).is_ok(),
+            "exact {error:?}"
+        );
+        set(&mut limits, exact - 1);
+        assert!(
+            matches!(request(&spool, fields, false).into_post(limits), Err(found) if found == error),
+            "plus one {error:?}"
+        );
+    }
+    let limits = Limits {
+        protected_names: 2,
+        ..Limits::default()
+    };
+    assert!(request(&spool, &[], true).into_post(limits).is_ok());
+    assert!(matches!(
+        request(&spool, &[], true).into_post(Limits {
+            protected_names: 1,
+            ..limits
+        }),
+        Err(Error::ProtectedNames)
+    ));
+}
+
+#[test]
+fn malformed_depth_append_and_configuration_failures_are_explicit() {
+    let spool = Spool::new();
+    for (name, error) in [
+        (b"a[".as_slice(), Error::MalformedName),
+        (b"a[x][".as_slice(), Error::MalformedName),
+    ] {
+        assert!(
+            matches!(request(&spool, &[(name, b"v")], false).into_post(Limits::default()), Err(found) if found == error)
+        );
+    }
+    let fields: &[(&[u8], &[u8])] = &[(b"a[9223372036854775807]", b"x"), (b"a[]", b"y")];
+    assert!(matches!(
+        request(&spool, fields, false).into_post(Limits::default()),
+        Err(Error::AppendExhausted)
+    ));
+    for limits in [
+        Limits {
+            depth: 65,
+            ..Limits::default()
+        },
+        Limits {
+            name_bytes: MAX_NAME + 1,
+            ..Limits::default()
+        },
+        Limits {
+            nodes: usize::MAX,
+            ..Limits::default()
+        },
+    ] {
+        assert!(matches!(
+            request(&spool, &[], false).into_post(limits),
+            Err(Error::InvalidLimits)
+        ));
+    }
+    let limits = Limits {
+        nodes: 1,
+        key_bytes: isize::MAX as usize + 1,
+        memory_capacity: usize::MAX,
+        ..Limits::default()
+    };
+    assert!(matches!(
+        request(&spool, &[], false).into_post(limits),
+        Err(Error::Allocation)
+    ));
+}
+
+#[test]
+fn deepest_tree_serializes_and_drops_without_recursive_ownership() {
+    let spool = Spool::new();
+    let name = [b"a".as_slice(), b"[x]".repeat(64).as_slice()].concat();
+    let post = request(&spool, &[(&name, b"\0\xff")], false)
+        .into_post(Limits::default())
+        .unwrap();
+    assert_eq!(post.stats().nodes, 66);
+    assert!(json(&post).contains("00ff"));
+    drop(post);
+    let too_deep = [name.as_slice(), b"[x]"].concat();
+    assert!(matches!(
+        request(&spool, &[(&too_deep, b"v")], false).into_post(Limits::default()),
+        Err(Error::Depth)
+    ));
+}
+
+#[test]
+fn upload_protection_and_ownership_are_separate_from_files_materialization() {
+    let spool = Spool::new();
+    let mut post = request(
+        &spool,
+        &[
+            (b"f", b"blocked"),
+            (b"f[tmp_name]", b"blocked"),
+            (b"g", b"ok"),
+        ],
+        true,
+    )
+    .into_post(Limits::default())
+    .unwrap();
+    assert_eq!(post.stats().skipped_fields, 2);
+    assert_eq!(post.stats().protected_names, 2);
+    assert_eq!(json(&post), r#"["a",[[["s","67"],["s","6f6b"]]]]"#);
+    let mut data = Vec::new();
+    assert_eq!(post.upload_mut(0).unwrap().copy_to(&mut data).unwrap(), 4);
+    assert_eq!(data, b"file");
+}
+
+#[test]
+fn adapter_failure_releases_owned_uploads_in_subprocess() {
+    const CHILD: &str = "PHP_POST_FD_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "post::tests::adapter_failure_releases_owned_uploads_in_subprocess",
+                "--test-threads=1",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let spool = Spool::new();
+    let directory = if Path::new("/proc/self/fd").is_dir() {
+        "/proc/self/fd"
+    } else {
+        "/dev/fd"
+    };
+    let count = || fs::read_dir(directory).unwrap().count();
+    let baseline = count();
+    for _ in 0..64 {
+        for limits in [
+            Limits {
+                nodes: 0,
+                ..Limits::default()
+            },
+            Limits {
+                nodes: 1,
+                ..Limits::default()
+            },
+            Limits {
+                key_bytes: 0,
+                ..Limits::default()
+            },
+            Limits {
+                protected_names: 1,
+                ..Limits::default()
+            },
+            Limits {
+                work: 0,
+                ..Limits::default()
+            },
+            Limits {
+                memory_capacity: 0,
+                ..Limits::default()
+            },
+            Limits {
+                nodes: 1,
+                key_bytes: isize::MAX as usize + 1,
+                memory_capacity: usize::MAX,
+                ..Limits::default()
+            },
+        ] {
+            let wire = request(&spool, &[(b"g[x]", b"v")], true);
+            assert_eq!(count(), baseline + 1);
+            assert!(wire.into_post(limits).is_err());
+            assert_eq!(count(), baseline);
+        }
+        let wire = request(&spool, &[(b"g[", b"v")], true);
+        assert!(matches!(
+            wire.into_post(Limits::default()),
+            Err(Error::MalformedName)
+        ));
+        assert_eq!(count(), baseline);
+        let post = request(&spool, &[], true)
+            .into_post(Limits::default())
+            .unwrap();
+        assert_eq!(count(), baseline + 1);
+        drop(post);
+        assert_eq!(count(), baseline);
+    }
+}
