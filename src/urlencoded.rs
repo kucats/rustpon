@@ -237,13 +237,13 @@ fn url_decode(bytes: &mut [u8]) -> usize {
     let mut read = 0;
     let mut written = 0;
     while read < bytes.len() {
-        if bytes[read] == b'%' && read + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex(bytes[read + 1]), hex(bytes[read + 2])) {
-                bytes[written] = (hi << 4) | lo;
-                read += 3;
-                written += 1;
-                continue;
-            }
+        if bytes[read] == b'%' && read + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex(bytes[read + 1]), hex(bytes[read + 2]))
+        {
+            bytes[written] = (hi << 4) | lo;
+            read += 3;
+            written += 1;
+            continue;
         }
         bytes[written] = if bytes[read] == b'+' {
             b' '
