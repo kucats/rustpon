@@ -146,7 +146,8 @@ def main():
                     print(f"FAIL {label}: PHP={php['post_tree']!r} Rust={actual!r}", file=sys.stderr)
                 # The raw wire IR retains overwritten uploads; PHP FILES does not.
                 # PHP FILES tree equality above covers duplicate-name semantics.
-                if php["files"] and label != "file-overwrite":
+                # Wire IR also retains uploads rejected by MAX_FILE_SIZE.
+                if php["files"] and label not in ("file-overwrite", "max-changed"):
                     raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
                                          input=data, capture_output=True, timeout=15, check=False)
                     if raw.returncode:
