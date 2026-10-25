@@ -392,3 +392,27 @@ This initial ABI deliberately excludes multipart and uploaded file descriptor
 handoff; native PHP `zval` population and `$_FILES` registration require
 a separate reviewed C/Zend shim. Do not allow `zend_bailout()` or PHP
 callbacks to cross an active Rust FFI frame.
+
+
+## Multipart C ABI with admitted upload copying
+
+The experimental `ffi/` crate additionally exports
+`rustpon_v1_multipart_files_json` and `rustpon_v1_multipart_upload_copy`.
+These one-shot calls reparse the complete multipart request, use a trusted
+0700 spool directory, pass through the *consuming* Admission gate and return
+either the typed PHP-shaped FILES JSON tree or the raw bytes of a specific
+accepted upload. The original zero-based multipart wire part index selects
+the upload, not a normalized PHP array index. Rejected and superseded
+uploads cannot be copied. Zero-byte admitted files are supported.
+
+The C caller owns all buffers; Rust-owned staging descriptors are always
+closed before returning. Querying size and copying require **two full
+parses**, not a persistent session, and there is no OS FD handoff or
+Zend/SAPI upload registration. Limits: 256 KiB body per call, 70-byte
+boundary, UTF-8 spool path length up to 4096 bytes and 1 MiB output.
+
+Linux CI runs a compiled C smoke consumer and a real PHP 8.4 multipart
+SAPI differential comparison (78 metadata cases, 36 payload
+copies/rejections), checking staging cleanup. See
+[`ffi/README.md`](ffi/README.md) for the pointer safety contract and
+remaining PHP integration requirements.
