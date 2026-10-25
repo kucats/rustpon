@@ -57,6 +57,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python3 tools/differential_ffi.py --library ffi/target/debug/librustpon_ffi.so
+      - name: Compare multipart FFI with real PHP 8.4 SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_multipart_ffi.py --library ffi/target/debug/librustpon_ffi.so
       - name: Compare with PHP 8.4 multipart SAPI (Linux)
         if: runner.os == 'Linux'
         run: |
