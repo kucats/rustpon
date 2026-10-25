@@ -184,7 +184,11 @@ fn value_for(part: &crate::PartView<'_>, attribute: &[u8]) -> Vec<u8> {
     let filename = part.filename.expect("file parts only");
     let valid = !filename.is_empty();
     match attribute {
-        b"name" => filename.to_vec(),
+        b"name" => filename
+            .rsplit(|byte| *byte == b'/' || *byte == b'\\')
+            .next()
+            .unwrap_or(filename)
+            .to_vec(),
         b"full_path" => filename.to_vec(),
         b"type" if valid => part.content_type.unwrap_or(b"").to_vec(),
         b"type" => Vec::new(),
