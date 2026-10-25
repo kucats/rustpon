@@ -299,3 +299,35 @@ an over-server-quota upload aborts the request rather than returning a
 PHP-native error 1. Metadata `error` and `size` are still testing strings,
 and canonical PHP collision/overwrite selection is not a validated physical
 file handoff. No Zend FFI or production upload registry is included.
+
+
+## Canonical FILES-to-FD association
+
+The admission gate now reconciles staged upload descriptors with the **final
+PHP-style FILES tree**. Every uploaded part receives a synthetic internal
+`tmp_name` identity in a second bounded projection; only identity leaves
+surviving PHP's normalized-key, scalar/array replacement, numeric-key and
+append semantics are eligible to retain descriptors. All overwritten or
+superseded upload FDs are closed before admission returns.
+
+The identity projection is never serialized or exposed to applications.
+Selection visits only the generated `tmp_name` columns; arbitrary filenames
+and submitted field values cannot forge admission identities. An allocation
+or projection failure aborts the entire transaction. This intentionally
+performs a second metadata conversion and holds two bounded metadata arenas
+transiently; their combined memory use and allocator overhead are not an
+RSS guarantee.
+
+`AdmittedRequest::accepted_file(index)` returns a typed Rust view of a
+**successful, still-live upload**, with borrowed basename, submitted
+`full_path`, content type, signed 64-bit `size`, and signed 64-bit
+`error = 0`. It returns `None` for superseded or rejected parts.
+The original wire index is preserved; this is not a Zend `zval`, PHP's
+registered-upload table, or a stable on-disk pathname.
+
+The PHP 8.4 multipart SAPI suite covers flat duplicates, nested-to-flat and
+flat-to-nested replacements, numeric-index replacement, root-name
+normalization and repeated `[]` appends. The corresponding Rust tests
+verify that rejected indices cannot be copied and their descriptors are
+closed. A future SAPI adapter must bind the physical file to the finalized
+PHP metadata index, and enforce its own ownership and move/rename policy.
