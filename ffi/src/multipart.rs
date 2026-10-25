@@ -6,12 +6,12 @@
 //! is not a client-configurable path or a PHP upload registry.
 
 use super::{
-    BUFFER_TOO_SMALL, INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OK, OUTPUT_LIMIT,
-    PANIC, PARSE_REJECTED, POST_REJECTED, publish,
+    BUFFER_TOO_SMALL, INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OK, OUTPUT_LIMIT, PANIC,
+    PARSE_REJECTED, POST_REJECTED, publish,
 };
 use rustpon::admission::{self, Policy};
-use std::path::Path;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::Path;
 use std::ptr;
 
 const MAX_BOUNDARY: usize = 70;
@@ -23,35 +23,31 @@ enum Mode {
     Upload(usize),
 }
 
-fn parse(
-    boundary: &[u8],
-    body: &[u8],
-    spool: &Path,
-    mode: Mode,
-) -> Result<Vec<u8>, i32> {
+fn parse(boundary: &[u8], body: &[u8], spool: &Path, mode: Mode) -> Result<Vec<u8>, i32> {
     let limits = rustpon::Limits {
         body_bytes: MAX_INPUT as u64,
         ..rustpon::Limits::default()
     };
-    let mut parser = rustpon::Parser::new(boundary, limits, spool)
-        .map_err(|_| PARSE_REJECTED)?;
+    let mut parser = rustpon::Parser::new(boundary, limits, spool).map_err(|_| PARSE_REJECTED)?;
     parser.feed(body).map_err(|_| PARSE_REJECTED)?;
     let request = parser.finish().map_err(|_| PARSE_REJECTED)?;
     let policy = Policy {
         max_body_bytes: MAX_INPUT as u64,
         ..Policy::default()
     };
-    let mut admitted = admission::admit(request, policy)
-        .map_err(|_| POST_REJECTED)?;
+    let mut admitted = admission::admit(request, policy).map_err(|_| POST_REJECTED)?;
     let mut writer = LimitedOutput::new();
     match mode {
-        Mode::Metadata => admitted.metadata().write_php_files_json(&mut writer)
+        Mode::Metadata => admitted
+            .metadata()
+            .write_php_files_json(&mut writer)
             .map_err(|_| OUTPUT_LIMIT)?,
         Mode::Upload(index) => {
             if admitted.accepted_file(index).is_none() {
                 return Err(NOT_ADMITTED);
             }
-            let copied = admitted.copy_accepted(index, &mut writer)
+            let copied = admitted
+                .copy_accepted(index, &mut writer)
                 .map_err(|_| OUTPUT_LIMIT)?;
             if copied.is_none() {
                 return Err(NOT_ADMITTED);
@@ -84,9 +80,13 @@ unsafe fn run(
         }
         // SAFETY: The C caller promises a disjoint, writable size_t.
         unsafe { ptr::write(required_len, 0) };
-        if boundary.is_null() || boundary_len == 0 || boundary_len > MAX_BOUNDARY
+        if boundary.is_null()
+            || boundary_len == 0
+            || boundary_len > MAX_BOUNDARY
             || (body.is_null() && body_len != 0)
-            || spool_dir.is_null() || spool_len == 0 || spool_len > MAX_SPOOL_PATH
+            || spool_dir.is_null()
+            || spool_len == 0
+            || spool_len > MAX_SPOOL_PATH
             || (output.is_null() && output_capacity != 0)
             || body_len > MAX_INPUT
         {
@@ -142,8 +142,16 @@ pub unsafe extern "C" fn rustpon_v1_multipart_files_json(
     // SAFETY: Contract is identical to run; no pointers are retained.
     unsafe {
         run(
-            boundary, boundary_len, body, body_len, spool_dir, spool_len,
-            output, output_capacity, required_len, Mode::Metadata,
+            boundary,
+            boundary_len,
+            body,
+            body_len,
+            spool_dir,
+            spool_len,
+            output,
+            output_capacity,
+            required_len,
+            Mode::Metadata,
         )
     }
 }
@@ -175,12 +183,19 @@ pub unsafe extern "C" fn rustpon_v1_multipart_upload_copy(
     // SAFETY: Contract is identical to run; no pointers are retained.
     unsafe {
         run(
-            boundary, boundary_len, body, body_len, spool_dir, spool_len,
-            output, output_capacity, required_len, Mode::Upload(wire_part_index),
+            boundary,
+            boundary_len,
+            body,
+            body_len,
+            spool_dir,
+            spool_len,
+            output,
+            output_capacity,
+            required_len,
+            Mode::Upload(wire_part_index),
         )
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -243,18 +258,31 @@ mod tests {
                 // SAFETY: All spans are live and non-overlapping for this call.
                 unsafe {
                     rustpon_v1_multipart_upload_copy(
-                        b"b".as_ptr(), 1, input.as_ptr(), input.len(),
-                        path.as_ptr(), path.len(), index,
-                        output, capacity, required,
+                        b"b".as_ptr(),
+                        1,
+                        input.as_ptr(),
+                        input.len(),
+                        path.as_ptr(),
+                        path.len(),
+                        index,
+                        output,
+                        capacity,
+                        required,
                     )
                 }
             } else {
                 // SAFETY: All spans are live and non-overlapping for this call.
                 unsafe {
                     rustpon_v1_multipart_files_json(
-                        b"b".as_ptr(), 1, input.as_ptr(), input.len(),
-                        path.as_ptr(), path.len(),
-                        output, capacity, required,
+                        b"b".as_ptr(),
+                        1,
+                        input.as_ptr(),
+                        input.len(),
+                        path.as_ptr(),
+                        path.len(),
+                        output,
+                        capacity,
+                        required,
                     )
                 }
             }
@@ -304,15 +332,24 @@ mod tests {
     fn fail_closed_on_invalid_boundary_truncation_and_spool() {
         let spool = PrivateSpool::new();
         let input = body(&[(b"upload", b"x.txt", b"abc")]);
-        assert_eq!(call(&spool, &input[..input.len() - 2], None).0, PARSE_REJECTED);
+        assert_eq!(
+            call(&spool, &input[..input.len() - 2], None).0,
+            PARSE_REJECTED
+        );
         assert_eq!(call(&spool, b"garbage", None).0, PARSE_REJECTED);
         let mut required = 23;
         // SAFETY: Readable body/boundary/spool and disjoint writable size.
         let invalid = unsafe {
             rustpon_v1_multipart_files_json(
-                b"b".as_ptr(), 1, input.as_ptr(), input.len(),
-                b"/nonexistent/spool".as_ptr(), b"/nonexistent/spool".len(),
-                ptr::null_mut(), 0, &mut required,
+                b"b".as_ptr(),
+                1,
+                input.as_ptr(),
+                input.len(),
+                b"/nonexistent/spool".as_ptr(),
+                b"/nonexistent/spool".len(),
+                ptr::null_mut(),
+                0,
+                &mut required,
             )
         };
         assert_eq!(invalid, PARSE_REJECTED);
@@ -320,9 +357,15 @@ mod tests {
         // SAFETY: Invalid null boundary is checked before any dereference.
         let null_boundary = unsafe {
             rustpon_v1_multipart_files_json(
-                ptr::null(), 1, input.as_ptr(), input.len(),
-                spool.path().as_ptr(), spool.path().len(),
-                ptr::null_mut(), 0, &mut required,
+                ptr::null(),
+                1,
+                input.as_ptr(),
+                input.len(),
+                spool.path().as_ptr(),
+                spool.path().len(),
+                ptr::null_mut(),
+                0,
+                &mut required,
             )
         };
         assert_eq!(null_boundary, INVALID_ARGUMENT);
