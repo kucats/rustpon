@@ -25,10 +25,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let files_mode = args.len() == 4 && args[1] == "--files";
     let admit_mode = args.len() == 4 && args[1] == "--admit";
     if args.len() != 3 && !post_mode && !files_mode && !admit_mode {
-        eprintln!("usage: multipart [--post|--files|--admit] BOUNDARY PRIVATE_SPOOL_DIR < body.bin");
+        eprintln!(
+            "usage: multipart [--post|--files|--admit] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+        );
         std::process::exit(2);
     }
-    let first = if post_mode || files_mode || admit_mode { 2 } else { 1 };
+    let first = if post_mode || files_mode || admit_mode {
+        2
+    } else {
+        1
+    };
     let boundary = args[first].to_str().ok_or("boundary must be ASCII")?;
     let mut request = match parse_reader(
         &mut io::stdin().lock(),
@@ -43,11 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     if admit_mode {
-        let admitted = rustpon::admission::admit(
-            request,
-            rustpon::admission::Policy::default(),
-        )
-        .map_err(|error| format!("admission: {error:?}"))?;
+        let admitted = rustpon::admission::admit(request, rustpon::admission::Policy::default())
+            .map_err(|error| format!("admission: {error:?}"))?;
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;
         admitted.metadata().write_json(&mut out)?;
