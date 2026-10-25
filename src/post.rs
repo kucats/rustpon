@@ -442,6 +442,66 @@ impl PostRequest {
         Ok(index)
     }
 
+    /// Visit only leaf values beneath the generated FILES tmp_name columns.
+    /// The function avoids JSON round-tripping and attacker-controlled
+    /// filename/field values cannot impersonate an upload identity.
+    pub(crate) fn visit_file_tmp_values(&self, mut visit: impl FnMut(&[u8])) {
+        let Value::Array(root) = self.nodes[0].value else {
+            return;
+        };
+        let mut top = root.first;
+        while let Some(file_root) = top {
+            let node = self.nodes[file_root];
+            top = node.next;
+            let Value::Array(fields) = node.value else {
+                continue;
+            };
+            let mut attribute = fields.first;
+            while let Some(attribute_index) = attribute {
+                let entry = self.nodes[attribute_index];
+                attribute = entry.next;
+                let Key::Bytes(key) = entry.key else {
+                    continue;
+                };
+                if key.bytes(&self.keys) != b"tmp_name" {
+                    continue;
+                }
+                let mut stack = [None; MAX_DEPTH + 2];
+                let mut depth = 0;
+                match entry.value {
+                    Value::Bytes(span) => {
+                        visit(span.bytes(&self.request.arena));
+                        continue;
+                    }
+                    Value::Array(array) => stack[0] = array.first,
+                }
+                loop {
+                    let Some(index) = stack[depth] else {
+                        if depth == 0 {
+                            break;
+                        }
+                        depth -= 1;
+                        continue;
+                    };
+                    let current = self.nodes[index];
+                    stack[depth] = current.next;
+                    match current.value {
+                        Value::Bytes(span) => visit(span.bytes(&self.request.arena)),
+                        Value::Array(child) => {
+                            depth += 1;
+                            // The bounded POST adapter cannot create trees
+                            // deeper than this explicit traversal stack.
+                            if depth == stack.len() {
+                                return;
+                            }
+                            stack[depth] = child.first;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn stats(&self) -> Stats {
         self.stats
     }
