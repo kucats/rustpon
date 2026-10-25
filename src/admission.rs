@@ -223,6 +223,14 @@ mod tests {
         let mut admitted = admit(raw, Policy::default()).unwrap();
         let indices: Vec<_> = admitted.accepted_indices().collect();
         assert_eq!(indices, vec![3]);
+        let accepted = admitted.accepted_file(3).unwrap();
+        assert_eq!(accepted.name, b"good.bin");
+        assert_eq!(accepted.full_path, b"good.bin");
+        assert_eq!(accepted.content_type, b"");
+        assert_eq!(accepted.size, 3);
+        assert_eq!(accepted.error, 0);
+        assert!(admitted.accepted_file(1).is_none());
+        assert!(admitted.accepted_file(4).is_none());
         let mut accepted = Vec::new();
         assert_eq!(admitted.copy_accepted(3, &mut accepted).unwrap(), Some(3));
         assert_eq!(accepted, b"xyz");
@@ -377,6 +385,12 @@ mod tests {
                 survivors,
                 "{label}"
             );
+            for &index in survivors {
+                let file = admitted.accepted_file(index).unwrap();
+                assert_eq!(file.name, b"sample.bin");
+                assert_eq!(file.error, 0);
+                assert_eq!(file.size, if index == 0 { 5 } else { 6 });
+            }
             for index in 0..names.len() {
                 let mut content = Vec::new();
                 let copied = admitted.copy_accepted(index, &mut content).unwrap();
