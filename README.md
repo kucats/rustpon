@@ -117,3 +117,24 @@ request destruction, reservation failures, adapter normalization and key
 semantics, upload-name protection, and bounded serialization. They include
 deterministic random input/partition smoke tests. No libFuzzer/AFL++, sanitizer,
 Miri, or true system-OOM campaign has been run.
+
+## URL-encoded request support
+
+\`urlencoded::FormParser\` incrementally decodes dechunked
+\`application/x-www-form-urlencoded\` bodies, including percent escapes that
+cross feed boundaries. It returns the same ordered \`Request\` IR used by
+multipart, so \`Request::into_post\` works without a separate PHP adapter.
+\`urlencoded::parse_reader\` provides a blocking reader wrapper.
+
+The decoder treats \`&\` as the separator and the first \`=\` as the
+name/value separator. It decodes \`+\` as space and valid percent triplets
+into bytes. Malformed percent escapes remain literal. Empty names and
+blank pairs are skipped. Decoded NUL bytes in names are rejected deliberately.
+The input byte limit and temporary retained-capacity limit apply to raw
+encoded bytes. Name/value limits also apply to raw encoded lengths, which
+is stricter than PHP for heavily percent-encoded input.
+
+This decoder is a standalone prototype: no Cookie parser, configurable
+\`arg_separator.input\`, SAPI entry point, FFI, or \`$_GET\` publication has
+been implemented. PHP runtime memory and request-lifecycle vulnerabilities
+are not fixed by this addition.

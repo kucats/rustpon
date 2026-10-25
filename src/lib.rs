@@ -19,6 +19,7 @@ const WINDOW: usize = MAX_BOUNDARY + 6;
 static NEXT_UPLOAD: AtomicU64 = AtomicU64::new(0);
 
 pub mod post;
+pub mod urlencoded;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Limit {
