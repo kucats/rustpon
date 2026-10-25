@@ -18,6 +18,7 @@ const MAX_BOUNDARY: usize = 70;
 const WINDOW: usize = MAX_BOUNDARY + 6;
 static NEXT_UPLOAD: AtomicU64 = AtomicU64::new(0);
 
+pub mod admission;
 pub mod files;
 pub mod post;
 pub mod urlencoded;
