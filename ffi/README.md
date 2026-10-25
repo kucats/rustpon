@@ -79,3 +79,35 @@ A future PHP module needs an independently reviewed, explicit C-to-Zend
 construction layer, a negative/failure test matrix, worker reuse tests, and
 PHP startup/shutdown integration. Multipart upload FD handoff and
 `$_FILES` registry semantics are **not** exposed through this ABI yet.
+
+
+## Multipart admission C ABI
+
+The independent C ABI now exports `rustpon_v1_multipart_files_json`
+and `rustpon_v1_multipart_upload_copy`; see
+[the full header](include/rustpon_ffi.h) for signatures and limits.
+Both require a complete dechunked multipart request and a trusted,
+pre-existing 0700 spool directory provided by the server. The directory
+path is **not** an HTTP-controlled argument. Input is capped at 256 KiB,
+boundary length at 70 bytes and JSON/output at 1 MiB. Ingress transport
+and request time limits still need to be enforced upstream.
+
+The metadata function returns the admitted, **typed tagged JSON**
+`$_FILES` tree. The payload function copies the bytes of one accepted
+upload, selected by its original zero-based multipart **wire part index**,
+into a C-owned output buffer. It returns `RUSTPON_NOT_ADMITTED` (7) for
+overwritten, rejected, no-file and out-of-range indices. An accepted
+zero-byte file returns `RUSTPON_OK` with `*required_len=0`. For nonempty
+data, use a zero-capacity query then supply the exact output size.
+Short buffers remain untouched, and returned bytes are not NUL-terminated.
+
+These two calls are **one-shot and stateless**. The size query and subsequent
+copy each independently parse the complete body, stage files in the trusted
+directory, enforce `admission::admit` and close *all* file descriptors before
+return. The body must be identical across calls. This is **not** an actual
+OS file-descriptor handoff, a streaming API, a PHP upload registry or a
+Zend `zval` bridge. A native C/Zend registry layer is still required.
+
+Linux CI compiles a C caller exercising 64 repeated multipart requests.
+The PHP 8.4 SAPI differential suite tests 78 typed metadata projections and
+36 upload copies/rejections with no remaining staging directory entries.
