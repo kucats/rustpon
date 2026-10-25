@@ -370,7 +370,8 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
     .unwrap();
     let view = request.parts().next().unwrap();
     assert_eq!(view.name, b"a;\"b");
-    assert_eq!(view.filename, Some(b"C:\\x.bin".as_slice()));
+    // PHP preserves quoted filename backslashes, including consecutive ones.
+    assert_eq!(view.filename, Some(b"C:\\\\x.bin".as_slice()));
 }
 
 #[test]
