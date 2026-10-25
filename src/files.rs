@@ -10,6 +10,11 @@ use crate::post;
 use crate::{Limit as WireLimit, Part, Payload, Request, Stats, store};
 use std::ops::Range;
 
+// PHP upload error codes used by the standalone metadata projection.
+const UPLOAD_ERR_OK: u8 = 0;
+const UPLOAD_ERR_FORM_SIZE: u8 = 2;
+const UPLOAD_ERR_NO_FILE: u8 = 4;
+
 const ATTRIBUTES: [&[u8]; 6] = [
     b"name",
     b"full_path",
@@ -69,12 +74,20 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
         .checked_mul(ATTRIBUTES.len())
         .ok_or(Error::InvalidLimits)?;
     let mut needed = 0usize;
-    for part in request.parts().filter(|p| p.filename.is_some()) {
+    let mut form_max = 0i64;
+    for part in request.parts() {
+        if part.filename.is_none() {
+            if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
+                form_max = parse_form_max(part.value.unwrap_or_default());
+            }
+            continue;
+        }
+        let upload_error = upload_error(&part, form_max);
         if !post::valid_upload_name(part.name) {
             return Err(Error::MalformedUploadName);
         }
         for &attr in &ATTRIBUTES {
-            let value = value_for(&part, attr);
+            let value = value_for(&part, attr, upload_error);
             let prefix_len = part
                 .name
                 .iter()
@@ -129,7 +142,15 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
         return Err(Error::MemoryCapacity);
     }
 
-    for part in request.parts().filter(|p| p.filename.is_some()) {
+    form_max = 0;
+    for part in request.parts() {
+        if part.filename.is_none() {
+            if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
+                form_max = parse_form_max(part.value.unwrap_or_default());
+            }
+            continue;
+        }
+        let upload_error = upload_error(&part, form_max);
         let root_len = part
             .name
             .iter()
@@ -145,7 +166,7 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
             store(&mut arena, b"]", limits.metadata_bytes).map_err(map_wire_error)?;
             store(&mut arena, tail, limits.metadata_bytes).map_err(map_wire_error)?;
             let name_end = arena.len();
-            let value = value_for(&part, attr);
+            let value = value_for(&part, attr, upload_error);
             store(&mut arena, &value, limits.metadata_bytes).map_err(map_wire_error)?;
             let value_end = arena.len();
             parts.push(Part {
@@ -180,23 +201,67 @@ fn map_wire_error(error: crate::Error) -> Error {
     }
 }
 
-fn value_for(part: &crate::PartView<'_>, attribute: &[u8]) -> Vec<u8> {
+/// C strtoll-like conversion of the form field: first signed decimal
+/// prefix wins, leading ASCII whitespace allowed, overflow saturates.
+/// A zero value disables the form advisory limit, just as PHP does.
+fn parse_form_max(bytes: &[u8]) -> i64 {
+    let mut tail = bytes.trim_ascii_start();
+    let negative = tail.starts_with(b"-");
+    if negative || tail.starts_with(b"+") {
+        tail = &tail[1..];
+    }
+    let cap = (i64::MAX as u64) + u64::from(negative);
+    let mut value = 0u64;
+    let mut found = false;
+    for &byte in tail {
+        if !byte.is_ascii_digit() {
+            break;
+        }
+        found = true;
+        value = value
+            .saturating_mul(10)
+            .saturating_add(u64::from(byte - b'0'))
+            .min(cap);
+    }
+    if !found {
+        return 0;
+    }
+    if negative {
+        if value == cap {
+            i64::MIN
+        } else {
+            -(value as i64)
+        }
+    } else {
+        value as i64
+    }
+}
+
+fn upload_error(part: &crate::PartView<'_>, form_max: i64) -> u8 {
+    if part.filename.expect("file parts only").is_empty() {
+        return UPLOAD_ERR_NO_FILE;
+    }
+    if form_max != 0 && (form_max < 0 || part.file_bytes.unwrap_or(0) > form_max as u64) {
+        return UPLOAD_ERR_FORM_SIZE;
+    }
+    UPLOAD_ERR_OK
+}
+
+fn value_for(part: &crate::PartView<'_>, attribute: &[u8], error: u8) -> Vec<u8> {
     let filename = part.filename.expect("file parts only");
-    let valid = !filename.is_empty();
     match attribute {
         b"name" => filename
-            .rsplit(|byte| *byte == b'/' || *byte == b'\\')
+            .rsplit(|byte| *byte == b'/' || *byte == b'\\\\')
             .next()
             .unwrap_or(filename)
             .to_vec(),
         b"full_path" => filename.to_vec(),
-        b"type" if valid => part.content_type.unwrap_or(b"").to_vec(),
+        b"type" if error == UPLOAD_ERR_OK => part.content_type.unwrap_or(b"").to_vec(),
         b"type" => Vec::new(),
-        b"tmp_name" if valid => STAGED_SENTINEL.to_vec(),
+        b"tmp_name" if error == UPLOAD_ERR_OK => STAGED_SENTINEL.to_vec(),
         b"tmp_name" => Vec::new(),
-        b"error" if valid => b"0".to_vec(),
-        b"error" => b"4".to_vec(),
-        b"size" if valid => part.file_bytes.unwrap_or(0).to_string().into_bytes(),
+        b"error" => error.to_string().into_bytes(),
+        b"size" if error == UPLOAD_ERR_OK => part.file_bytes.unwrap_or(0).to_string().into_bytes(),
         b"size" => b"0".to_vec(),
         _ => unreachable!("metadata attributes are fixed"),
     }
@@ -241,18 +306,18 @@ mod tests {
             value: None,
             file_bytes: Some(123),
         };
-        assert_eq!(value_for(&view, b"name").as_slice(), b"leaf.bin");
+        assert_eq!(value_for(&view, b"name", 0).as_slice(), b"leaf.bin");
         assert_eq!(
-            value_for(&view, b"full_path").as_slice(),
+            value_for(&view, b"full_path", 0).as_slice(),
             b"folder/leaf.bin"
         );
         let windows = crate::PartView {
             filename: Some(b"C:\\fakepath\\leaf.bin"),
             ..view
         };
-        assert_eq!(value_for(&windows, b"name").as_slice(), b"leaf.bin");
+        assert_eq!(value_for(&windows, b"name", 0).as_slice(), b"leaf.bin");
         assert_eq!(
-            value_for(&windows, b"full_path").as_slice(),
+            value_for(&windows, b"full_path", 0).as_slice(),
             b"C:\\fakepath\\leaf.bin"
         );
     }
