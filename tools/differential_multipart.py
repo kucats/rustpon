@@ -28,6 +28,8 @@ CASES = [
     ("replace", [(b"a[x]", b"old", None), (b"a", b"mid", None), (b"a[]", b"new", None)]),
     ("file-and-field", [(b"upload", b"DATA", b"sample.bin"), (b"message", b"yes", None)]),
     ("file-only", [(b"upload", b"DATA", b"sample.bin")]),
+    ("two-files", [(b"upload", b"first", b"one.bin"),
+                   (b"attachment", b"second", b"two.bin")]),
 ]
 
 def body_for(parts):
@@ -37,6 +39,7 @@ def body_for(parts):
         output.extend(b'Content-Disposition: form-data; name="' + name + b'"')
         if filename is not None:
             output.extend(b'; filename="' + filename + b'"')
+            output.extend(b"\r\nContent-Type: application/octet-stream")
         output.extend(b"\r\n\r\n")
         output.extend(data)
         output.extend(b"\r\n")
@@ -52,7 +55,7 @@ def php_post(port, data):
         output = response.read()
         if response.status != 200:
             raise RuntimeError(f"PHP status {response.status}: {output[:200]!r}")
-        return json.loads(output)["post_tree"]
+        return json.loads(output)
     finally:
         conn.close()
 
@@ -100,9 +103,26 @@ def main():
                     print(f"FAIL {label}: Rust {rust.returncode} {rust.stderr[:200]!r}", file=sys.stderr)
                     continue
                 actual = json.loads(rust.stdout)["post_tree"]
-                if php != actual:
+                if php["post_tree"] != actual:
                     failures += 1
-                    print(f"FAIL {label}: PHP={php!r} Rust={actual!r}", file=sys.stderr)
+                    print(f"FAIL {label}: PHP={php['post_tree']!r} Rust={actual!r}", file=sys.stderr)
+                if php["files"]:
+                    raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
+                                         input=data, capture_output=True, timeout=15, check=False)
+                    if raw.returncode:
+                        failures += 1
+                        print(f"FAIL {label}: raw multipart error {raw.stderr[:200]!r}", file=sys.stderr)
+                        continue
+                    wire = json.loads(raw.stdout)["parts"]
+                    expected_files = [
+                        [part["name_hex"], part["filename_hex"],
+                         part["content_type_hex"] or "",
+                         len(bytes.fromhex(part["data_hex"])), part["data_hex"]]
+                        for part in wire if part["filename_hex"] is not None
+                    ]
+                    if php["files"] != expected_files:
+                        failures += 1
+                        print(f"FAIL {label}: PHP files={php['files']!r} Rust files={expected_files!r}", file=sys.stderr)
         print(f"PHP SAPI multipart: {len(cases)} cases, {failures} failures")
         return int(failures != 0)
     finally:
