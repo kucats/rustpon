@@ -69,7 +69,7 @@ long-term coverage or native PHP-FPM safety.
 ## Instrumented sanitizer-coverage CI (Linux)
 
 The `fuzz-sanitized` GitHub Actions job uses **nightly Rust** and the
-version-pinned `cargo-fuzz 0.12.0` CLI. Unlike directly running a
+version-pinned `cargo-fuzz 0.13.2` CLI. Unlike directly running a
 `cargo build`-produced libFuzzer binary, `cargo fuzz run` enables
 libFuzzer's **SanitizerCoverage** feedback and **AddressSanitizer** for
 the fuzz harness and Rust parser dependency. The job executes all three
@@ -85,7 +85,7 @@ bounded, deterministic regression to the checked-in corpus or unit tests.
 Never add private request bodies or credentials to the corpus.
 
 For a local instrumented reproduction, install the pinned CLI with
-`cargo install cargo-fuzz --version 0.12.0 --locked`, install nightly,
+`cargo install cargo-fuzz --version 0.13.2 --locked`, install nightly,
 and run `cargo +nightly fuzz run --sanitizer address admission -- -runs=256`.
 The campaign is deliberately short: a successful run does not prove
 complete coverage, leak freedom, or PHP-FPM safety. The regular PHP 8.4
