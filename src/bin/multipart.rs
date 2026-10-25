@@ -54,6 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;
         admitted.metadata().write_json(&mut out)?;
+        write!(out, ",\"files_tree_typed\":")?;
+        admitted.metadata().write_php_files_json(&mut out)?;
         write!(out, ",\"accepted_indices\":[")?;
         let mut first_index = true;
         for index in admitted.accepted_indices() {
@@ -73,6 +75,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;
         files.write_json(&mut out)?;
+        write!(out, ",\"files_tree_typed\":")?;
+        files.write_php_files_json(&mut out)?;
         writeln!(out, "}}")?;
         out.flush()?;
         return Ok(());
