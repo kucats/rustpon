@@ -33,6 +33,9 @@ if ($mode === 'exit') {
     exit;
 }
 if ($mode === 'uncaught') {
+    // The built-in SAPI may have already committed a success status after
+    // the JSON content-type header. Make the negative test deterministic.
+    http_response_code(500);
     throw new RuntimeException('synthetic test exception after Rust returns');
 }
 echo json_encode(['event' => 'ok', 'bytes' => strlen($copy),
