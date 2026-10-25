@@ -86,16 +86,18 @@ pub unsafe extern "C" fn rustpon_v1_form_post_json(
     required_len: *mut usize,
 ) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| {
-        if required_len.is_null()
-            || (input.is_null() && input_len != 0)
-            || (output.is_null() && output_capacity != 0)
-            || input_len > MAX_INPUT
-        {
+        if required_len.is_null() {
             return INVALID_ARGUMENT;
         }
         // SAFETY: Caller promises a writable aligned size_t and all
         // required pointer ranges are disjoint.
         unsafe { ptr::write(required_len, 0) };
+        if (input.is_null() && input_len != 0)
+            || (output.is_null() && output_capacity != 0)
+            || input_len > MAX_INPUT
+        {
+            return INVALID_ARGUMENT;
+        }
         let bytes = if input_len == 0 {
             &[][..]
         } else {
@@ -211,12 +213,12 @@ mod tests {
     #[test]
     fn request_size_cap_rejects_before_dereference() {
         let mut needed = 123;
-        // SAFETY: The input pointer is not dereferenced because its declared
-        // length exceeds the hard ABI cap; required_len is valid and disjoint.
+        let oversized = vec![0u8; MAX_INPUT + 1];
+        // SAFETY: The input buffer is valid and disjoint from required_len.
         let status = unsafe {
             rustpon_v1_form_post_json(
-                ptr::dangling(),
-                MAX_INPUT + 1,
+                oversized.as_ptr(),
+                oversized.len(),
                 ptr::null_mut(),
                 0,
                 &mut needed,
