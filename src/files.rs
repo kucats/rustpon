@@ -233,6 +233,25 @@ mod tests {
     }
 
     #[test]
+    fn filename_basename_does_not_change_full_path() {
+        let view = crate::PartView {
+            name: b"upload",
+            filename: Some(b"folder/leaf.bin"),
+            content_type: Some(b"application/octet-stream"),
+            value: None,
+            file_bytes: Some(123),
+        };
+        assert_eq!(value_for(&view, b"name"), b"leaf.bin");
+        assert_eq!(value_for(&view, b"full_path"), b"folder/leaf.bin");
+        let windows = crate::PartView {
+            filename: Some(b"C:\\fakepath\\leaf.bin"),
+            ..view
+        };
+        assert_eq!(value_for(&windows, b"name"), b"leaf.bin");
+        assert_eq!(value_for(&windows, b"full_path"), b"C:\\fakepath\\leaf.bin");
+    }
+
+    #[test]
     fn metadata_and_projection_budgets_are_exact() {
         let path =
             std::env::temp_dir().join(format!("rustpon-files-budget-{}", std::process::id()));
