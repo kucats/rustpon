@@ -565,3 +565,25 @@ The PHP 8.4 CLI differential suite adds fixed precedence/boundary examples
 and 192 deterministic generated exact-power programs, plus invalid-input
 regressions. This remains a research-only interpreter, not a PHP VM or
 production PHP-FPM integration.
+
+## Typed integer and boolean values (research evaluator)
+
+The bounded `php_eval` interpreter stores `Value::Int(i64)` and
+`Value::Bool(bool)` in local variables and expression results. Case-insensitive
+`true` and `false` literals, comparisons in assignments and parentheses,
+and boolean-to-integer coercion in existing arithmetic are supported.
+PHP 8.4 truthiness governs loose equality and ordering with a boolean;
+strict `===` / `!==` preserve types. Echo emits `1` for true,
+**no bytes** for false, and `0` for integer zero.
+
+```sh
+printf '%s' '<?php $flag=3<4; echo ($flag+2)===3;' |
+  cargo run --offline --locked --bin php_eval
+# stdout: 1
+```
+
+The PHP CLI oracle adds deterministic boolean assignment, comparison,
+coercion and nested-expression cases plus malformed-token rejections.
+Chained comparisons, logical operators, null, strings, floats, arrays,
+references, control flow and unbounded work remain unsupported. This is not
+a full Zend value model, AST, PHP VM or production PHP-FPM integration.

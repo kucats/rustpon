@@ -145,9 +145,29 @@ def main():
         exponent = rng.randrange(0, 11)
         delta = rng.randrange(-20, 21)
         powers.append(f"$x={base}; echo ($x**{exponent})+({delta});")
+    booleans = [
+        "echo true;", "echo false;", "echo TRUE;", "echo FALSE;",
+        "echo true==1;", "echo true===1;", "echo true!==1;",
+        "echo false==0;", "echo false===0;", "echo true>2;",
+        "echo false<-1;", "echo (1<2);", "echo (1<2)===true;",
+        "echo (1<2)+1;", "echo (2>3)+1;", "echo (1<2)*3;",
+        "echo (1<2)**3;", "echo +true;", "echo -true;",
+        "$x=1<2; echo $x;", "$x=2<1; echo $x;",
+        "$x=true; $y=false; echo $x==1;",
+        "$x=2<1; $x=$x+5; echo $x;",
+        "$x=1<2; $x=3; echo $x;",
+    ]
+    for _ in range(192):
+        a = rng.randrange(-50, 51)
+        b = rng.randrange(-50, 51)
+        c = rng.randrange(-10, 11)
+        op = rng.choice(comparison_ops)
+        booleans.append(
+            f"$flag=({a} {op} {b}); echo ($flag+{c})===({c}+({a} {op} {b}));"
+        )
     cases = (
         [f"echo {expr};" for expr in expressions]
-        + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
+        + variable_programs + radix_programs + arithmetic_programs + comparisons + powers + booleans
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -200,8 +220,12 @@ def main():
         b"<?php echo 1<;",
         b"<?php echo 1!==;",
         b"<?php echo 1<2<3;",
-        b"<?php echo (1<2);",
-        b"<?php $x=1<2; echo $x;",
+        b"<?php echo truex;",
+        b"<?php echo FALSE_1;",
+        b"<?php echo true&&false;",
+        b"<?php echo !false;",
+        b"<?php echo true<false<true;",
+        b"<?php echo (1<2;",
         b"<?php echo 1%0;",
         b"<?php echo (0-9223372036854775807-1)/-1;",
         b"<?php echo $x;",
@@ -233,7 +257,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/variable/comparison/power differential: {len(cases)} compatible "
+        f"PHP CLI integer/boolean/variable/comparison/power differential: {len(cases)} compatible "
         f"cases, {len(invalid)} strict rejections, {failures} failures"
     )
     return int(failures != 0)

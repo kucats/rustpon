@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded local integer assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, unary +/-, parentheses, arithmetic, integer powers and comparisons.
+//! variables, typed integer/boolean values, unary +/-, parentheses, arithmetic, integer powers and comparisons.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -36,17 +36,66 @@ enum EvalError {
 enum Comparison {
     Equal,
     NotEqual,
+    StrictEqual,
+    StrictNotEqual,
     Less,
     LessEqual,
     Greater,
     GreaterEqual,
 }
 
+// Bounded subset of PHP's runtime value model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Value {
+    Int(i64),
+    Bool(bool),
+}
+
+impl Value {
+    fn as_int(self) -> i64 {
+        match self {
+            Self::Int(value) => value,
+            Self::Bool(value) => i64::from(value),
+        }
+    }
+
+    fn as_bool(self) -> bool {
+        match self {
+            Self::Int(value) => value != 0,
+            Self::Bool(value) => value,
+        }
+    }
+
+    fn php_equal(self, other: Self) -> bool {
+        if matches!(self, Self::Bool(_)) || matches!(other, Self::Bool(_)) {
+            self.as_bool() == other.as_bool()
+        } else {
+            self == other
+        }
+    }
+
+    fn php_order(self, other: Self) -> (i64, i64) {
+        if matches!(self, Self::Bool(_)) || matches!(other, Self::Bool(_)) {
+            (i64::from(self.as_bool()), i64::from(other.as_bool()))
+        } else {
+            (self.as_int(), other.as_int())
+        }
+    }
+
+    fn echo(self) -> String {
+        match self {
+            Self::Int(value) => value.to_string(),
+            Self::Bool(true) => "1".to_owned(),
+            Self::Bool(false) => String::new(),
+        }
+    }
+}
+
 struct Parser<'a> {
     source: &'a [u8],
     offset: usize,
     work: usize,
-    bindings: Vec<(&'a [u8], i64)>,
+    bindings: Vec<(&'a [u8], Value)>,
     assignments: usize,
 }
 
@@ -190,7 +239,7 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         self.charge()?;
-        let value = self.additive(0)?;
+        let value = self.comparison(0)?;
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
@@ -205,12 +254,12 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn primary(&mut self, depth: usize) -> Result<i64, EvalError> {
+    fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
         if self.consume(b'(') {
-            let value = self.additive(depth + 1)?;
+            let value = self.comparison(depth + 1)?;
             if !self.consume(b')') {
                 return Err(EvalError::Syntax);
             }
@@ -223,21 +272,41 @@ impl<'a> Parser<'a> {
                 .map(|(_, value)| *value)
                 .ok_or(EvalError::UnknownVariable)
         } else {
-            self.number()
+            self.skip_space();
+            for (literal, value) in [
+                (b"true".as_slice(), true),
+                (b"false".as_slice(), false),
+            ] {
+                let remaining = &self.source[self.offset..];
+                if remaining
+                    .get(..literal.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(literal))
+                    && !remaining
+                        .get(literal.len())
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    self.offset += literal.len();
+                    self.charge()?;
+                    return Ok(Value::Bool(value));
+                }
+            }
+            self.number().map(Value::Int)
         }
     }
 
-    fn unary(&mut self, depth: usize) -> Result<i64, EvalError> {
+    fn unary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
         if self.consume(b'+') {
             self.charge()?;
-            self.unary(depth + 1)
+            Ok(Value::Int(self.unary(depth + 1)?.as_int()))
         } else if self.consume(b'-') {
             self.charge()?;
             self.unary(depth + 1)?
+                .as_int()
                 .checked_neg()
+                .map(Value::Int)
                 .ok_or(EvalError::Overflow)
         } else {
             self.power(depth)
@@ -246,7 +315,7 @@ impl<'a> Parser<'a> {
 
     // PHP 8.4 exponentiation binds more tightly than unary +/- and
     // associates to the right: -2**2 == -(2**2), 2**3**2 == 2**(3**2).
-    fn power(&mut self, depth: usize) -> Result<i64, EvalError> {
+    fn power(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
@@ -257,15 +326,17 @@ impl<'a> Parser<'a> {
         }
         self.offset += 2;
         self.charge()?;
-        let exponent = self.unary(depth + 1)?;
+        let exponent = self.unary(depth + 1)?.as_int();
         // Negative exponents and out-of-range integer powers require PHP
         // floating-point semantics, deliberately unsupported in this slice.
         let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
-        base.checked_pow(exponent)
+        base.as_int()
+            .checked_pow(exponent)
+            .map(Value::Int)
             .ok_or(EvalError::UnsupportedFloat)
     }
 
-    fn multiplicative(&mut self, depth: usize) -> Result<i64, EvalError> {
+    fn multiplicative(&mut self, depth: usize) -> Result<Value, EvalError> {
         let mut lhs = self.unary(depth)?;
         loop {
             self.skip_space();
@@ -279,15 +350,16 @@ impl<'a> Parser<'a> {
             };
             self.offset += 1;
             self.charge()?;
-            let rhs = self.unary(depth)?;
-            lhs = match op {
-                b'*' => lhs.checked_mul(rhs).ok_or(EvalError::Overflow)?,
+            let rhs = self.unary(depth)?.as_int();
+            let left = lhs.as_int();
+            lhs = Value::Int(match op {
+                b'*' => left.checked_mul(rhs).ok_or(EvalError::Overflow)?,
                 b'/' => {
                     if rhs == 0 {
                         return Err(EvalError::DivisionByZero);
                     }
-                    let quotient = lhs.checked_div(rhs).ok_or(EvalError::UnsupportedFloat)?;
-                    if lhs % rhs != 0 {
+                    let quotient = left.checked_div(rhs).ok_or(EvalError::UnsupportedFloat)?;
+                    if left % rhs != 0 {
                         return Err(EvalError::UnsupportedFloat);
                     }
                     quotient
@@ -301,16 +373,16 @@ impl<'a> Parser<'a> {
                     if rhs == -1 {
                         0
                     } else {
-                        lhs.checked_rem(rhs).ok_or(EvalError::Overflow)?
+                        left.checked_rem(rhs).ok_or(EvalError::Overflow)?
                     }
                 }
                 _ => return Err(EvalError::Syntax),
-            };
+            });
         }
         Ok(lhs)
     }
 
-    fn additive(&mut self, depth: usize) -> Result<i64, EvalError> {
+    fn additive(&mut self, depth: usize) -> Result<Value, EvalError> {
         let mut lhs = self.multiplicative(depth)?;
         loop {
             self.skip_space();
@@ -320,28 +392,29 @@ impl<'a> Parser<'a> {
             };
             self.offset += 1;
             self.charge()?;
-            let rhs = self.multiplicative(depth)?;
-            lhs = if op == b'+' {
-                lhs.checked_add(rhs)
+            let rhs = self.multiplicative(depth)?.as_int();
+            lhs = Value::Int(if op == b'+' {
+                lhs.as_int().checked_add(rhs)
             } else {
-                lhs.checked_sub(rhs)
+                lhs.as_int().checked_sub(rhs)
             }
-            .ok_or(EvalError::Overflow)?;
+            .ok_or(EvalError::Overflow)?);
         }
         Ok(lhs)
     }
 
-    // Comparison operands use the existing checked-integer arithmetic grammar.
-    // This slice deliberately permits a single comparison only in the final
-    // echo expression; assignments and parenthesized comparisons remain out of
-    // scope until the value model can represent booleans independently.
-    fn comparison(&mut self) -> Result<(i64, bool), EvalError> {
-        let lhs = self.additive(0)?;
+    // PHP 8.4 compares a boolean operand using truthiness for loose
+    // equality and ordering. Strict equality preserves the value type.
+    fn comparison(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth > MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        let lhs = self.additive(depth)?;
         self.skip_space();
         let remaining = &self.source[self.offset..];
         let operators: &[(&[u8], Comparison)] = &[
-            (b"===", Comparison::Equal),
-            (b"!==", Comparison::NotEqual),
+            (b"===", Comparison::StrictEqual),
+            (b"!==", Comparison::StrictNotEqual),
             (b"<=", Comparison::LessEqual),
             (b">=", Comparison::GreaterEqual),
             (b"==", Comparison::Equal),
@@ -354,23 +427,26 @@ impl<'a> Parser<'a> {
             .iter()
             .find(|(bytes, _)| remaining.starts_with(bytes))
         else {
-            return Ok((lhs, false));
+            return Ok(lhs);
         };
         self.offset += bytes.len();
         self.charge()?;
-        let rhs = self.additive(0)?;
+        let rhs = self.additive(depth)?;
+        let (left, right) = lhs.php_order(rhs);
         let result = match operator {
-            Comparison::Equal => lhs == rhs,
-            Comparison::NotEqual => lhs != rhs,
-            Comparison::Less => lhs < rhs,
-            Comparison::LessEqual => lhs <= rhs,
-            Comparison::Greater => lhs > rhs,
-            Comparison::GreaterEqual => lhs >= rhs,
+            Comparison::Equal => lhs.php_equal(rhs),
+            Comparison::NotEqual => !lhs.php_equal(rhs),
+            Comparison::StrictEqual => lhs == rhs,
+            Comparison::StrictNotEqual => lhs != rhs,
+            Comparison::Less => left < right,
+            Comparison::LessEqual => left <= right,
+            Comparison::Greater => left > right,
+            Comparison::GreaterEqual => left >= right,
         };
-        Ok((i64::from(result), true))
+        Ok(Value::Bool(result))
     }
 
-    fn evaluate(&mut self) -> Result<(i64, bool), EvalError> {
+    fn evaluate(&mut self) -> Result<Value, EvalError> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
         }
@@ -406,7 +482,7 @@ impl<'a> Parser<'a> {
         {
             return Err(EvalError::Syntax);
         }
-        let value = self.comparison()?;
+        let value = self.comparison(0)?;
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
@@ -428,16 +504,12 @@ fn run() -> Result<(), String> {
         .take((MAX_SOURCE + 1) as u64)
         .read_to_end(&mut source)
         .map_err(|error| error.to_string())?;
-    let (value, boolean) = Parser::new(&source)
+    let value = Parser::new(&source)
         .evaluate()
         .map_err(|error| format!("unsupported PHP expression: {error:?}"))?;
     // PHP echo emits "1" for true and zero bytes for false.
     // No output is published before the entire program has been accepted.
-    let output = if boolean && value == 0 {
-        String::new()
-    } else {
-        value.to_string()
-    };
+    let output = value.echo();
     io::stdout()
         .lock()
         .write_all(output.as_bytes())
@@ -458,7 +530,7 @@ mod tests {
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes())
             .evaluate()
-            .map(|(value, _)| value)
+            .map(Value::as_int)
     }
 
     #[test]
@@ -470,6 +542,56 @@ mod tests {
         assert_eq!(eval("echo -(-5);"), Ok(5));
         assert_eq!(eval(" \n<?php\n echo 0; ?>\n"), Ok(0));
         assert_eq!(eval("echo 9223372036854775807;"), Ok(i64::MAX));
+    }
+
+    #[test]
+    fn php84_boolean_values_and_coercion() {
+        for (program, expected) in [
+            ("echo true;", Value::Bool(true)),
+            ("echo false;", Value::Bool(false)),
+            ("echo TRUE;", Value::Bool(true)),
+            ("echo FALSE;", Value::Bool(false)),
+            ("echo 1<2;", Value::Bool(true)),
+            ("echo 1>2;", Value::Bool(false)),
+            ("$x=1<2; echo $x;", Value::Bool(true)),
+            ("$x=2<1; echo $x;", Value::Bool(false)),
+            ("$x=true; $y=false; echo $x==1;", Value::Bool(true)),
+            ("echo true===1;", Value::Bool(false)),
+            ("echo true==1;", Value::Bool(true)),
+            ("echo false===0;", Value::Bool(false)),
+            ("echo false==0;", Value::Bool(true)),
+            ("echo true!==1;", Value::Bool(true)),
+            ("echo true>2;", Value::Bool(false)),
+            ("echo false<-1;", Value::Bool(true)),
+            ("echo (1<2)===true;", Value::Bool(true)),
+            ("echo (1<2)+1;", Value::Int(2)),
+            ("echo (1<2)*3;", Value::Int(3)),
+            ("echo (2>3)+1;", Value::Int(1)),
+            ("echo (1<2)**3;", Value::Int(1)),
+            ("echo +true;", Value::Int(1)),
+            ("echo -true;", Value::Int(-1)),
+            ("$x=2<1; $x=$x+5; echo $x;", Value::Int(5)),
+            ("$x=1<2; $x=3; echo $x;", Value::Int(3)),
+        ] {
+            assert_eq!(Parser::new(program.as_bytes()).evaluate(), Ok(expected), "{program}");
+        }
+        assert_eq!(Value::Bool(true).echo(), "1");
+        assert_eq!(Value::Bool(false).echo(), "");
+        assert_eq!(Value::Int(0).echo(), "0");
+    }
+
+    #[test]
+    fn boolean_boundary_rejections() {
+        for program in [
+            "echo truex;",
+            "echo FALSE_1;",
+            "echo true&&false;",
+            "echo !false;",
+            "echo true<false<true;",
+            "echo (1<2;",
+        ] {
+            assert!(eval(program).is_err(), "{program}");
+        }
     }
 
     #[test]
@@ -543,8 +665,8 @@ mod tests {
         assert_eq!(eval("echo 1<;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1!==;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1<2<3;"), Err(EvalError::Syntax));
-        assert_eq!(eval("echo (1<2);"), Err(EvalError::Syntax));
-        assert_eq!(eval("$x=1<2; echo $x;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo (1<2);"), Ok(1));
+        assert_eq!(eval("$x=1<2; echo $x;"), Ok(1));
     }
 
     #[test]
