@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -27,3 +27,17 @@ jobs:
         run: cargo test --offline --locked --all-targets
       - name: Run Clippy
         run: cargo clippy --offline --locked --all-targets -- -D warnings
+      - name: Set up PHP 8.4 reference (Linux)
+        if: runner.os == 'Linux'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: none
+      - name: Compare with PHP 8.4 parse_str (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          php -v
+          php -l tools/php_projection.php
+          cargo build --offline --locked --bin urlencoded
+          python3 tools/differential_urlencoded.py --rust-bin target/debug/urlencoded
