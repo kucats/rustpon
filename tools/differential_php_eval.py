@@ -131,9 +131,23 @@ def main():
         comparisons.append(
             f"$x={left}; $y={right}; echo ($x+1) {op} ($y*2);"
         )
+    powers = [
+        "echo 2**3;", "echo 2**3**2;", "echo (2**3)**2;",
+        "echo -2**2;", "echo (-2)**2;", "echo (-2)**3;",
+        "echo 2**-(-2);", "echo 0**0;", "echo 0**7;",
+        "echo 2**0;", "echo 2**62;", "echo -1**63;",
+        "echo 2**2*3;", "echo 2*3**2;", "echo 2**(1+2);",
+        "echo 1+2**3==9;", "$x=3; echo $x**3;",
+        "echo (0-9223372036854775807-1)**1;",
+    ]
+    for _ in range(192):
+        base = rng.randrange(-5, 6)
+        exponent = rng.randrange(0, 11)
+        delta = rng.randrange(-20, 21)
+        powers.append(f"$x={base}; echo ($x**{exponent})+({delta});")
     cases = (
         [f"echo {expr};" for expr in expressions]
-        + variable_programs + radix_programs + arithmetic_programs + comparisons
+        + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -175,6 +189,14 @@ def main():
         b"<?php echo 1/2;",
         b"<?php echo -3/2;",
         b"<?php echo 1/0;",
+        b"<?php echo 2**-1;",
+        b"<?php echo 0**-1;",
+        b"<?php echo 2**63;",
+        b"<?php echo (-2)**63;",
+        b"<?php echo 1**4294967296;",
+        b"<?php echo 2**;",
+        b"<?php echo 2***3;",
+        b"<?php echo 2**3**;",
         b"<?php echo 1<;",
         b"<?php echo 1!==;",
         b"<?php echo 1<2<3;",
@@ -211,7 +233,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/variable/comparison differential: {len(cases)} compatible "
+        f"PHP CLI integer/variable/comparison/power differential: {len(cases)} compatible "
         f"cases, {len(invalid)} strict rejections, {failures} failures"
     )
     return int(failures != 0)

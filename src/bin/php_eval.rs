@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded local integer assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, unary +/-, parentheses, arithmetic and integer comparisons.
+//! variables, unary +/-, parentheses, arithmetic, integer powers and comparisons.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -240,14 +240,39 @@ impl<'a> Parser<'a> {
                 .checked_neg()
                 .ok_or(EvalError::Overflow)
         } else {
-            self.primary(depth)
+            self.power(depth)
         }
+    }
+
+    // PHP 8.4 exponentiation binds more tightly than unary +/- and
+    // associates to the right: -2**2 == -(2**2), 2**3**2 == 2**(3**2).
+    fn power(&mut self, depth: usize) -> Result<i64, EvalError> {
+        if depth > MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        let base = self.primary(depth)?;
+        self.skip_space();
+        if !self.source[self.offset..].starts_with(b"**") {
+            return Ok(base);
+        }
+        self.offset += 2;
+        self.charge()?;
+        let exponent = self.unary(depth + 1)?;
+        // Negative exponents and out-of-range integer powers require PHP
+        // floating-point semantics, deliberately unsupported in this slice.
+        let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
+        base.checked_pow(exponent)
+            .ok_or(EvalError::UnsupportedFloat)
     }
 
     fn multiplicative(&mut self, depth: usize) -> Result<i64, EvalError> {
         let mut lhs = self.unary(depth)?;
         loop {
             self.skip_space();
+            // A remaining double star is not a multiplication token.
+            if self.source[self.offset..].starts_with(b"**") {
+                return Err(EvalError::Syntax);
+            }
             let op = match self.peek() {
                 Some(b'*' | b'/' | b'%') => self.peek().ok_or(EvalError::Syntax)?,
                 _ => break,
@@ -445,6 +470,48 @@ mod tests {
         assert_eq!(eval("echo -(-5);"), Ok(5));
         assert_eq!(eval(" \n<?php\n echo 0; ?>\n"), Ok(0));
         assert_eq!(eval("echo 9223372036854775807;"), Ok(i64::MAX));
+    }
+
+    #[test]
+    fn php84_checked_powers_and_precedence() {
+        for (program, expected) in [
+            ("echo 2**3;", 8),
+            ("echo 2**3**2;", 512),
+            ("echo (2**3)**2;", 64),
+            ("echo -2**2;", -4),
+            ("echo (-2)**2;", 4),
+            ("echo (-2)**3;", -8),
+            ("echo 2**-(-2);", 4),
+            ("echo 0**0;", 1),
+            ("echo 0**7;", 0),
+            ("echo 2**0;", 1),
+            ("echo 2**62;", 4611686018427387904),
+            ("echo -1**63;", -1),
+            ("echo 2**2*3;", 12),
+            ("echo 2*3**2;", 18),
+            ("echo 2**(1+2);", 8),
+            ("echo 1+2**3==9;", 1),
+            ("$x=3; echo $x**3;", 27),
+            ("echo (0-9223372036854775807-1)**1;", i64::MIN),
+        ] {
+            assert_eq!(eval(program), Ok(expected), "{program}");
+        }
+    }
+
+    #[test]
+    fn unsupported_powers_fail_closed() {
+        for (program, expected) in [
+            ("echo 2**-1;", EvalError::UnsupportedFloat),
+            ("echo 0**-1;", EvalError::UnsupportedFloat),
+            ("echo 2**63;", EvalError::UnsupportedFloat),
+            ("echo (-2)**63;", EvalError::UnsupportedFloat),
+            ("echo 1**4294967296;", EvalError::UnsupportedFloat),
+            ("echo 2**;", EvalError::Syntax),
+            ("echo 2***3;", EvalError::Syntax),
+            ("echo 2**3**;", EvalError::Syntax),
+        ] {
+            assert_eq!(eval(program), Err(expected), "{program}");
+        }
     }
 
     #[test]

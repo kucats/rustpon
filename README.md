@@ -546,3 +546,22 @@ These forms fail closed without output. PHP CLI differential tests cover
 both truth values, precedence, signed integer boundaries and deterministic
 generated expressions. No interpreter is connected to PHP-FPM or production
 Zend/SAPI request handling.
+
+## PHP 8.4 integer exponentiation (research evaluator)
+
+The bounded `php_eval` interpreter now implements `**` for **exact signed
+64-bit integer results**, using checked exponentiation without floating-point
+fallback. As in PHP 8.4, `**` binds more tightly than unary signs and is
+right-associative: `-2**2` is `-4`, while `2**3**2` is `512`.
+It also works with the existing variables, arithmetic and final-echo integer
+comparisons. The implementation charges the existing work/depth budgets and
+uses logarithmic-time checked integer exponentiation rather than unbounded
+multiplication loops.
+
+PHP promotes some powers to floating point (for example `2**63` and
+`2**-1`). This prototype **rejects** those cases, along with exponents
+outside its bounded unsigned 32-bit range, without producing partial output.
+The PHP 8.4 CLI differential suite adds fixed precedence/boundary examples
+and 192 deterministic generated exact-power programs, plus invalid-input
+regressions. This remains a research-only interpreter, not a PHP VM or
+production PHP-FPM integration.
