@@ -138,6 +138,32 @@ def main():
                     print(f"FAIL {label}: Rust files projection {projected.stderr[:200]!r}", file=sys.stderr)
                     continue
                 actual_files_tree = json.loads(projected.stdout)["files_tree"]
+                admitted = subprocess.run(
+                    [str(opt.rust_bin), "--admit", BOUNDARY.decode(), spool],
+                    input=data, capture_output=True, timeout=15, check=False)
+                if admitted.returncode:
+                    failures += 1
+                    print(f"FAIL {label}: admission {admitted.stderr[:200]!r}", file=sys.stderr)
+                    continue
+                admission_data = json.loads(admitted.stdout)
+                if admission_data["files_tree"] != php["files_tree"]:
+                    failures += 1
+                    print(f"FAIL {label}: admitted FILES tree disagrees with PHP", file=sys.stderr)
+                expected_accepted = {
+                    "max-before-exceeded": [],
+                    "max-equal": [1],
+                    "max-after-ignored": [0],
+                    "max-zero-unlimited": [1],
+                    "max-negative": [],
+                    "max-case-insensitive": [],
+                    "max-nested": [],
+                    "max-changed": [3],
+                    "empty-upload-name": [],
+                }
+                if label in expected_accepted and admission_data["accepted_indices"] != expected_accepted[label]:
+                    failures += 1
+                    print(f"FAIL {label}: admission indices {admission_data['accepted_indices']!r}", file=sys.stderr)
+
                 if php["files_tree"] != actual_files_tree:
                     failures += 1
                     print(f"FAIL {label}: PHP FILES tree={php['files_tree']!r} Rust={actual_files_tree!r}", file=sys.stderr)
