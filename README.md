@@ -702,3 +702,15 @@ The stable Linux/macOS test matrix and real PHP 8.4 CLI/SAPI oracles remain
 unchanged. This is a bounded fuzz smoke campaign, not long-duration coverage
 evidence, a CVE fix, or authorization for native PHP-FPM deployment.
 See [fuzz/README.md](fuzz/README.md).
+
+## Cancellation lifecycle fuzzing
+
+The isolated `fuzz/lifecycle` target exercises URL-encoded and multipart
+request cancellation at five transport cut points. A cancelled request
+must reject subsequent input, a failed parser must preserve its error,
+and an unrelated fresh request must produce the same bytes and metadata.
+The multipart harness checks private spool cleanup after each cancellation.
+Two synthetic seeds and deterministic unit regressions cover accepted,
+truncated and binary-upload requests. Linux CI runs a bounded 256-input
+SanitizerCoverage/AddressSanitizer campaign for this fourth target.
+These are parser-level lifecycle invariants, not PHP-FPM shutdown tests.

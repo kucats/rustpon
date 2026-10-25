@@ -354,6 +354,82 @@ pub fn exercise_admission(data: &[u8]) {
     }
 }
 
+
+/// Fuzz transport cancellation at every lifecycle phase: before any bytes,
+/// during headers, after a staged upload, and after the closing delimiter.
+/// A cancelled or failed request must stay terminal, and a fresh request
+/// must remain independent of its predecessor.
+pub fn exercise_lifecycle(data: &[u8]) {
+    if data.is_empty() || data.len() > MAX_INPUT + 2 {
+        return;
+    }
+    if data[0] % 2 == 0 {
+        let body = &data[1..];
+        if body.len() > MAX_INPUT {
+            return;
+        }
+        let expected = form_chunks(body, body.len().max(1));
+        for cut in [
+            0,
+            1.min(body.len()),
+            body.len() / 2,
+            body.len().saturating_sub(1),
+            body.len(),
+        ] {
+            let mut parser = FormParser::new(limits()).expect("bounded form parser");
+            match parser.feed(&body[..cut]) {
+                Ok(()) => {
+                    parser.cancel();
+                    assert_eq!(parser.feed(&body[cut..]), Err(Error::Cancelled));
+                    assert!(matches!(parser.finish(), Err(Error::Cancelled)));
+                }
+                Err(error) => {
+                    assert_eq!(parser.feed(&body[cut..]), Err(error));
+                    assert!(matches!(parser.finish(), Err(actual) if actual == error));
+                }
+            }
+            equivalent(&expected, &form_chunks(body, body.len().max(1)));
+        }
+        return;
+    }
+
+    if data.len() < 2 {
+        return;
+    }
+    const BOUNDARIES: [&[u8]; 4] = [b"b", b"AaB03x", b"----rustpon", b"long-boundary-0123456789"];
+    let boundary = BOUNDARIES[(data[1] % 4) as usize];
+    let body = &data[2..];
+    let spool = Spool::new();
+    let expected = multipart_chunks(body, boundary, body.len().max(1), &spool);
+    spool.assert_empty();
+    for cut in [
+        0,
+        1.min(body.len()),
+        body.len() / 2,
+        body.len().saturating_sub(1),
+        body.len(),
+    ] {
+        let mut parser = Parser::new(boundary, limits(), spool.path()).expect("bounded multipart");
+        match parser.feed(&body[..cut]) {
+            Ok(()) => {
+                parser.cancel();
+                assert_eq!(parser.feed(&body[cut..]), Err(Error::Cancelled));
+                assert!(matches!(parser.finish(), Err(Error::Cancelled)));
+            }
+            Err(error) => {
+                assert_eq!(parser.feed(&body[cut..]), Err(error));
+                assert!(matches!(parser.finish(), Err(actual) if actual == error));
+            }
+        }
+        spool.assert_empty();
+        equivalent(
+            &expected,
+            &multipart_chunks(body, boundary, body.len().max(1), &spool),
+        );
+        spool.assert_empty();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,6 +463,19 @@ mod tests {
             b"0--b\r\nContent-Disposition: form-data; name=f; filename=bad.bin\r\n\r\ntruncated".as_slice(),
         ] {
             exercise_admission(input);
+        }
+    }
+
+    #[test]
+    fn lifecycle_cancel_rejects_later_feeds_and_isolates_new_requests() {
+        for input in [
+            b"0a=1&b%5Bx%5D=%00%ff".as_slice(),
+            b"0x=1&y=2&x=3".as_slice(),
+            b"10--b\r\nContent-Disposition: form-data; name=f; filename=f.bin\r\n\r\nabc\0def\r\n--b--\r\n".as_slice(),
+            b"10--b\r\nContent-Disposition: form-data; name=x\r\n\r\ntruncated".as_slice(),
+            b"10--b--\r\n".as_slice(),
+        ] {
+            exercise_lifecycle(input);
         }
     }
 

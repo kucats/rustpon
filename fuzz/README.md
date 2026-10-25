@@ -90,3 +90,21 @@ and run `cargo +nightly fuzz run --sanitizer address admission -- -runs=256`.
 The campaign is deliberately short: a successful run does not prove
 complete coverage, leak freedom, or PHP-FPM safety. The regular PHP 8.4
 CLI/SAPI differential tests remain independent of sanitizer findings.
+
+## Request cancellation and worker reuse fuzz target
+
+The `lifecycle` target fuzzes both URL-encoded and multipart request
+cancellation at five byte offsets: before input, after the first byte,
+midstream, just before EOF and after the complete body. It checks that
+cancelled parsers reject subsequent feeds, failed parsers retain their
+original error, and fresh requests parse identically after each abort.
+Multipart runs also check that the private spool has no named staging
+files after cancellation. This covers a simulated request lifecycle,
+not actual PHP-FPM worker shutdown or all operating-system FD leaks.
+
+```sh
+cargo +nightly fuzz run --sanitizer address lifecycle -- -max_len=8194 -max_total_time=120
+```
+
+The Linux sanitizer CI job runs 256 additional coverage-guided mutations
+using two synthetic initial seeds. These seeds contain no private data.

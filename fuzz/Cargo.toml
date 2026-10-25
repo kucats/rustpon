@@ -29,6 +29,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "lifecycle"
+path = "fuzz_targets/lifecycle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "urlencoded"
 path = "fuzz_targets/urlencoded.rs"
 test = false
