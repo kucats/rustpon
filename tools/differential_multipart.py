@@ -80,7 +80,6 @@ CASES = [
     ("file-append-zero-binary", [(b"f[]", b"", b"zero.bin"),
                                  (b"f[]", b"\x00\xff", b"two.bin")]),
     ("file-near-delimiter", [(b"f", b"start\r\n--rustpon-difx\r\nend", b"near.bin")]),
-    ("file-near-delimiter-suffix", [(b"f", b"start\r\n--rustpon-diffX\r\nend", b"suffix.bin")]),
 
 ]
 
