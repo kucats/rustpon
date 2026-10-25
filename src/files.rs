@@ -406,6 +406,35 @@ mod tests {
     }
 
     #[test]
+    fn typed_files_json_preserves_nested_name_keys_and_integer_leaves() {
+        let path = std::env::temp_dir()
+            .join(format!("rustpon-files-typed-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let body = b"--b\r\nContent-Disposition: form-data; name=\"f[tmp_name][]\"; filename=\"leaf.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n--b--\r\n";
+        let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
+        parser.feed(body).unwrap();
+        let request = parser.finish().unwrap();
+        let projection = project(&request, Limits::default()).unwrap();
+        let mut legacy = Vec::new();
+        projection.write_json(&mut legacy).unwrap();
+        let mut typed = Vec::new();
+        projection.write_php_files_json(&mut typed).unwrap();
+        let legacy = String::from_utf8(legacy).unwrap();
+        let typed = String::from_utf8(typed).unwrap();
+        assert!(legacy.contains("[\"s\",\"33\"]")); // size 3 as legacy hex
+        assert!(legacy.contains("[\"s\",\"30\"]")); // error 0 as legacy hex
+        assert!(typed.contains("[\"i\",\"3\"]")); // PHP size 3
+        assert!(typed.contains("[\"i\",\"0\"]")); // PHP error 0
+        assert!(!typed.contains("[\"s\",\"33\"]"));
+        assert!(typed.contains("6c6561662e62696e")); // filename remains bytes
+        assert!(typed.contains("746d705f6e616d65")); // nested key tmp_name
+        drop(projection);
+        drop(request);
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
     fn metadata_and_projection_budgets_are_exact() {
         let path =
             std::env::temp_dir().join(format!("rustpon-files-budget-{}", std::process::id()));
