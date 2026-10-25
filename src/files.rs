@@ -227,4 +227,77 @@ mod tests {
         assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
         fs::remove_dir(&path).unwrap();
     }
+
+    #[test]
+    fn metadata_and_projection_budgets_are_exact() {
+        let path = std::env::temp_dir().join(format!(
+            "rustpon-files-budget-{}",
+            std::process::id()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let body = b"--b\r\nContent-Disposition: form-data; name=\"f[x]\"; filename=\"a.bin\"\r\nContent-Type: application/octet-stream\r\n\r\npayload\r\n--b--\r\n";
+        let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
+        parser.feed(body).unwrap();
+        let request = parser.finish().unwrap();
+        let baseline = project(&request, Limits::default()).unwrap();
+        let bytes: usize = baseline
+            .wire()
+            .parts()
+            .map(|p| p.name.len() + p.value.unwrap().len())
+            .sum();
+        let memory = baseline.wire().stats().memory_capacity;
+        assert!(bytes > 0);
+        drop(baseline);
+        let exact = Limits {
+            metadata_bytes: bytes,
+            memory_capacity: memory,
+            ..Limits::default()
+        };
+        assert!(project(&request, exact).is_ok());
+        assert!(matches!(
+            project(
+                &request,
+                Limits {
+                    metadata_bytes: bytes - 1,
+                    ..exact
+                }
+            ),
+            Err(Error::MetadataBytes)
+        ));
+        assert!(matches!(
+            project(
+                &request,
+                Limits {
+                    memory_capacity: memory - 1,
+                    ..exact
+                }
+            ),
+            Err(Error::MemoryCapacity)
+        ));
+        assert!(matches!(
+            project(
+                &request,
+                Limits {
+                    post: post::Limits {
+                        nodes: 1,
+                        ..post::Limits::default()
+                    },
+                    ..Limits::default()
+                }
+            ),
+            Err(Error::Post(post::Error::Nodes))
+        ));
+        // Projection errors must not steal or close the wire upload descriptor.
+        let mut original = request;
+        let mut content = Vec::new();
+        assert_eq!(
+            original.upload_mut(0).unwrap().copy_to(&mut content).unwrap(),
+            7
+        );
+        assert_eq!(content, b"payload");
+        drop(original);
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        fs::remove_dir(&path).unwrap();
+    }
+
 }
