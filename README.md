@@ -255,3 +255,47 @@ bytes. `MAX_FILE_SIZE` is supplied by the client and cannot replace
 server-controlled `post_max_size`, `upload_max_filesize`, or Rust's resource
 budgets. The remaining PHP upload error states (1, 3, 6, 7, 8), truncation
 behavior and native integer zvals still require implementation and testing.
+
+
+## Consuming upload admission gate
+
+The **optional** high-level `admission::admit(request, policy)` consumes the
+raw `Request`, verifies server-controlled body and per-file limits, and
+builds a bounded metadata projection transactionally. Server quota failure
+returns an error and drops *all* staging descriptors. For otherwise valid
+requests, upload parts rejected by the client-supplied `MAX_FILE_SIZE` or
+an empty filename are closed immediately. Only the accepted indices can be
+copied using `AdmittedRequest::copy_accepted(index, writer)`.
+
+```rust
+let admitted = rustpon::admission::admit(request, rustpon::admission::Policy::default())?;
+for part_index in admitted.accepted_indices() {
+    // Consume this index via copy_accepted() on a mutable admitted request.
+}
+```
+
+For a concrete JSON-only inspection of the admitted metadata and indices:
+
+```sh
+target/debug/multipart --admit demo "$spool_dir" < request-body.bin
+```
+
+The Linux PHP 8.4 multipart SAPI differential suite compares the admitted
+metadata tree against the real sanitized `$_FILES` representation. It checks
+accepted indices for ordered `MAX_FILE_SIZE` cases and no-file controls.
+A process-isolated test also checks the actual open-FD count across repeated
+request admission, server rejection, and drop (Linux `/proc/self/fd` and
+macOS `/dev/fd`).
+
+**Trust boundary:** The low-level `Request::upload_mut()` remains available
+for debugging and wire-level experiments, and bypasses this higher-level
+admission gate. Runtime integration must use only `AdmittedRequest` or an
+equivalent sealed interface, not the raw parser request. This policy operates
+*after* wire parsing; do not rely on it to bound CPU, memory, or disk during
+the parse. Configure wire `Limits` and HTTP transport limits at ingress.
+
+This gate is intentionally stricter than PHP's ordinary upload registration:
+an over-server-quota upload aborts the request rather than returning a
+PHP-native error 1. Metadata `error` and `size` are still testing strings,
+and canonical PHP collision/overwrite selection is not a validated physical
+file handoff. No Zend FFI or production upload registry is included.
