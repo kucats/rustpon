@@ -41,3 +41,9 @@ jobs:
           php -l tools/php_projection.php
           cargo build --offline --locked --bin urlencoded
           python3 tools/differential_urlencoded.py --rust-bin target/debug/urlencoded
+      - name: Compare with PHP 8.4 multipart SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          php -l tools/multipart_projection.php
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_multipart.py --rust-bin target/debug/multipart
