@@ -411,7 +411,10 @@ mod tests {
         assert_eq!(eval("echo -3/2;"), Err(EvalError::UnsupportedFloat));
         assert_eq!(eval("echo 1/0;"), Err(EvalError::DivisionByZero));
         assert_eq!(eval("echo 1%0;"), Err(EvalError::DivisionByZero));
-        assert_eq!(eval("echo (0-9223372036854775807-1)/-1;"), Err(EvalError::UnsupportedFloat));
+        assert_eq!(
+            eval("echo (0-9223372036854775807-1)/-1;"),
+            Err(EvalError::UnsupportedFloat)
+        );
         assert_eq!(eval("echo 2/0+1;"), Err(EvalError::DivisionByZero));
     }
 
