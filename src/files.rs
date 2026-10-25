@@ -212,7 +212,6 @@ fn project_impl(
     .map_err(Error::Post)
 }
 
-
 fn projected_value(
     part: &crate::PartView<'_>,
     attribute: &[u8],
