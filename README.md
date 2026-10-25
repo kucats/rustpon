@@ -653,3 +653,12 @@ invalid writer counts, exact retry bytes, and process-level file-descriptor
 cleanup after an upload has already been staged. Existing PHP 8.4 CLI/SAPI
 differential suites remain the compatibility oracle for valid requests.
 This does not constitute coverage-guided fuzzing or native PHP-FPM readiness.
+
+## Coverage-guided parser fuzzing (research)
+
+The separate `fuzz/` workspace adds bounded libFuzzer targets for multipart
+and URL-encoded input. It checks chunk-invariant accept/reject decisions,
+ordered bytes, metadata, upload copies and staging cleanup. Linux CI builds
+and smoke-tests the harness; the PHP 8.4 CLI/SAPI oracle still runs separately.
+No continuous fuzz campaign or PHP-FPM production readiness is claimed.
+See [fuzz/README.md](fuzz/README.md) for usage and dependency licenses.

@@ -27,6 +27,14 @@ jobs:
         run: cargo test --offline --locked --all-targets
       - name: Run Clippy
         run: cargo clippy --offline --locked --all-targets -- -D warnings
+      - name: Fuzz workspace formatting (Linux)
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - name: Compile and smoke-test fuzz targets (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo check --manifest-path fuzz/Cargo.toml --bins
+          cargo test --manifest-path fuzz/Cargo.toml --lib
       - name: FFI formatting
         run: cargo fmt --manifest-path ffi/Cargo.toml -- --check
       - name: FFI Rust tests

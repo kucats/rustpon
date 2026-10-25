@@ -1,0 +1,29 @@
+[package]
+name = "rustpon-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+rustpon = { path = ".." }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "multipart"
+path = "fuzz_targets/multipart.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "urlencoded"
+path = "fuzz_targets/urlencoded.rs"
+test = false
+doc = false
+bench = false
