@@ -37,6 +37,7 @@ pub enum Error {
     BodyTooLarge,
     FileTooLarge,
     Metadata(files::Error),
+    Allocation,
 }
 
 impl From<files::Error> for Error {
@@ -105,33 +106,34 @@ pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Er
     // Project before discarding, so all error codes, names and sizes are
     // preserved. No metadata escapes if an adapter quota fails.
     let metadata = files::project(&request, policy.metadata)?;
-    let mut form_max = 0i64;
-    for index in 0..request.parts.len() {
-        let rejected = {
-            let part = &request.parts[index];
-            let name = &request.arena[part.name.clone()];
-            if let Payload::Field(value) = &part.payload {
-                if part.filename.is_none() && name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
-                    form_max = files::parse_form_max(&request.arena[value.clone()]);
-                }
-                false
-            } else {
-                let filename = part
-                    .filename
-                    .as_ref()
-                    .map(|span| &request.arena[span.clone()])
-                    .expect("file part must carry filename");
-                let length = match &part.payload {
-                    Payload::File(upload) => upload.len(),
-                    Payload::Field(_) => unreachable!("file branch"),
-                };
-                filename.is_empty() || (form_max != 0 && (form_max < 0 || length > form_max as u64))
-            }
-        };
-        if rejected {
-            // Payload replacement drops the Upload/File immediately. The empty
-            // range is internal only and never published through AdmittedRequest.
-            request.parts[index].payload = Payload::Field(0..0);
+    // Re-project with per-wire-index identity values in tmp_name leaves.
+    // PHP-style key collision/append/scalar replacement happens in the same
+    // bounded POST adapter as the publicly visible FILES metadata.
+    // Only identities surviving the final tree may retain upload FDs.
+    let identities = files::project_with_ids(&request, policy.metadata)?;
+    let mut selected = Vec::new();
+    selected
+        .try_reserve_exact(request.parts.len())
+        .map_err(|_| Error::Allocation)?;
+    selected.resize(request.parts.len(), false);
+    identities.visit_file_tmp_values(|value| {
+        if let Some(number) = value
+            .strip_prefix(b"__RUSTPON_UPLOAD_ID_")
+            .and_then(|tail| tail.strip_suffix(b"__"))
+            .and_then(|ascii| std::str::from_utf8(ascii).ok())
+            .and_then(|ascii| ascii.parse::<usize>().ok())
+            && let Some(slot) = selected.get_mut(number)
+        {
+            *slot = true;
+        }
+    });
+
+    for (index, part) in request.parts.iter_mut().enumerate() {
+        if matches!(part.payload, Payload::File(_)) && !selected[index] {
+            // The original descriptor is dropped now, not merely hidden by
+            // the final metadata tree. Rejected and overwritten uploads can
+            // never be copied via the sealed admitted request API.
+            part.payload = Payload::Field(0..0);
         }
     }
     Ok(AdmittedRequest { request, metadata })
