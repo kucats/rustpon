@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const BLOCK: usize = 8192;
+// A misbehaving Read implementation must not spin forever on Interrupted.
+// Reset the quota after any successful nonempty read.
+pub(crate) const MAX_CONSECUTIVE_INTERRUPTS: usize = 1024;
 const MAX_BOUNDARY: usize = 70;
 const WINDOW: usize = MAX_BOUNDARY + 6;
 static NEXT_UPLOAD: AtomicU64 = AtomicU64::new(0);
@@ -948,11 +951,20 @@ pub fn parse_reader(
 ) -> Result<Request, Error> {
     let mut parser = Parser::new(boundary, limits, spool_dir)?;
     let mut buffer = [0; BLOCK];
+    let mut consecutive_interrupts = 0usize;
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => return parser.finish(),
-            Ok(count) => parser.feed(&buffer[..count])?,
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Ok(count) => {
+                consecutive_interrupts = 0;
+                parser.feed(&buffer[..count])?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                consecutive_interrupts += 1;
+                if consecutive_interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(Error::Io(io::ErrorKind::Interrupted));
+                }
+            }
             Err(error) => return Err(error.into()),
         }
     }

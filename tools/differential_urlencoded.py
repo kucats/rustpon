@@ -25,6 +25,14 @@ CASES = [
     ("numeric-string", b"a%5B01%5D=x&a%5B1%5D=y"),
     ("root-numeric", b"0=x&1=y"), ("utf8", "word=日本語".encode()),
     ("mixed-case-hex", b"a%5bx%5d=one&b=%2f%2F"),
+    ("escaped-ampersand", b"a%26b=x%26y&z=1"),
+    ("escaped-equals", b"a%3Db=1%3D2"),
+    ("trailing-percent", b"percent=%&half=%2&bad=%GG"),
+    ("double-encoded", b"a%255Bb%255D=x&percent=%2525"),
+    ("percent-spaces", b"first%20last=x&first+last=y"),
+    ("utf8-encoded", b"key=%E6%9D%B1%E4%BA%AC"),
+    ("mixed-hex", b"n%5b0%5d=%ff&n%5B1%5D=%FF"),
+    ("empty-value-no-equal", b"bare&bare=&x=1"),
 ]
 
 def run(command, body):

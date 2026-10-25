@@ -761,3 +761,65 @@ fn adversarial_near_boundary_patterns_exhaust_cpu_budget_and_release_uploads() {
         Some(b"next".as_slice())
     );
 }
+
+#[test]
+fn interrupted_reader_has_finite_budget_and_releases_uploads() {
+    struct InterruptReader<'a> {
+        bytes: &'a [u8],
+        offset: usize,
+        interrupt_next: bool,
+        stall_after: Option<usize>,
+    }
+    impl io::Read for InterruptReader<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if self.stall_after.is_some_and(|cutoff| self.offset >= cutoff) {
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if self.interrupt_next {
+                self.interrupt_next = false;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if self.offset == self.bytes.len() {
+                return Ok(0);
+            }
+            let limit = self.stall_after.unwrap_or(self.bytes.len());
+            let end = (self.offset + 11).min(self.bytes.len()).min(limit);
+            let count = end - self.offset;
+            output[..count].copy_from_slice(&self.bytes[self.offset..end]);
+            self.offset = end;
+            self.interrupt_next = true;
+            Ok(count)
+        }
+    }
+
+    let spool = Spool::new();
+    let bytes = body(&[(FILE, b"uploaded-binary\0\xff"), (FIELD, b"after-upload")]);
+    let expected = snapshot(parse(&bytes, Limits::default(), &spool).unwrap());
+    let mut recovering = InterruptReader {
+        bytes: &bytes,
+        offset: 0,
+        interrupt_next: true,
+        stall_after: None,
+    };
+    assert_eq!(
+        snapshot(parse_reader(&mut recovering, b"AaB03x", Limits::default(), &spool.0).unwrap()),
+        expected
+    );
+    spool.empty();
+
+    // The reader stalls after staging a file, before transport EOF. No
+    // request is published; parser ownership must release its upload FDs.
+    let mut stalled = InterruptReader {
+        bytes: &bytes,
+        offset: 0,
+        interrupt_next: false,
+        stall_after: Some(bytes.len() - 12),
+    };
+    assert_eq!(
+        parse_reader(&mut stalled, b"AaB03x", Limits::default(), &spool.0).unwrap_err(),
+        Error::Io(io::ErrorKind::Interrupted)
+    );
+    spool.empty();
+    assert_eq!(snapshot(parse(&bytes, Limits::default(), &spool).unwrap()), expected);
+    spool.empty();
+}

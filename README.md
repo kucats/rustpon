@@ -588,3 +588,26 @@ coercion and nested-expression cases plus malformed-token rejections.
 Chained comparisons, logical operators, null, strings, floats, arrays,
 references, control flow and unbounded work remain unsupported. This is not
 a full Zend value model, AST, PHP VM or production PHP-FPM integration.
+
+## Bounded Interrupted I/O retries and deterministic parser fault campaign
+
+Both blocking `parse_reader` adapters (multipart and URL-encoded) now
+permit **at most 1024 consecutive** `io::ErrorKind::Interrupted` reads.
+A successful nonempty read resets the counter. A permanently interrupted
+reader returns `Error::Io(Interrupted)` instead of spinning forever.
+On multipart failure, staged anonymous uploads are dropped with the parser;
+no request or partially projected POST/FILES tree is published.
+
+Regression tests exercise recoverable interruptions between tiny reads,
+permanent interruptions after a file has been staged, and fresh-request
+isolation. URL-encoded tests also run **256 deterministic mutated or arbitrary
+byte inputs** through one-shot and 1/3/17-byte chunked feeds, asserting
+identical successful field bytes or identical errors. The existing multipart
+mutation corpus and FD lifecycle tests remain active. The PHP 8.4
+`parse_str()` differential corpus adds eight targeted percent-decoding,
+encoded-delimiter and duplicate-key cases.
+
+This is deterministic fault injection, **not** continuous coverage-guided
+fuzzing, a sanitizer campaign, or evidence of PHP-FPM production readiness.
+The retry bound applies to these synchronous adapters, not to arbitrary
+external transports or native Zend callbacks.

@@ -261,11 +261,20 @@ fn url_decode(bytes: &mut [u8]) -> usize {
 pub fn parse_reader(reader: &mut impl Read, limits: Limits) -> Result<Request, Error> {
     let mut parser = FormParser::new(limits)?;
     let mut buffer = [0u8; 8192];
+    let mut consecutive_interrupts = 0usize;
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => return parser.finish(),
-            Ok(n) => parser.feed(&buffer[..n])?,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Ok(n) => {
+                consecutive_interrupts = 0;
+                parser.feed(&buffer[..n])?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                consecutive_interrupts += 1;
+                if consecutive_interrupts >= crate::MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(Error::Io(std::io::ErrorKind::Interrupted));
+                }
+            }
             Err(error) => return Err(error.into()),
         }
     }
@@ -439,5 +448,111 @@ mod tests {
             parse_reader(&mut Broken, Limits::default()).unwrap_err(),
             Error::Io(std::io::ErrorKind::BrokenPipe)
         );
+    }
+
+    #[test]
+    fn deterministic_mutations_preserve_chunk_independent_results() {
+        let seed = b"a%5Bx%5D=1&b=%00%FF&c=+plus+&a%5B%5D=two&bad=%2+";
+        let limits = Limits {
+            body_bytes: 1024,
+            parts: 16,
+            fields: 16,
+            name_bytes: 1024,
+            field_bytes: 1024,
+            field_bytes_total: 1024,
+            retained_bytes: 1024,
+            memory_capacity: 64 * 1024,
+            ..Limits::default()
+        };
+        let mut state = 0x5255_5354_504f_4e_u64;
+        for case in 0..256 {
+            let mut bytes = if case % 2 == 0 {
+                seed.to_vec()
+            } else {
+                Vec::new()
+            };
+            if case % 2 == 0 {
+                for _ in 0..4 {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    let position = (state as usize) % bytes.len();
+                    bytes[position] = (state >> 32) as u8;
+                }
+            } else {
+                for _ in 0..(case % 127) {
+                    state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    bytes.push((state >> 32) as u8);
+                }
+            }
+            let baseline = parse(&bytes, limits).map(|request| fields(&request));
+            for size in [1, 3, 17] {
+                let mut parser = FormParser::new(limits).unwrap();
+                let mut failure = None;
+                for chunk in bytes.chunks(size) {
+                    if let Err(error) = parser.feed(chunk) {
+                        failure = Some(error);
+                        break;
+                    }
+                }
+                let actual = match failure {
+                    Some(error) => Err(error),
+                    None => parser.finish().map(|request| fields(&request)),
+                };
+                assert_eq!(actual, baseline, "case {case}, chunk {size}");
+            }
+        }
+    }
+
+    #[test]
+    fn interrupted_reader_has_finite_budget_and_resumes_after_progress() {
+        struct InterruptReader<'a> {
+            bytes: &'a [u8],
+            offset: usize,
+            interrupt_next: bool,
+            stall_after: Option<usize>,
+        }
+        impl Read for InterruptReader<'_> {
+            fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+                if self.stall_after.is_some_and(|cutoff| self.offset >= cutoff) {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                if self.interrupt_next {
+                    self.interrupt_next = false;
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                if self.offset == self.bytes.len() {
+                    return Ok(0);
+                }
+                let limit = self.stall_after.unwrap_or(self.bytes.len());
+                let end = (self.offset + 3).min(self.bytes.len()).min(limit);
+                let count = end - self.offset;
+                output[..count].copy_from_slice(&self.bytes[self.offset..end]);
+                self.offset = end;
+                self.interrupt_next = true;
+                Ok(count)
+            }
+        }
+        let bytes = b"a%5Bx%5D=1&b=two&c=%FF";
+        let expected = fields(&parse(bytes, Limits::default()).unwrap());
+        let mut recovering = InterruptReader {
+            bytes,
+            offset: 0,
+            interrupt_next: true,
+            stall_after: None,
+        };
+        assert_eq!(
+            fields(&parse_reader(&mut recovering, Limits::default()).unwrap()),
+            expected
+        );
+        let mut stalled = InterruptReader {
+            bytes,
+            offset: 0,
+            interrupt_next: false,
+            stall_after: Some(12),
+        };
+        assert_eq!(
+            parse_reader(&mut stalled, Limits::default()).unwrap_err(),
+            Error::Io(std::io::ErrorKind::Interrupted)
+        );
+        assert_eq!(fields(&parse(bytes, Limits::default()).unwrap()), expected);
     }
 }
