@@ -189,3 +189,44 @@ combinations. PHP 8.4 is selected at the major/minor version level in CI.
 The file comparisons currently cover distinct flat file-field names;
 nested `$_FILES` registration, upload error codes, `MAX_FILE_SIZE`,
 session upload progress and PHP/Zend integration remain future work.
+
+## Delimiter CPU-work budget
+
+The multipart parser now enforces `Limits::boundary_comparisons` independently
+of the input byte quota. The default allows 16 comparisons per configured
+default maximum body byte, rejecting highly repetitive near-delimiters when
+the work budget is exhausted. The counter is checked before each comparison,
+and exhaustion aborts the entire request, dropping all upload handles. A
+dedicated regression checks the exact/plus-one budget and a maximum-length
+near-match upload, followed by request isolation.
+
+This work quota bounds *delimiter comparisons*, not total CPU time, overhead
+from allocations, I/O, PHP runtime callbacks, or the upstream HTTP decoder.
+A linear-time matcher remains a worthwhile future replacement.
+
+## Experimental nested FILES projection
+
+`files::project(&request, files::Limits::default())` creates a bounded,
+transactional metadata-only PHP-shaped tree from the completed multipart
+wire request. It preserves upload-name nesting, implicit array append
+indices, collisions, and the metadata columns `name`, `full_path`,
+`type`, `tmp_name`, `error`, and `size`. The input `Request`
+retains all anonymous upload file descriptors. The projection never
+contains the real temporary path; for successful uploads `tmp_name` is
+the constant `__RUSTPON_STAGED__`. File sizes and error codes are
+represented as ASCII **strings** in this testing tree, not native PHP
+integer zvals. A real PHP/Zend adapter still needs typed values, validated
+filesystem handoff, and session/upload-progress lifecycle separation.
+
+```sh
+cargo build --offline --locked --bin multipart
+target/debug/multipart --files demo "$spool_dir" < request-body.bin
+```
+
+The PHP SAPI differential harness now also compares the sanitized nested
+`$_FILES` metadata tree, including empty filename error 4, same-name
+overwrite, numeric indices, and nested append arrays. Raw upload history
+comparison is restricted to unambiguous, distinct flat file fields because
+the Rust wire IR intentionally keeps overwritten parts. The metadata
+projection has its own byte/capacity limits in addition to the existing
+POST tree limits. These bounds are not an RSS guarantee.
