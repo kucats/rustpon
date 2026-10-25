@@ -13,7 +13,7 @@ from pathlib import Path
 
 FIXED = [
     "0", "1", "42", "-1", "+3", "1+2*3", "(1+2)*3",
-    "8-3-2", "2*-3+4", "-(-5)", "1--2",
+    "8-3-2", "2*-3+4", "-(-5)", "1- -2",
     "9223372036854775807", "0-9223372036854775807",
     "((3))", "2 * (3 + (4 - 5))", "3+-2",
 ]
@@ -26,7 +26,7 @@ def generated(rng, depth):
         return rng.choice(["+", "-"]) + "(" + generated(rng, depth - 1) + ")"
     lhs = generated(rng, depth - 1)
     rhs = generated(rng, depth - 1)
-    return "(" + lhs + rng.choice(["+", "-", "*"]) + rhs + ")"
+    return "(" + lhs + " " + rng.choice(["+", "-", "*"]) + " " + rhs + ")"
 
 
 def execute(command, code):
@@ -61,6 +61,8 @@ def main():
         b"<?php echo 1/2;",
         b"<?php echo $x;",
         b"<?php echo 1+;",
+        b"<?php echo 1--2;",
+        b"<?php echo 1++2;",
         b"<?php echo 1; echo 2;",
         b"<?php echo 9223372036854775807+1;",
         b"<?php echo " + b"(" * 33 + b"1" + b")" * 33 + b";",
