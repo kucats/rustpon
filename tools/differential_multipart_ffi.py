@@ -164,6 +164,11 @@ def main():
         names = [b"alpha", b"beta", b"a[]", b"a[0]", b"a[x]", b"words.here", b"n[-2]"]
         values = [b"", b"hello", b"\x00\xff", b"equal=sign", "東京".encode()]
         cases = list(corpus.CASES)
+        # Compare byte-for-byte PHP SAPI upload contents across the Rust
+        # fixed-size copy buffer, including zero-length and binary payloads.
+        for size in [0, 1, 8191, 8192, 8193, 16384, 16385, 32785]:
+            data = bytes((index * 37 + 19) % 256 for index in range(size))
+            cases.append((f"copy-boundary-{size}", [(b"upload", data, b"data.bin")]))
         for i in range(40):
             fields = [(rng.choice(names), rng.choice(values), None)
                       for _ in range(rng.randrange(1, 6))]

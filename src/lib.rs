@@ -150,11 +150,38 @@ impl Upload {
         self.length == 0
     }
 
-    /// Copies from offset zero, bounded by the already enforced upload quota.
-    /// The descriptor stays owned by this request. No client path is exposed.
+    /// Copies exactly the staged length from offset zero with bounded memory
+    /// and bounded consecutive Interrupted retries on both I/O directions.
+    /// A failed copy may have written a prefix: callers must discard that
+    /// destination. The descriptor stays owned by this request, so a retry
+    /// can start at offset zero. No client path is exposed.
     pub fn copy_to(&mut self, output: &mut impl Write) -> io::Result<u64> {
         self.file.seek(SeekFrom::Start(0))?;
-        io::copy(&mut self.file, output)
+        let mut remaining = self.length;
+        let mut buffer = [0_u8; BLOCK];
+        let mut read_interrupts = 0;
+        while remaining > 0 {
+            // This is at most BLOCK, so the cast is safe on all Unix targets.
+            let capacity = remaining.min(BLOCK as u64) as usize;
+            let count = match self.file.read(&mut buffer[..capacity]) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(count) => {
+                    read_interrupts = 0;
+                    count
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    read_interrupts += 1;
+                    if read_interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
+                        return Err(error);
+                    }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            write_chunk(output, &buffer[..count])?;
+            remaining -= count as u64;
+        }
+        Ok(self.length)
     }
 }
 
@@ -704,8 +731,27 @@ impl Parser {
     }
 }
 
-fn write_chunk(writer: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
-    writer.write_all(bytes)
+// Unlike Write::write_all, do not retry an indefinitely Interrupted writer.
+// Any successful write resets the consecutive-interrupt budget.
+fn write_chunk(writer: &mut impl Write, mut bytes: &[u8]) -> io::Result<()> {
+    let mut consecutive_interrupts = 0;
+    while !bytes.is_empty() {
+        match writer.write(bytes) {
+            Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            Ok(count) => {
+                bytes = &bytes[count..];
+                consecutive_interrupts = 0;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                consecutive_interrupts += 1;
+                if consecutive_interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
 }
 
 fn store(arena: &mut Vec<u8>, bytes: &[u8], max: usize) -> Result<Range<usize>, Error> {

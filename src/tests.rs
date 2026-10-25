@@ -528,6 +528,159 @@ fn short_writes_and_write_errors_are_handled() {
 }
 
 #[test]
+fn bounded_interrupted_and_zero_write_failures() {
+    struct InterruptedWriter {
+        calls: usize,
+        remaining_interrupts: usize,
+        output: Vec<u8>,
+    }
+    impl Write for InterruptedWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.remaining_interrupts > 0 {
+                self.remaining_interrupts -= 1;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            let count = bytes.len().min(3);
+            self.output.extend_from_slice(&bytes[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let mut recovering = InterruptedWriter {
+        calls: 0,
+        remaining_interrupts: MAX_CONSECUTIVE_INTERRUPTS - 1,
+        output: Vec::new(),
+    };
+    write_chunk(&mut recovering, b"hello").unwrap();
+    assert_eq!(recovering.output, b"hello");
+
+    let mut stalled = InterruptedWriter {
+        calls: 0,
+        remaining_interrupts: MAX_CONSECUTIVE_INTERRUPTS,
+        output: Vec::new(),
+    };
+    assert_eq!(
+        write_chunk(&mut stalled, b"hello").unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
+    assert_eq!(stalled.calls, MAX_CONSECUTIVE_INTERRUPTS);
+    assert!(stalled.output.is_empty());
+
+    struct ZeroWriter;
+    impl Write for ZeroWriter {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Ok(0)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    assert_eq!(
+        write_chunk(&mut ZeroWriter, b"hello").unwrap_err().kind(),
+        io::ErrorKind::WriteZero
+    );
+    write_chunk(&mut ZeroWriter, b"").unwrap();
+}
+
+#[test]
+fn upload_copy_fault_injection_preserves_retry_and_bytes() {
+    struct FaultWriter {
+        bytes: Vec<u8>,
+        fail_after: usize,
+        error: io::ErrorKind,
+        interrupted_once: bool,
+    }
+    impl Write for FaultWriter {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            if !self.interrupted_once {
+                self.interrupted_once = true;
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            if self.bytes.len() >= self.fail_after {
+                return Err(self.error.into());
+            }
+            let count = input.len().min(7).min(self.fail_after - self.bytes.len());
+            self.bytes.extend_from_slice(&input[..count]);
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let spool = Spool::new();
+    // Cross the internal 8192-byte copy buffer and include NUL and high bytes.
+    let payload: Vec<u8> = (0..(BLOCK * 2 + 17))
+        .map(|index| (index.wrapping_mul(37) % 256) as u8)
+        .collect();
+    let wire = body(&[(FILE, &payload)]);
+    let mut request = parse(&wire, Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    assert_eq!(upload.len(), payload.len() as u64);
+
+    let mut failed = FaultWriter {
+        bytes: Vec::new(),
+        fail_after: BLOCK + 3,
+        error: io::ErrorKind::StorageFull,
+        interrupted_once: false,
+    };
+    assert_eq!(
+        upload.copy_to(&mut failed).unwrap_err().kind(),
+        io::ErrorKind::StorageFull
+    );
+    assert_eq!(failed.bytes, payload[..BLOCK + 3]);
+    let mut recovered = Vec::new();
+    assert_eq!(
+        upload.copy_to(&mut recovered).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(recovered, payload);
+
+    let mut interrupted = FaultWriter {
+        bytes: Vec::new(),
+        fail_after: usize::MAX,
+        error: io::ErrorKind::Other,
+        interrupted_once: false,
+    };
+    assert_eq!(
+        upload.copy_to(&mut interrupted).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(interrupted.bytes, payload);
+
+    struct Stall {
+        calls: usize,
+    }
+    impl Write for Stall {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            self.calls += 1;
+            Err(io::ErrorKind::Interrupted.into())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut stall = Stall { calls: 0 };
+    assert_eq!(
+        upload.copy_to(&mut stall).unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
+    assert_eq!(stall.calls, MAX_CONSECUTIVE_INTERRUPTS);
+    let mut zero = Vec::new();
+    assert_eq!(
+        upload.copy_to(&mut zero).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(zero, payload);
+    drop(request);
+    spool.empty();
+}
+
+#[test]
 fn closing_candidates_have_explicit_strict_policy() {
     let spool = Spool::new();
     let accepted = body(&[(FILE, b"a\r\n--AaB03xX!b")]);

@@ -611,3 +611,26 @@ This is deterministic fault injection, **not** continuous coverage-guided
 fuzzing, a sanitizer campaign, or evidence of PHP-FPM production readiness.
 The retry bound applies to these synchronous adapters, not to arbitrary
 external transports or native Zend callbacks.
+
+## Bounded upload-copy I/O and PHP SAPI byte oracle
+
+`Upload::copy_to` now copies exactly the staged upload length using an 8192-byte
+buffer, returning `UnexpectedEof` if a staged descriptor is unexpectedly
+short. Both source reads and destination writes have a limit of 1024
+**consecutive** `Interrupted` errors, reset after forward progress.
+The shared staged-file write path now also bounds consecutive interrupted
+writes and rejects `WriteZero`. These limits prevent unbounded retry loops
+in synchronous adapters, without adding dependencies or exposing descriptors.
+
+Fault-injection tests exercise 1023 recoverable interruptions, 1024
+consecutive interruptions, zero-byte writes, short writes, injected
+`StorageFull` after a partial copy, and retry from offset zero. On a failed
+copy the caller **must discard any partially written destination**; the
+admitted request still owns its source descriptor. The PHP 8.4 SAPI/FFI
+differential suite includes eight additional byte-for-byte upload cases
+at zero, one and 8192-byte buffer boundaries, including NUL and high bytes.
+
+This does not make arbitrary external writers transactional or guarantee
+successful upload persistence; the caller remains responsible for destination
+cleanup and for request-scope resource release. Native PHP-FPM deployment
+and independent security review remain outstanding.
