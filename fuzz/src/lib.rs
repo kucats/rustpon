@@ -354,7 +354,6 @@ pub fn exercise_admission(data: &[u8]) {
     }
 }
 
-
 /// Fuzz transport cancellation at every lifecycle phase: before any bytes,
 /// during headers, after a staged upload, and after the closing delimiter.
 /// A cancelled or failed request must stay terminal, and a fresh request
