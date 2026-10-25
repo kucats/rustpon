@@ -69,13 +69,31 @@ impl From<post::Error> for Error {
 /// Metadata (including nested indices and duplicate names) is staged fully
 /// before the returned tree is visible to the caller.
 pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, Error> {
+    project_impl(request, limits, false)
+}
+
+/// Internal projection with distinct per-upload tmp_name tokens. The tokens
+/// are used only to identify which physical upload survived PHP-style array
+/// replacement; no token is returned to applications.
+pub(crate) fn project_with_ids(
+    request: &Request,
+    limits: Limits,
+) -> Result<post::PostRequest, Error> {
+    project_impl(request, limits, true)
+}
+
+fn project_impl(
+    request: &Request,
+    limits: Limits,
+    tag_uploads: bool,
+) -> Result<post::PostRequest, Error> {
     let file_count = request.parts().filter(|p| p.filename.is_some()).count();
     let parts_count = file_count
         .checked_mul(ATTRIBUTES.len())
         .ok_or(Error::InvalidLimits)?;
     let mut needed = 0usize;
     let mut form_max = 0i64;
-    for part in request.parts() {
+    for (index, part) in request.parts().enumerate() {
         if part.filename.is_none() {
             if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
                 form_max = parse_form_max(part.value.unwrap_or_default());
@@ -87,7 +105,7 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
             return Err(Error::MalformedUploadName);
         }
         for &attr in &ATTRIBUTES {
-            let value = value_for(&part, attr, upload_error);
+            let value = projected_value(&part, attr, upload_error, index, tag_uploads);
             let prefix_len = part
                 .name
                 .iter()
@@ -143,7 +161,7 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
     }
 
     form_max = 0;
-    for part in request.parts() {
+    for (index, part) in request.parts().enumerate() {
         if part.filename.is_none() {
             if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
                 form_max = parse_form_max(part.value.unwrap_or_default());
@@ -166,7 +184,7 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
             store(&mut arena, b"]", limits.metadata_bytes).map_err(map_wire_error)?;
             store(&mut arena, tail, limits.metadata_bytes).map_err(map_wire_error)?;
             let name_end = arena.len();
-            let value = value_for(&part, attr, upload_error);
+            let value = projected_value(&part, attr, upload_error, index, tag_uploads);
             store(&mut arena, &value, limits.metadata_bytes).map_err(map_wire_error)?;
             let value_end = arena.len();
             parts.push(Part {
@@ -192,6 +210,20 @@ pub fn project(request: &Request, limits: Limits) -> Result<post::PostRequest, E
     }
     .into_post(limits.post)
     .map_err(Error::Post)
+}
+
+
+fn projected_value(
+    part: &crate::PartView<'_>,
+    attribute: &[u8],
+    error: u8,
+    index: usize,
+    tag_uploads: bool,
+) -> Vec<u8> {
+    if tag_uploads && attribute == b"tmp_name" && error == UPLOAD_ERR_OK {
+        return format!("__RUSTPON_UPLOAD_ID_{index}__").into_bytes();
+    }
+    value_for(part, attribute, error)
 }
 
 fn map_wire_error(error: crate::Error) -> Error {
