@@ -464,7 +464,7 @@ mod tests {
             memory_capacity: 64 * 1024,
             ..Limits::default()
         };
-        let mut state = 0x5255_5354_504f_4e_u64;
+        let mut state = 0x0052_5553_5450_4f4e_u64;
         for case in 0..256 {
             let mut bytes = if case % 2 == 0 {
                 seed.to_vec()
