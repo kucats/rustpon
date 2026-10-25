@@ -738,6 +738,9 @@ fn write_chunk(writer: &mut impl Write, mut bytes: &[u8]) -> io::Result<()> {
     while !bytes.is_empty() {
         match writer.write(bytes) {
             Ok(0) => return Err(io::ErrorKind::WriteZero.into()),
+            // A buggy/custom Write must not panic by overreporting progress.
+            // Fail closed even though std::io::Write forbids this behavior.
+            Ok(count) if count > bytes.len() => return Err(io::ErrorKind::InvalidData.into()),
             Ok(count) => {
                 bytes = &bytes[count..];
                 consecutive_interrupts = 0;
@@ -1001,6 +1004,11 @@ pub fn parse_reader(
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => return parser.finish(),
+            // Never index beyond the buffer if a custom Read violates its
+            // contract. Dropping parser also closes all staged upload FDs.
+            Ok(count) if count > buffer.len() => {
+                return Err(Error::Io(io::ErrorKind::InvalidData));
+            }
             Ok(count) => {
                 consecutive_interrupts = 0;
                 parser.feed(&buffer[..count])?;

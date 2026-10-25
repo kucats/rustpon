@@ -528,6 +528,37 @@ fn short_writes_and_write_errors_are_handled() {
 }
 
 #[test]
+fn overreported_upload_writer_fails_without_panicking_and_remains_retryable() {
+    struct Overreport;
+    impl Write for Overreport {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            Ok(bytes.len() + 1)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    assert_eq!(
+        write_chunk(&mut Overreport, b"abc").unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    let spool = Spool::new();
+    let payload = b"binary\0\xffpayload";
+    let mut request = parse(&body(&[(FILE, payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    assert_eq!(
+        upload.copy_to(&mut Overreport).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    let mut output = Vec::new();
+    assert_eq!(upload.copy_to(&mut output).unwrap(), payload.len() as u64);
+    assert_eq!(output, payload);
+    drop(request);
+    spool.empty();
+}
+
+#[test]
 fn bounded_interrupted_and_zero_write_failures() {
     struct InterruptedWriter {
         calls: usize,
@@ -749,6 +780,30 @@ fn descriptor_lifecycle_in_isolated_subprocess() {
         assert!(parser.feed(&bytes[bytes.len() - 16..]).is_err());
         assert_eq!(count(), baseline);
     }
+
+    // A faulty Read implementation may overreport its byte count after a
+    // complete multipart body has already staged a live upload descriptor.
+    // The adapter must return InvalidData, not panic or leak the descriptor.
+    struct OverreportAfterBody<'a> {
+        body: Option<&'a [u8]>,
+    }
+    impl Read for OverreportAfterBody<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if let Some(body) = self.body.take() {
+                buffer[..body.len()].copy_from_slice(body);
+                Ok(body.len())
+            } else {
+                Ok(buffer.len() + 1)
+            }
+        }
+    }
+    let mut reader = OverreportAfterBody { body: Some(&bytes) };
+    assert_eq!(
+        parse_reader(&mut reader, b"AaB03x", Limits::default(), &spool.0).unwrap_err(),
+        Error::Io(io::ErrorKind::InvalidData)
+    );
+    assert_eq!(count(), baseline);
+    spool.empty();
 }
 
 #[test]

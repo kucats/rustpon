@@ -265,6 +265,11 @@ pub fn parse_reader(reader: &mut impl Read, limits: Limits) -> Result<Request, E
     loop {
         match reader.read(&mut buffer) {
             Ok(0) => return parser.finish(),
+            // A custom Read reporting more than the supplied capacity is
+            // invalid; never let its count trigger an out-of-bounds panic.
+            Ok(n) if n > buffer.len() => {
+                return Err(Error::Io(std::io::ErrorKind::InvalidData));
+            }
             Ok(n) => {
                 consecutive_interrupts = 0;
                 parser.feed(&buffer[..n])?;
@@ -447,6 +452,32 @@ mod tests {
         assert_eq!(
             parse_reader(&mut Broken, Limits::default()).unwrap_err(),
             Error::Io(std::io::ErrorKind::BrokenPipe)
+        );
+    }
+
+    #[test]
+    fn overreported_reader_count_is_a_bounded_error() {
+        struct Overreport {
+            first: bool,
+        }
+        impl Read for Overreport {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                if self.first {
+                    self.first = false;
+                    buffer[..3].copy_from_slice(b"a=1");
+                    Ok(3)
+                } else {
+                    Ok(buffer.len() + 1)
+                }
+            }
+        }
+        assert_eq!(
+            parse_reader(&mut Overreport { first: true }, Limits::default()).unwrap_err(),
+            Error::Io(std::io::ErrorKind::InvalidData)
+        );
+        assert_eq!(
+            fields(&parse(b"a=1", Limits::default()).unwrap()),
+            vec![(b"a".to_vec(), b"1".to_vec())]
         );
     }
 

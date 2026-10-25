@@ -634,3 +634,22 @@ This does not make arbitrary external writers transactional or guarantee
 successful upload persistence; the caller remains responsible for destination
 cleanup and for request-scope resource release. Native PHP-FPM deployment
 and independent security review remain outstanding.
+
+## Fail-closed handling of invalid custom I/O byte counts
+
+The standalone multipart and URL-encoded `parse_reader` adapters now reject
+a custom `Read` implementation that reports more bytes than the provided
+buffer capacity, returning `Io(InvalidData)` instead of indexing out of
+bounds. The shared upload-copy `write_chunk` path similarly rejects a
+`Write` implementation that reports more bytes written than supplied.
+These are defensive checks for **violations of Rust's standard I/O trait
+contracts**, not normal PHP HTTP input cases. A failed multipart parse drops
+staged upload descriptors; a failed upload copy may leave a prefix in the
+caller-owned destination, which the caller must discard. The original upload
+can be copied again from offset zero.
+
+Deterministic fault-injection tests exercise both invalid reader counts,
+invalid writer counts, exact retry bytes, and process-level file-descriptor
+cleanup after an upload has already been staged. Existing PHP 8.4 CLI/SAPI
+differential suites remain the compatibility oracle for valid requests.
+This does not constitute coverage-guided fuzzing or native PHP-FPM readiness.
