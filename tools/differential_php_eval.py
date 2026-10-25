@@ -12,7 +12,11 @@ from pathlib import Path
 
 
 FIXED = [
-    "0", "1", "42", "-1", "+3", "1+2*3", "(1+2)*3",
+    "0", "00", "01", "07", "010", "0_7", "00_7", "0o10", "0O10",
+    "0x2a", "0X2A", "0b1010", "0B1010", "1_000", "0xF_F",
+    "0b1_0", "0o7_7", "0x7fff_ffff_ffff_ffff",
+    "0o777777777777777777777",
+    "1", "42", "-1", "+3", "1+2*3", "(1+2)*3",
     "8-3-2", "2*-3+4", "-(-5)", "1- -2",
     "9223372036854775807", "0-9223372036854775807",
     "((3))", "2 * (3 + (4 - 5))", "3+-2",
@@ -29,6 +33,28 @@ ASSIGNMENT_PROGRAMS = [
     "$x=5; $y=$x*2; echo $y-$x;",
     "$first=10; $second=$first-7; echo ($first+$second)*2;",
 ]
+
+
+def radix_literal(value, radix, separator=False):
+    if radix == 10:
+        digits, prefix = str(value), ""
+    elif radix == 8:
+        digits, prefix = format(value, "o"), "0o"
+    elif radix == 16:
+        digits, prefix = format(value, "x"), "0x"
+    elif radix == 2:
+        digits, prefix = format(value, "b"), "0b"
+    elif radix == 80:
+        digits, prefix = format(value, "o"), "0"
+    else:
+        raise ValueError(radix)
+    if separator and len(digits) > 1:
+        groups = []
+        while digits:
+            groups.append(digits[-3:])
+            digits = digits[:-3]
+        digits = "_".join(reversed(groups))
+    return prefix + digits
 
 
 def generated(rng, depth):
@@ -61,7 +87,18 @@ def main():
         variable_programs.append(
             f"$x={start}; $y={delta}; $x=$x+$y; echo ($x - ({subtract}))*2;"
         )
-    cases = [f"echo {expr};" for expr in expressions] + variable_programs
+    radix_programs = []
+    for _ in range(128):
+        value = rng.randrange(0, 1_000_000)
+        radix = rng.choice([2, 8, 10, 16, 80])
+        literal = radix_literal(value, radix, separator=bool(rng.randrange(2)))
+        radix_programs.append(f"echo ({literal}+3)*2;")
+    for _ in range(64):
+        value = rng.randrange(0, 1_000_000)
+        radix = rng.choice([2, 8, 10, 16, 80])
+        literal = radix_literal(value, radix, separator=bool(rng.randrange(2)))
+        radix_programs.append(f"$x={literal}; echo $x*2;")
+    cases = [f"echo {expr};" for expr in expressions] + variable_programs + radix_programs
     failures = 0
     for index, program in enumerate(cases):
         code = ("<?php " + program).encode("ascii")
@@ -78,7 +115,27 @@ def main():
             )
 
     invalid = [
-        b"<?php echo 01;",
+        b"<?php echo 08;",
+        b"<?php echo 09;",
+        b"<?php echo 0_8;",
+        b"<?php echo 00_8;",
+        b"<?php echo 0o8;",
+        b"<?php echo 0b102;",
+        b"<?php echo 0o78;",
+        b"<?php echo 0x;",
+        b"<?php echo 0b;",
+        b"<?php echo 0o;",
+        b"<?php echo 0x_1;",
+        b"<?php echo 0b_1;",
+        b"<?php echo 0o_1;",
+        b"<?php echo 1_;",
+        b"<?php echo 1__0;",
+        b"<?php echo 0x1_;",
+        b"<?php echo 0b1_;",
+        b"<?php echo 0o7_;",
+        b"<?php echo 0x1g;",
+        b"<?php echo 0x8000000000000000;",
+        b"<?php echo 0xffffffffffffffff;",
         b"<?php echo 1/2;",
         b"<?php echo $x;",
         b"<?php echo 1+;",

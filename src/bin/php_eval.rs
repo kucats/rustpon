@@ -2,7 +2,8 @@
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded local integer assignments followed by one echo;
-//! decimal i64 literals, variables, unary +/-, parentheses and +, -, *.
+//! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
+//! variables, unary +/-, parentheses and +, -, *.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
 
@@ -20,7 +21,6 @@ enum EvalError {
     SourceTooLong,
     Syntax,
     TrailingInput,
-    UnsupportedNumber,
     Overflow,
     DepthLimit,
     WorkLimit,
@@ -80,21 +80,58 @@ impl<'a> Parser<'a> {
     fn number(&mut self) -> Result<i64, EvalError> {
         self.skip_space();
         let start = self.offset;
+        let source = self.source;
+        let mut radix = 10_u32;
+        let mut prefixed = false;
+
+        if source.get(start) == Some(&b'0') {
+            match source.get(start + 1) {
+                Some(b'x' | b'X') => {
+                    radix = 16;
+                    prefixed = true;
+                }
+                Some(b'b' | b'B') => {
+                    radix = 2;
+                    prefixed = true;
+                }
+                Some(b'o' | b'O') => {
+                    radix = 8;
+                    prefixed = true;
+                }
+                Some(b'0'..=b'9' | b'_') => radix = 8,
+                _ => {}
+            }
+        }
+        if prefixed {
+            self.offset += 2;
+        }
+        let mut digits = 0_usize;
         let mut value = 0_i64;
-        while let Some(digit @ b'0'..=b'9') = self.peek() {
+        while let Some(&byte) = source.get(self.offset) {
+            if byte == b'_' {
+                // PHP 8.4 permits separators strictly between base-valid digits.
+                let next_is_digit = source
+                    .get(self.offset + 1)
+                    .and_then(|&next| (next as char).to_digit(radix))
+                    .is_some();
+                if digits == 0 || !next_is_digit {
+                    return Err(EvalError::Syntax);
+                }
+                self.offset += 1;
+                continue;
+            }
+            let Some(digit) = (byte as char).to_digit(radix) else {
+                break;
+            };
+            digits += 1;
             self.offset += 1;
             value = value
-                .checked_mul(10)
-                .and_then(|n| n.checked_add(i64::from(digit - b'0')))
+                .checked_mul(i64::from(radix))
+                .and_then(|n| n.checked_add(i64::from(digit)))
                 .ok_or(EvalError::Overflow)?;
         }
-        if start == self.offset {
+        if digits == 0 {
             return Err(EvalError::Syntax);
-        }
-        // PHP treats a leading-zero integer as octal; do not silently
-        // interpret it as decimal in this deliberately narrow subset.
-        if self.offset - start > 1 && self.source[start] == b'0' {
-            return Err(EvalError::UnsupportedNumber);
         }
         self.charge()?;
         Ok(value)
@@ -320,6 +357,47 @@ mod tests {
     }
 
     #[test]
+    fn php84_integer_radices_and_separators() {
+        for (literal, expected) in [
+            ("0", 0),
+            ("00", 0),
+            ("01", 1),
+            ("010", 8),
+            ("0_7", 7),
+            ("00_7", 7),
+            ("0o10", 8),
+            ("0O10", 8),
+            ("0x2a", 42),
+            ("0X2A", 42),
+            ("0b1010", 10),
+            ("0B1010", 10),
+            ("1_000", 1000),
+            ("0xF_F", 255),
+            ("0b1_0", 2),
+            ("0o7_7", 63),
+            ("0x7fff_ffff_ffff_ffff", i64::MAX),
+            ("0o777777777777777777777", i64::MAX),
+        ] {
+            assert_eq!(eval(&format!("echo {literal};")), Ok(expected), "{literal}");
+        }
+        assert_eq!(eval("$x=0x2a; $y=0b101; echo $x+$y;"), Ok(47));
+        assert_eq!(eval("echo (0o10+010)*2;"), Ok(32));
+    }
+
+    #[test]
+    fn invalid_integer_literals_fail_without_output() {
+        for literal in [
+            "08", "09", "0_8", "00_8", "0o8", "0b102", "0o78",
+            "0x", "0b", "0o", "0x_1", "0b_1", "0o_1",
+            "1_", "1__0", "0x1_", "0b1_", "0o7_",
+            "0x1g", "0x8000000000000000", "0xffffffffffffffff",
+            "9223372036854775808",
+        ] {
+            assert!(eval(&format!("echo {literal};")).is_err(), "{literal}");
+        }
+    }
+
+    #[test]
     fn variable_binding_order_case_and_reassignment() {
         assert_eq!(eval("<?php $x=7; echo $x;"), Ok(7));
         assert_eq!(eval("<?php $x=7; $x=$x+2; echo $x*3;"), Ok(27));
@@ -350,7 +428,7 @@ mod tests {
 
     #[test]
     fn reject_unsupported_syntax_without_partial_result() {
-        assert_eq!(eval("echo 01;"), Err(EvalError::UnsupportedNumber));
+        assert_eq!(eval("echo 08;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1 / 2;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo $x;"), Err(EvalError::UnknownVariable));
         assert_eq!(eval("echo 1+;"), Err(EvalError::Syntax));

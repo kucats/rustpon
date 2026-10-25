@@ -489,3 +489,20 @@ and variable-assignment programs against actual PHP CLI. This **does not**
 provide general PHP lexing/AST, PHP scope or reference semantics, dynamic
 types, superglobals, arbitrary statements, or Zend/SAPI execution. The
 interpreter has no file/network access and is not connected to the FFI layer.
+
+
+## PHP 8.4 integer literal lexical compatibility
+
+The research-only \`php_eval\` interpreter recognizes bounded PHP 8.4
+integer literal forms: decimal, legacy leading-zero octal, explicit \`0o\`
+octal, \`0b\` binary and \`0x\` hexadecimal (including uppercase prefixes).
+Underscores are accepted **only between digits valid for that radix**.
+Values are checked against signed 64-bit integer bounds before any output.
+Invalid digits, dangling separators and missing digits are rejected.
+
+The differential CLI corpus includes fixed radix edge cases and 192
+deterministically generated radix expressions/assignments, checked against
+the installed PHP 8.4 CLI. PHP itself promotes overflowing integer literals
+to floating-point; this bounded integer-only prototype intentionally rejects
+those cases instead of emulating float promotion. No Zend numeric conversion
+or dynamic typing is implied.
