@@ -6,8 +6,8 @@
 //! is not a client-configurable path or a PHP upload registry.
 
 use super::{
-    INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OUTPUT_LIMIT, PANIC, PARSE_REJECTED,
-    POST_REJECTED, publish,
+    INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OUTPUT_LIMIT, PANIC, PARSE_REJECTED, POST_REJECTED,
+    publish,
 };
 use rustpon::admission::{self, Policy};
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -215,8 +215,8 @@ pub unsafe extern "C" fn rustpon_v1_multipart_upload_copy(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::{BUFFER_TOO_SMALL, OK};
+    use super::*;
     use std::fs;
     use std::os::unix::fs::DirBuilderExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
