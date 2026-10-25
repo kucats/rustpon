@@ -365,3 +365,30 @@ not a PHP `zval`; a native PHP extension must implement integer zvals,
 real temporary-file registration, ownership transfer and a carefully
 bounded C/Rust FFI boundary. The source-level payload quotas and
 post-parse admission controls are unchanged.
+
+
+## Isolated experimental C ABI for URL-encoded POST
+
+The new [`ffi/README.md`](ffi/README.md) describes a separate `rustpon-ffi`
+Rust crate exporting a **versioned C ABI** for one-shot URL-encoded
+form decoding and PHP-style POST JSON serialization. The main parser crate
+continues to forbid `unsafe`; the only raw pointer accesses are audited
+and explicitly documented in the FFI crate.
+
+- Header: `ffi/include/rustpon_ffi.h`
+- Export: `rustpon_v1_form_post_json(input, len, output, cap, required_len)`
+- No Rust-owned output pointer is retained; the caller allocates the buffer.
+- Short buffers produce `RUSTPON_BUFFER_TOO_SMALL` and leave output unchanged.
+- The bridge has independent 256 KiB input and 1 MiB output ceilings,
+  in addition to the core's bounded memory/CPU quotas.
+- Errors and ordinary Rust panics are translated to fixed numeric codes.
+  Invalid pointers, process aborts and Zend `longjmp` are **not** catchable
+  by this bridge.
+- Linux CI compiles a **real C caller**, calls the ABI repeatedly and
+  compares the library's binary-safe POST JSON against PHP 8.4
+  `parse_str()`. Rust tests/formatting/Clippy cover Linux and macOS.
+
+This initial ABI deliberately excludes multipart and uploaded file descriptor
+handoff; native PHP `zval` population and `$_FILES` registration require
+a separate reviewed C/Zend shim. Do not allow `zend_bailout()` or PHP
+callbacks to cross an active Rust FFI frame.
