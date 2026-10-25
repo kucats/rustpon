@@ -407,8 +407,7 @@ mod tests {
 
     #[test]
     fn typed_files_json_preserves_nested_name_keys_and_integer_leaves() {
-        let path = std::env::temp_dir()
-            .join(format!("rustpon-files-typed-{}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("rustpon-files-typed-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let body = b"--b\r\nContent-Disposition: form-data; name=\"f[tmp_name][]\"; filename=\"leaf.bin\"\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n--b--\r\n";
         let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
