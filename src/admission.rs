@@ -54,10 +54,48 @@ pub struct AdmittedRequest {
     metadata: post::PostRequest,
 }
 
+/// Typed view of a successfully admitted upload. Integer fields use a
+/// 64-bit signed representation compatible with 64-bit PHP zend_long.
+/// This is Rust-only metadata; no Zend zval or upload registry is created.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdmittedFile<'a> {
+    pub name: &'a [u8],
+    pub full_path: &'a [u8],
+    pub content_type: &'a [u8],
+    pub size: i64,
+    pub error: i64,
+}
+
 impl AdmittedRequest {
     /// Bounded, path-sanitized $_FILES-shaped metadata projection.
     pub fn metadata(&self) -> &post::PostRequest {
         &self.metadata
+    }
+
+    /// Returns typed upload metadata only for admitted, live file descriptors.
+    /// Replaced, empty, oversized or otherwise rejected indices return None.
+    pub fn accepted_file(&self, index: usize) -> Option<AdmittedFile<'_>> {
+        let part = self.request.parts.get(index)?;
+        let Payload::File(upload) = &part.payload else {
+            return None;
+        };
+        let full_path = &self.request.arena[part.filename.as_ref()?.clone()];
+        let name = full_path
+            .rsplit(|byte| *byte == b'/' || *byte == b'\\\\')
+            .next()
+            .unwrap_or(full_path);
+        let content_type = part
+            .content_type
+            .as_ref()
+            .map(|range| &self.request.arena[range.clone()])
+            .unwrap_or(b"");
+        Some(AdmittedFile {
+            name,
+            full_path,
+            content_type,
+            size: i64::try_from(upload.len()).ok()?,
+            error: 0,
+        })
     }
 
     /// Indices in the original wire request that remain eligible for copying.
@@ -98,7 +136,7 @@ pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Er
     }
     if request.parts().any(|part| {
         part.file_bytes
-            .is_some_and(|len| len > policy.max_file_bytes)
+            .is_some_and(|len| len > policy.max_file_bytes || len > i64::MAX as u64)
     }) {
         return Err(Error::FileTooLarge);
     }
