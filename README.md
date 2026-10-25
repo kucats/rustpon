@@ -187,8 +187,9 @@ The corpus includes deterministic synthetic examples, nested and
 duplicate field names, binary values, upload parts and pseudorandom
 combinations. PHP 8.4 is selected at the major/minor version level in CI.
 The file comparisons currently cover distinct flat file-field names;
-nested `$_FILES` registration, upload error codes, `MAX_FILE_SIZE`,
-session upload progress and PHP/Zend integration remain future work.
+nested `$_FILES` registration and common error codes are covered by later
+sections. Other upload error paths, PHP/Zend integration, and session upload
+progress remain future work.
 
 ## Delimiter CPU-work budget
 
@@ -230,3 +231,27 @@ comparison is restricted to unambiguous, distinct flat file fields because
 the Rust wire IR intentionally keeps overwritten parts. The metadata
 projection has its own byte/capacity limits in addition to the existing
 POST tree limits. These bounds are not an RSS guarantee.
+
+## Ordered MAX_FILE_SIZE handling
+
+The FILES metadata projection now recognizes the form-supplied
+`MAX_FILE_SIZE` field (ASCII case-insensitive) **only when encountered before
+an upload**. It parses a signed decimal prefix using bounded arithmetic.
+When the uploaded payload exceeds a nonzero form limit it represents PHP's
+`UPLOAD_ERR_FORM_SIZE` (2): the submitted `name`/`full_path` remain visible,
+while `type`, `tmp_name` and `size` are empty, empty and zero respectively.
+Empty filenames continue to yield `UPLOAD_ERR_NO_FILE` (4). A subsequent
+`MAX_FILE_SIZE` field updates the limit for later uploads only.
+
+The differential suite now checks these behaviors against the PHP 8.4 SAPI,
+including a threshold-equal upload, an after-upload field, a zero limit,
+negative limit, lower-case field name, nested uploads, and a later limit
+change. The exact reference patch revision is printed in Linux CI.
+
+**Security boundary:** This is a metadata-only compatibility projection.
+The Rust wire Request still owns the staged payload for rejected uploads.
+Consumers must enforce upload acceptance separately before copying staged
+bytes. `MAX_FILE_SIZE` is supplied by the client and cannot replace
+server-controlled `post_max_size`, `upload_max_filesize`, or Rust's resource
+budgets. The remaining PHP upload error states (1, 3, 6, 7, 8), truncation
+behavior and native integer zvals still require implementation and testing.
