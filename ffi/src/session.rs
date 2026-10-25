@@ -206,7 +206,8 @@ unsafe fn get(
             Ok(guard) => guard,
             Err(_) => return PANIC,
         };
-        let Some((_, _, admitted)) = guard.active.iter_mut().find(|(id, _, _)| *id == handle) else {
+        let Some((_, _, admitted)) = guard.active.iter_mut().find(|(id, _, _)| *id == handle)
+        else {
             return INVALID_HANDLE;
         };
         let mut writer = LimitedOutput::new();
@@ -313,7 +314,6 @@ pub extern "C" fn rustpon_v1_multipart_session_close(handle: u64) -> i32 {
     }
 }
 
-
 /// Start one PHP-request-scoped handle group. The returned integer must stay
 /// entirely inside the trusted C/PHP shim. No Rust pointers are exposed.
 ///
@@ -405,7 +405,11 @@ pub extern "C" fn rustpon_v1_scope_end(scope: u64) -> i32 {
             Ok(guard) => guard,
             Err(_) => return PANIC,
         };
-        let Some(index) = guard.scopes.iter().position(|candidate| *candidate == scope) else {
+        let Some(index) = guard
+            .scopes
+            .iter()
+            .position(|candidate| *candidate == scope)
+        else {
             return INVALID_HANDLE;
         };
         guard.scopes.swap_remove(index);
