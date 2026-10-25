@@ -389,7 +389,7 @@ mod tests {
             (
                 b"a=1",
                 Limits {
-                    retained_bytes: 2,
+                    retained_bytes: 1,
                     ..Limits::default()
                 },
                 Limit::RetainedBytes,
