@@ -10,6 +10,8 @@ use std::io::{self, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 
+mod multipart;
+
 const ABI_VERSION: u32 = 0x0001_0000;
 const MAX_INPUT: usize = 256 * 1024;
 const MAX_OUTPUT: usize = 1024 * 1024;
@@ -61,6 +63,34 @@ fn parse(bytes: &[u8]) -> Result<Vec<u8>, i32> {
     Ok(writer.bytes)
 }
 
+/// Copies only a complete output. A failed buffer query never writes to the
+/// output, and only BUFFER_TOO_SMALL reports a nonzero needed length.
+/// Caller validates that required_len is writable and disjoint from output.
+unsafe fn publish(
+    bytes: &[u8],
+    output: *mut u8,
+    output_capacity: usize,
+    required_len: *mut usize,
+) -> i32 {
+    if output_capacity < bytes.len() {
+        // SAFETY: Guaranteed writable by the external caller contract.
+        unsafe { ptr::write(required_len, bytes.len()) };
+        return BUFFER_TOO_SMALL;
+    }
+    if bytes.is_empty() {
+        return OK;
+    }
+    if output.is_null() {
+        return INVALID_ARGUMENT;
+    }
+    // SAFETY: C caller provides output_capacity live writable bytes, disjoint
+    // from local bytes. We checked bytes.len() <= output_capacity.
+    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), output, bytes.len()) };
+    // SAFETY: C caller provides disjoint, writable required_len.
+    unsafe { ptr::write(required_len, bytes.len()) };
+    OK
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn rustpon_ffi_abi_version() -> u32 {
     ABI_VERSION
@@ -107,18 +137,9 @@ pub unsafe extern "C" fn rustpon_v1_form_post_json(
             Ok(encoded) => encoded,
             Err(error) => return error,
         };
-        // SAFETY: Caller guarantees the required_len pointer is writable.
-        unsafe { ptr::write(required_len, encoded.len()) };
-        if output_capacity < encoded.len() {
-            return BUFFER_TOO_SMALL;
-        }
-        if output.is_null() {
-            return INVALID_ARGUMENT;
-        }
-        // SAFETY: Caller provides output_capacity writable bytes disjoint
-        // from the local Vec and input. We validated the written length.
-        unsafe { ptr::copy_nonoverlapping(encoded.as_ptr(), output, encoded.len()) };
-        OK
+        // SAFETY: All C pointers were validated against the caller's
+        // non-overlapping readable/writable buffer contract above.
+        unsafe { publish(&encoded, output, output_capacity, required_len) }
     })) {
         Ok(code) => code,
         Err(_) => PANIC,
