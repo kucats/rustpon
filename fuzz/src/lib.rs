@@ -106,10 +106,8 @@ impl Spool {
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        let path = std::env::temp_dir().join(format!(
-            "rustpon-fuzz-{}-{nonce}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rustpon-fuzz-{}-{nonce}", std::process::id()));
         fs::DirBuilder::new()
             .mode(0o700)
             .create(&path)
@@ -153,12 +151,7 @@ pub fn exercise_multipart(data: &[u8]) {
     if data.is_empty() || data.len() > MAX_INPUT + 1 {
         return;
     }
-    const BOUNDARIES: [&[u8]; 4] = [
-        b"b",
-        b"AaB03x",
-        b"----rustpon",
-        b"long-boundary-0123456789",
-    ];
+    const BOUNDARIES: [&[u8]; 4] = [b"b", b"AaB03x", b"----rustpon", b"long-boundary-0123456789"];
     let boundary = BOUNDARIES[(data[0] % 4) as usize];
     let body = &data[1..];
     let spool = Spool::new();
@@ -168,13 +161,8 @@ pub fn exercise_multipart(data: &[u8]) {
         equivalent(&expected, &multipart_chunks(body, boundary, size, &spool));
         spool.assert_empty();
     }
-    let reader = rustpon::parse_reader(
-        &mut Cursor::new(body),
-        boundary,
-        limits(),
-        spool.path(),
-    )
-    .map(snapshot);
+    let reader = rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
+        .map(snapshot);
     equivalent(&expected, &reader);
     spool.assert_empty();
 }
