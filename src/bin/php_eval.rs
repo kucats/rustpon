@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded local integer assignments followed by one echo;
+//! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean values, unary +/-, parentheses, arithmetic, integer powers and comparisons.
 //! Division is supported only when its result is an exact i64.

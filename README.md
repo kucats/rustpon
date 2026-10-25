@@ -470,7 +470,7 @@ security review.
 ## Bounded scalar variables in the research PHP evaluator
 
 The `php_eval` binary now accepts up to 64 assignments to at most 32
-case-sensitive, ASCII-named local integer variables before its one final
+case-sensitive, ASCII-named local integer/boolean variables before its one final
 `echo` statement. Expressions can read previously initialized variables,
 use integer unary `+`/`-`, parentheses and `+`/`-`/`*`, and reassign
 existing variables. Each name is capped at 64 bytes, while the existing source,
@@ -540,8 +540,9 @@ printf '%s' '<?php $x=3; $y=5; echo $x * 2 >= $y;' |
 # stdout: 1
 ```
 
-Comparisons inside parentheses or assignments, comparison chains, strings,
-floats, dynamic type coercion and control-flow conditions are *not supported*.
+Comparisons inside parentheses and assignments are now supported for integer and
+boolean values. Comparison chains, strings, floats, general dynamic type
+coercion and control-flow conditions remain *unsupported*.
 These forms fail closed without output. PHP CLI differential tests cover
 both truth values, precedence, signed integer boundaries and deterministic
 generated expressions. No interpreter is connected to PHP-FPM or production

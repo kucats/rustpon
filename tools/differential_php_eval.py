@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic PHP CLI oracle for the deliberately narrow php_eval prototype.
 
-Only supported integer expressions, exact division and signed remainder are compared. Rejections are asserted
+Only supported integer/boolean expressions, exact division and signed remainder are compared. Rejections are asserted
 separately; this is not evidence of general PHP language compatibility.
 """
 import argparse
