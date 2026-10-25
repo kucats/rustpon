@@ -820,6 +820,9 @@ fn interrupted_reader_has_finite_budget_and_releases_uploads() {
         Error::Io(io::ErrorKind::Interrupted)
     );
     spool.empty();
-    assert_eq!(snapshot(parse(&bytes, Limits::default(), &spool).unwrap()), expected);
+    assert_eq!(
+        snapshot(parse(&bytes, Limits::default(), &spool).unwrap()),
+        expected
+    );
     spool.empty();
 }
