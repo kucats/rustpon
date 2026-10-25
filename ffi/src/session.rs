@@ -4,10 +4,13 @@
 //! AdmittedRequest, including its anonymous upload FDs, until explicit close.
 //! The registry serializes operations and permits at most eight live sessions.
 
-use super::{INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OUTPUT_LIMIT, PANIC, PARSE_REJECTED, POST_REJECTED, publish};
+use super::{
+    INVALID_ARGUMENT, LimitedOutput, MAX_INPUT, OUTPUT_LIMIT, PANIC, PARSE_REJECTED, POST_REJECTED,
+    publish,
+};
 use rustpon::admission::{self, AdmittedRequest, Policy};
-use std::path::Path;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::Path;
 use std::ptr;
 use std::sync::{Mutex, OnceLock};
 
@@ -25,7 +28,10 @@ struct Registry {
 
 impl Registry {
     fn new() -> Self {
-        Self { next: 1, active: Vec::new() }
+        Self {
+            next: 1,
+            active: Vec::new(),
+        }
     }
 }
 
@@ -45,8 +51,12 @@ fn parse_admitted(boundary: &[u8], body: &[u8], spool: &Path) -> Result<Admitted
     let raw = parser.finish().map_err(|_| PARSE_REJECTED)?;
     admission::admit(
         raw,
-        Policy { max_body_bytes: MAX_INPUT as u64, ..Policy::default() },
-    ).map_err(|_| POST_REJECTED)
+        Policy {
+            max_body_bytes: MAX_INPUT as u64,
+            ..Policy::default()
+        },
+    )
+    .map_err(|_| POST_REJECTED)
 }
 
 /// Open a bounded, admitted multipart session.
@@ -68,18 +78,27 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_open(
     out_handle: *mut u64,
 ) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| {
-        if out_handle.is_null() { return INVALID_ARGUMENT; }
+        if out_handle.is_null() {
+            return INVALID_ARGUMENT;
+        }
         // SAFETY: caller guarantees out_handle is aligned and writable.
         unsafe { ptr::write(out_handle, 0) };
-        if boundary.is_null() || boundary_len == 0 || boundary_len > MAX_BOUNDARY
-            || (body.is_null() && body_len != 0) || body_len > MAX_INPUT
-            || spool_dir.is_null() || spool_len == 0 || spool_len > MAX_SPOOL_PATH
+        if boundary.is_null()
+            || boundary_len == 0
+            || boundary_len > MAX_BOUNDARY
+            || (body.is_null() && body_len != 0)
+            || body_len > MAX_INPUT
+            || spool_dir.is_null()
+            || spool_len == 0
+            || spool_len > MAX_SPOOL_PATH
         {
             return INVALID_ARGUMENT;
         }
         // SAFETY: all input spans are guaranteed live, disjoint from out_handle.
         let boundary = unsafe { std::slice::from_raw_parts(boundary, boundary_len) };
-        let body = if body_len == 0 { &[][..] } else {
+        let body = if body_len == 0 {
+            &[][..]
+        } else {
             // SAFETY: caller provides body_len valid bytes.
             unsafe { std::slice::from_raw_parts(body, body_len) }
         };
@@ -105,7 +124,9 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_open(
             Ok(admitted) => admitted,
             Err(status) => return status,
         };
-        if guard.active.try_reserve(1).is_err() { return POST_REJECTED; }
+        if guard.active.try_reserve(1).is_err() {
+            return POST_REJECTED;
+        }
         let handle = guard.next;
         guard.next += 1;
         guard.active.push((handle, admitted));
@@ -132,7 +153,9 @@ unsafe fn get(
     mode: Mode,
 ) -> i32 {
     match catch_unwind(AssertUnwindSafe(|| {
-        if required_len.is_null() { return INVALID_ARGUMENT; }
+        if required_len.is_null() {
+            return INVALID_ARGUMENT;
+        }
         // SAFETY: caller guarantees disjoint, writable size_t.
         unsafe { ptr::write(required_len, 0) };
         if handle == 0 || (output.is_null() && output_capacity != 0) {
@@ -148,12 +171,18 @@ unsafe fn get(
         let mut writer = LimitedOutput::new();
         match mode {
             Mode::Metadata => {
-                if admitted.metadata().write_php_files_json(&mut writer).is_err() {
+                if admitted
+                    .metadata()
+                    .write_php_files_json(&mut writer)
+                    .is_err()
+                {
                     return OUTPUT_LIMIT;
                 }
             }
             Mode::Upload(index) => {
-                if admitted.accepted_file(index).is_none() { return NOT_ADMITTED; }
+                if admitted.accepted_file(index).is_none() {
+                    return NOT_ADMITTED;
+                }
                 match admitted.copy_accepted(index, &mut writer) {
                     Ok(Some(_)) => (),
                     Ok(None) => return NOT_ADMITTED,
@@ -183,7 +212,15 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_files_json(
     required_len: *mut usize,
 ) -> i32 {
     // SAFETY: forwarded unchanged under the external pointer contract.
-    unsafe { get(handle, output, output_capacity, required_len, Mode::Metadata) }
+    unsafe {
+        get(
+            handle,
+            output,
+            output_capacity,
+            required_len,
+            Mode::Metadata,
+        )
+    }
 }
 
 /// Copy a previously admitted file by its original wire part index.
@@ -200,7 +237,15 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_upload_copy(
     required_len: *mut usize,
 ) -> i32 {
     // SAFETY: forwarded unchanged under the external pointer contract.
-    unsafe { get(handle, output, output_capacity, required_len, Mode::Upload(wire_part_index)) }
+    unsafe {
+        get(
+            handle,
+            output,
+            output_capacity,
+            required_len,
+            Mode::Upload(wire_part_index),
+        )
+    }
 }
 
 /// Close exactly once; a second or stale close returns INVALID_HANDLE.
@@ -208,7 +253,9 @@ pub unsafe extern "C" fn rustpon_v1_multipart_session_upload_copy(
 #[unsafe(no_mangle)]
 pub extern "C" fn rustpon_v1_multipart_session_close(handle: u64) -> i32 {
     match catch_unwind(|| {
-        if handle == 0 { return INVALID_HANDLE; }
+        if handle == 0 {
+            return INVALID_HANDLE;
+        }
         let mut guard = match registry().lock() {
             Ok(guard) => guard,
             Err(_) => return PANIC,
