@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Deterministic PHP CLI oracle for the deliberately narrow php_eval prototype.
+
+Only supported integer expressions are compared. Rejections are asserted
+separately; this is not evidence of general PHP language compatibility.
+"""
+import argparse
+import random
+import subprocess
+import sys
+from pathlib import Path
+
+
+FIXED = [
+    "0", "1", "42", "-1", "+3", "1+2*3", "(1+2)*3",
+    "8-3-2", "2*-3+4", "-(-5)", "1--2",
+    "9223372036854775807", "0-9223372036854775807",
+    "((3))", "2 * (3 + (4 - 5))", "3+-2",
+]
+
+
+def generated(rng, depth):
+    if depth == 0:
+        return str(rng.randrange(0, 10))
+    if rng.randrange(4) == 0:
+        return rng.choice(["+", "-"]) + "(" + generated(rng, depth - 1) + ")"
+    lhs = generated(rng, depth - 1)
+    rhs = generated(rng, depth - 1)
+    return "(" + lhs + rng.choice(["+", "-", "*"]) + rhs + ")"
+
+
+def execute(command, code):
+    return subprocess.run(command, input=code, capture_output=True, timeout=10, check=False)
+
+
+def main():
+    cli = argparse.ArgumentParser()
+    cli.add_argument("--rust-bin", type=Path, required=True)
+    cli.add_argument("--php-bin", default="php")
+    args = cli.parse_args()
+
+    rng = random.Random(0x52555354504F4E)
+    cases = FIXED + [generated(rng, rng.randrange(1, 5)) for _ in range(128)]
+    failures = 0
+    for index, expr in enumerate(cases):
+        code = ("<?php echo " + expr + ";").encode("ascii")
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL case={index} expr={expr!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
+    invalid = [
+        b"<?php echo 01;",
+        b"<?php echo 1/2;",
+        b"<?php echo $x;",
+        b"<?php echo 1+;",
+        b"<?php echo 1; echo 2;",
+        b"<?php echo 9223372036854775807+1;",
+        b"<?php echo " + b"(" * 33 + b"1" + b")" * 33 + b";",
+        b"<?php echo " + b"+".join([b"1"] * 130) + b";",
+        b"<?php echo 1;" + b" " * 4096,
+    ]
+    for index, code in enumerate(invalid):
+        rust = execute([str(args.rust_bin)], code)
+        if rust.returncode == 0 or rust.stdout:
+            failures += 1
+            print(
+                f"FAIL invalid={index}: status={rust.returncode} stdout={rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    print(
+        f"PHP CLI integer-expression differential: {len(cases)} compatible "
+        f"cases, {len(invalid)} strict rejections, {failures} failures"
+    )
+    return int(failures != 0)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
