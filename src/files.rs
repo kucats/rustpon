@@ -323,6 +323,59 @@ mod tests {
     }
 
     #[test]
+    fn form_limit_parsing_matches_signed_decimal_prefixes() {
+        assert_eq!(parse_form_max(b""), 0);
+        assert_eq!(parse_form_max(b"invalid"), 0);
+        assert_eq!(parse_form_max(b" +0002suffix"), 2);
+        assert_eq!(parse_form_max(b"\t-1junk"), -1);
+        assert_eq!(parse_form_max(b"0"), 0);
+        assert_eq!(parse_form_max(b"9223372036854775808"), i64::MAX);
+        assert_eq!(parse_form_max(b"-9223372036854775809"), i64::MIN);
+    }
+
+    #[test]
+    fn max_file_size_is_ordered_and_does_not_take_upload_ownership() {
+        let path =
+            std::env::temp_dir().join(format!("rustpon-max-form-{}", std::process::id()));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let body = b"--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n2\r\n--b\r\nContent-Disposition: form-data; name=f; filename=x.txt\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n3\r\n--b\r\nContent-Disposition: form-data; name=g; filename=y.txt\r\nContent-Type: application/octet-stream\r\n\r\nabc\r\n--b--\r\n";
+        let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
+        parser.feed(body).unwrap();
+        let mut request = parser.finish().unwrap();
+        let projection = project(&request, Limits::default()).unwrap();
+        let pairs: Vec<_> = projection
+            .wire()
+            .parts()
+            .map(|part| (part.name.to_vec(), part.value.unwrap().to_vec()))
+            .collect();
+        for (name, value) in [
+            (b"f[error]".as_slice(), b"2".as_slice()),
+            (b"f[size]", b"0"),
+            (b"f[type]", b""),
+            (b"f[tmp_name]", b""),
+            (b"f[name]", b"x.txt"),
+            (b"g[error]", b"0"),
+            (b"g[size]", b"3"),
+            (b"g[type]", b"application/octet-stream"),
+            (b"g[tmp_name]", STAGED_SENTINEL),
+        ] {
+            assert!(
+                pairs.iter().any(|(key, data)| key == name && data == value),
+                "missing metadata key {name:?}"
+            );
+        }
+        // The wire request still owns both upload FDs. Policy enforcement at
+        // a PHP/SAPI handoff must not mistake staged bytes for accepted files.
+        let mut staged = Vec::new();
+        request.upload_mut(1).unwrap().copy_to(&mut staged).unwrap();
+        assert_eq!(staged, b"abc");
+        drop(projection);
+        drop(request);
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
     fn metadata_and_projection_budgets_are_exact() {
         let path =
             std::env::temp_dir().join(format!("rustpon-files-budget-{}", std::process::id()));
