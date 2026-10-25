@@ -81,7 +81,7 @@ impl AdmittedRequest {
         };
         let full_path = &self.request.arena[part.filename.as_ref()?.clone()];
         let name = full_path
-            .rsplit(|byte| *byte == b'/' || *byte == b'\\\\')
+            .rsplit(|byte| *byte == b'/' || *byte == b'\\')
             .next()
             .unwrap_or(full_path);
         let content_type = part
