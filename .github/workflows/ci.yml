@@ -53,6 +53,10 @@ jobs:
           php -l tools/php_projection.php
           cargo build --offline --locked --bin urlencoded
           python3 tools/differential_urlencoded.py --rust-bin target/debug/urlencoded
+      - name: Compare real FFI ABI with PHP 8.4 parse_str (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_ffi.py --library ffi/target/debug/librustpon_ffi.so
       - name: Compare with PHP 8.4 multipart SAPI (Linux)
         if: runner.os == 'Linux'
         run: |
