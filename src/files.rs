@@ -204,7 +204,7 @@ fn map_wire_error(error: crate::Error) -> Error {
 /// C strtoll-like conversion of the form field: first signed decimal
 /// prefix wins, leading ASCII whitespace allowed, overflow saturates.
 /// A zero value disables the form advisory limit, just as PHP does.
-fn parse_form_max(bytes: &[u8]) -> i64 {
+pub(crate) fn parse_form_max(bytes: &[u8]) -> i64 {
     let mut tail = bytes.trim_ascii_start();
     let negative = tail.starts_with(b"-");
     if negative || tail.starts_with(b"+") {
