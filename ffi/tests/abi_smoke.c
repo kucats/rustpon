@@ -2,6 +2,7 @@
 /* C caller smoke test: no PHP linked or callbacks. Synthetic data only. */
 #include "rustpon_ffi.h"
 #include <assert.h>
+#include <dirent.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -99,6 +100,20 @@ static void multipart_smoke(void) {
     assert(rmdir(spool) == 0);
 }
 
+static size_t fd_count(void) {
+    DIR *dir = opendir("/proc/self/fd");
+    assert(dir != NULL);
+    size_t count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
+            ++count;
+        }
+    }
+    assert(closedir(dir) == 0);
+    return count;
+}
+
 static void stateful_multipart_smoke(void) {
     char spool[] = "/tmp/rustpon-ffi-session-XXXXXX";
     assert(mkdtemp(spool) != NULL);
@@ -106,12 +121,14 @@ static void stateful_multipart_smoke(void) {
         "--b\r\nContent-Disposition: form-data; name=\"f\"; filename=\"old.bin\"\r\n\r\nOLD\r\n"
         "--b\r\nContent-Disposition: form-data; name=\"f\"; filename=\"new.bin\"\r\n\r\nACCEPTED\r\n"
         "--b--\r\n";
+    size_t baseline_fds = fd_count();
     uint64_t handles[8] = {0};
     for (size_t i = 0; i < 8; ++i) {
         assert(rustpon_v1_multipart_session_open(
             (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
             (const uint8_t *)spool, strlen(spool), &handles[i]) == RUSTPON_OK);
         assert(handles[i] > 0);
+        assert(fd_count() == baseline_fds + i + 1);
     }
     uint64_t excess = UINT64_MAX;
     assert(rustpon_v1_multipart_session_open(
@@ -140,6 +157,7 @@ static void stateful_multipart_smoke(void) {
             handles[i], NULL, 0, &got) == RUSTPON_BUFFER_TOO_SMALL);
         assert(got > 0);
         assert(rustpon_v1_multipart_session_close(handles[i]) == RUSTPON_OK);
+        assert(fd_count() == baseline_fds + 7 - i);
         assert(rustpon_v1_multipart_session_close(handles[i]) == RUSTPON_INVALID_HANDLE);
         assert(rustpon_v1_multipart_session_upload_copy(
             handles[i], 1, buffer, sizeof(buffer), &got) == RUSTPON_INVALID_HANDLE);
@@ -151,7 +169,9 @@ static void stateful_multipart_smoke(void) {
         (const uint8_t *)"b", 1, entity, sizeof(entity) - 1,
         (const uint8_t *)spool, strlen(spool), &renewed) == RUSTPON_OK);
     assert(renewed > handles[7]);
+    assert(fd_count() == baseline_fds + 1);
     assert(rustpon_v1_multipart_session_close(renewed) == RUSTPON_OK);
+    assert(fd_count() == baseline_fds);
     assert(rmdir(spool) == 0);
 }
 
