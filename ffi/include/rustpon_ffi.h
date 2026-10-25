@@ -118,6 +118,28 @@ int32_t rustpon_v1_multipart_session_upload_copy(
 );
 int32_t rustpon_v1_multipart_session_close(uint64_t handle);
 
+/*
+ * Request scope for PHP RINIT/RSHUTDOWN or equivalent.
+ * `scope_begin` returns a process-local integer scope ID.
+ * `session_open_scoped` binds an admitted session to that scope.
+ * `scope_end` atomically invalidates all its sessions and closes the FDs.
+ * Other scopes and unscoped legacy sessions are unaffected.
+ * Unknown or already ended scopes return RUSTPON_INVALID_HANDLE (8).
+ * At most eight simultaneous scopes and eight sessions per process.
+ * Successful scope_begin MUST have exactly one matching scope_end in the
+ * PHP request-shutdown hook, including post-exception/bailout requests.
+ * Scope IDs are not access controls; keep them within the trusted C shim.
+ */
+int32_t rustpon_v1_scope_begin(uint64_t *out_scope);
+int32_t rustpon_v1_multipart_session_open_scoped(
+    uint64_t scope,
+    const uint8_t *boundary, size_t boundary_len,
+    const uint8_t *body, size_t body_len,
+    const uint8_t *spool_dir, size_t spool_len,
+    uint64_t *out_handle
+);
+int32_t rustpon_v1_scope_end(uint64_t scope);
+
 #ifdef __cplusplus
 }
 #endif
