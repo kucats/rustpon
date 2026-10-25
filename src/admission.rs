@@ -309,6 +309,51 @@ mod tests {
     }
 
     #[test]
+    fn only_php_visible_uploads_survive_overwrites_and_nested_replacements() {
+        let spool = Spool::new();
+        let cases: &[(&str, &[&[u8]], &[usize])] = &[
+            ("flat-duplicate", &[b"f", b"f"], &[1]),
+            ("nested-to-flat", &[b"f[x]", b"f"], &[1]),
+            ("flat-to-nested", &[b"f", b"f[x]"], &[1]),
+            ("normalized-roots", &[b"a.b", b"a_b"], &[1]),
+            ("same-index", &[b"f[0]", b"f[0]"], &[1]),
+            ("append-array", &[b"f[]", b"f[]"], &[0, 1]),
+            ("distinct-nested", &[b"f[x]", b"f[y]"], &[0, 1]),
+            ("string-number", &[b"f[0]", b"f[00]"], &[0, 1]),
+        ];
+        for &(label, names, survivors) in cases {
+            let mut data = Vec::new();
+            for (index, name) in names.iter().enumerate() {
+                data.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"");
+                data.extend_from_slice(name);
+                data.extend_from_slice(b"\"; filename=\"sample.bin\"\r\n\r\n");
+                data.extend_from_slice(if index == 0 { b"first" } else { b"second" });
+                data.extend_from_slice(b"\r\n");
+            }
+            data.extend_from_slice(b"--b--\r\n");
+            let mut admitted = admit(spool.parse(&data), Policy::default()).unwrap();
+            assert_eq!(
+                admitted.accepted_indices().collect::<Vec<_>>(),
+                survivors,
+                "{label}"
+            );
+            for index in 0..names.len() {
+                let mut content = Vec::new();
+                let copied = admitted.copy_accepted(index, &mut content).unwrap();
+                if survivors.contains(&index) {
+                    assert_eq!(copied, Some(content.len() as u64), "{label}");
+                    assert_eq!(content, if index == 0 { b"first" } else { b"second" }, "{label}");
+                } else {
+                    assert_eq!(copied, None, "{label}");
+                    assert!(content.is_empty(), "{label}");
+                }
+            }
+            drop(admitted);
+            spool.empty();
+        }
+    }
+
+    #[test]
     fn repeated_requests_do_not_retain_rejected_descriptors() {
         let spool = Spool::new();
         for _ in 0..32 {
