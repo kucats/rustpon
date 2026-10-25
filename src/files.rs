@@ -242,7 +242,10 @@ mod tests {
             file_bytes: Some(123),
         };
         assert_eq!(value_for(&view, b"name").as_slice(), b"leaf.bin");
-        assert_eq!(value_for(&view, b"full_path").as_slice(), b"folder/leaf.bin");
+        assert_eq!(
+            value_for(&view, b"full_path").as_slice(),
+            b"folder/leaf.bin"
+        );
         let windows = crate::PartView {
             filename: Some(b"C:\\fakepath\\leaf.bin"),
             ..view
