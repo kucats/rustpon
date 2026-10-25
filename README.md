@@ -439,5 +439,29 @@ stateful upload copies/rejections with PHP 8.4 SAPI. A real C caller
 verifies the eight-handle cap, invalid/duplicate close rejection,
 and OS-level FD counts returning to their baseline on close.
 
-This is experimental and not yet a PHP extension or complete
-Zend upload-registry integration. See [`ffi/README.md`](ffi/README.md).
+The optional native PHP 8.4 lifecycle probe is now implemented,
+but it is not a production SAPI parser or complete Zend upload-registry
+integration. See [`ffi/README.md`](ffi/README.md).
+
+
+## Native PHP 8.4 request-shutdown lifecycle probe
+
+The experimental [PHP module](ffi/php_probe/README.md) now builds against
+PHP 8.4 headers and runs inside **actual PHP RINIT/RSHUTDOWN hooks**.
+The module begins one scoped Rust handle group on every PHP request,
+then closes all its admitted multipart sessions at RSHUTDOWN. It never
+exposes Rust handles or lets PHP userland select the upload spool path.
+
+The CI suite reuses **one PHP CLI HTTP server process for 32 requests**,
+including normal return, `exit`, multiple opens and an unhandled
+exception. After each HTTP request, the test checks the OS-level file
+descriptor count returned to its initial value. The C ABI suite also
+simulates 48 C-only bailout paths and verifies unrelated scopes survive
+bulk cleanup.
+
+**Scope:** This is a research/debug extension, not a replacement PHP
+request handler. It does not produce native `$_POST` or `$_FILES` Zend
+arrays, register/move uploads, or exercise an actual PHP-FPM FastCGI worker.
+The follow-up production gates remain PHP-FPM lifecycle tests, protocol
+integration, concurrency and resource fault campaigns, and independent
+security review.
