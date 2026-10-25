@@ -331,3 +331,37 @@ normalization and repeated `[]` appends. The corresponding Rust tests
 verify that rejected indices cannot be copied and their descriptors are
 closed. A future SAPI adapter must bind the physical file to the finalized
 PHP metadata index, and enforce its own ownership and move/rename policy.
+
+
+## Typed PHP FILES JSON projection
+
+The multipart `--files` and `--admit` CLI modes now emit both
+`files_tree` (legacy byte-string values) and `files_tree_typed`.
+The typed output preserves the key type and insertion order, while
+encoding `$_FILES` `error` and `size` as signed integer leaves of the
+form `["i","3"]`. String leaves continue to use hexadecimal bytes
+(`["s","..."]`). Numeric conversion checks that the synthesized leaf
+is a valid signed 64-bit integer; invalid conversion returns an I/O
+error rather than publishing a forged number.
+
+The Rust API is `PostRequest::write_php_files_json(writer)`, intended
+**only** for `files::project` or admitted FILES metadata. It does not
+change the internal POST arena, allocate Zend values, or implement a
+native PHP `zval` bridge.
+
+The HTTP differential suite now compares both JSON representations
+with PHP 8.4's actual integer/string `$_FILES` leaf types, using a
+path-sanitizing PHP endpoint. A PHP field named e.g.
+`f[tmp_name]` is distinguished from the real `tmp_name` metadata
+column by its structural level. Additional regression coverage includes
+nested `error`/`size` field names, zero-byte uploads and a Windows
+backslash-containing filename. The parser preserves quoted filename
+backslashes in accordance with PHP's observed multipart SAPI behavior;
+this changes the older strict-parser test expectation for escaped
+backslashes in filenames while leaving field-name processing separate.
+
+**Still outstanding:** typed tagged JSON is a reference representation,
+not a PHP `zval`; a native PHP extension must implement integer zvals,
+real temporary-file registration, ownership transfer and a carefully
+bounded C/Rust FFI boundary. The source-level payload quotas and
+post-parse admission controls are unchanged.
