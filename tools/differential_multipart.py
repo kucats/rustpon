@@ -188,6 +188,9 @@ def main():
                     "max-case-insensitive": [],
                     "max-nested": [],
                     "max-changed": [3],
+                    "max-collision-recovery": [3],
+                    "file-zero-overwritten": [1],
+                    "file-append-zero-binary": [0, 1],
                     "file-overwrite": [1],
                     "file-nested-then-flat": [1],
                     "file-flat-then-nested": [1],
@@ -210,6 +213,7 @@ def main():
                 # PHP FILES tree equality above covers duplicate-name semantics.
                 # Wire IR also retains uploads rejected by MAX_FILE_SIZE.
                 if php["files"] and label not in ("file-overwrite", "max-changed",
+                        "max-collision-recovery", "file-zero-overwritten",
                         "file-nested-then-flat", "file-flat-then-nested",
                         "file-same-index", "file-normalized-root"):
                     raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
