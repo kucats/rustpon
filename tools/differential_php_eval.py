@@ -114,7 +114,27 @@ def main():
         dividend = rng.randrange(-1000, 1001)
         divisor = rng.choice([n for n in range(-20, 21) if n])
         arithmetic_programs.append(f"$x={dividend}; $y={divisor}; echo $x%$y;")
-    cases = [f"echo {expr};" for expr in expressions] + variable_programs + radix_programs + arithmetic_programs
+    comparisons = [
+        "echo 1<2;", "echo 1>2;", "echo 2<=2;", "echo 2>=3;",
+        "echo 1==1;", "echo 1===1;", "echo 1!==1;", "echo 1!=2;",
+        "echo 1<>2;", "echo 1+2*3==7;", "echo (2+3)*4>=19;",
+        "echo 0x7fff_ffff_ffff_ffff>0;",
+        "echo (0-9223372036854775807-1)<0;",
+        "$x=4; $y=5; echo $x+1==($y*1);",
+        "$x=4; $y=5; echo $x>$y;",
+    ]
+    comparison_ops = ["<", "<=", ">", ">=", "==", "!=", "===", "!==", "<>"]
+    for _ in range(192):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        op = rng.choice(comparison_ops)
+        comparisons.append(
+            f"$x={left}; $y={right}; echo ($x+1) {op} ($y*2);"
+        )
+    cases = (
+        [f"echo {expr};" for expr in expressions]
+        + variable_programs + radix_programs + arithmetic_programs + comparisons
+    )
     failures = 0
     for index, program in enumerate(cases):
         code = ("<?php " + program).encode("ascii")
@@ -155,6 +175,11 @@ def main():
         b"<?php echo 1/2;",
         b"<?php echo -3/2;",
         b"<?php echo 1/0;",
+        b"<?php echo 1<;",
+        b"<?php echo 1!==;",
+        b"<?php echo 1<2<3;",
+        b"<?php echo (1<2);",
+        b"<?php $x=1<2; echo $x;",
         b"<?php echo 1%0;",
         b"<?php echo (0-9223372036854775807-1)/-1;",
         b"<?php echo $x;",
@@ -186,7 +211,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/variable differential: {len(cases)} compatible "
+        f"PHP CLI integer/variable/comparison differential: {len(cases)} compatible "
         f"cases, {len(invalid)} strict rejections, {failures} failures"
     )
     return int(failures != 0)

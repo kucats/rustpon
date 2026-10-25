@@ -523,3 +523,26 @@ The PHP CLI oracle exercises deterministic positive/negative quotient and
 remainder cases, including the minimum signed 64-bit integer boundary, plus
 fractional/zero-divisor rejections. These tests do not implement PHP floating
 point, exceptions, typed zvals or full PHP runtime error reporting.
+
+## Bounded PHP 8.4 integer comparisons in final echo
+
+The research-only `php_eval` command supports one final integer comparison
+using `<`, `<=`, `>`, `>=`, `==`, `!=`, `<>`, `===`, or `!==`.
+Both operands use the existing exact, checked 64-bit integer arithmetic grammar,
+including previously assigned integer variables. Integer operands make PHP loose
+and strict equality equivalent within **this deliberately narrow subset**.
+Comparison has lower precedence than arithmetic. Echo renders true as `1`
+and false as **empty stdout**, matching PHP CLI rather than emitting `0`.
+
+```sh
+printf '%s' '<?php $x=3; $y=5; echo $x * 2 >= $y;' |
+  cargo run --offline --locked --bin php_eval
+# stdout: 1
+```
+
+Comparisons inside parentheses or assignments, comparison chains, strings,
+floats, dynamic type coercion and control-flow conditions are *not supported*.
+These forms fail closed without output. PHP CLI differential tests cover
+both truth values, precedence, signed integer boundaries and deterministic
+generated expressions. No interpreter is connected to PHP-FPM or production
+Zend/SAPI request handling.

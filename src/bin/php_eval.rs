@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded local integer assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, unary +/-, parentheses and +, -, *, /, %.
+//! variables, unary +/-, parentheses, arithmetic and integer comparisons.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -30,6 +30,16 @@ enum EvalError {
     UnknownVariable,
     VariableLimit,
     AssignmentLimit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Comparison {
+    Equal,
+    NotEqual,
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
 }
 
 struct Parser<'a> {
@@ -296,7 +306,46 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
-    fn evaluate(&mut self) -> Result<i64, EvalError> {
+    // Comparison operands use the existing checked-integer arithmetic grammar.
+    // This slice deliberately permits a single comparison only in the final
+    // echo expression; assignments and parenthesized comparisons remain out of
+    // scope until the value model can represent booleans independently.
+    fn comparison(&mut self) -> Result<(i64, bool), EvalError> {
+        let lhs = self.additive(0)?;
+        self.skip_space();
+        let remaining = &self.source[self.offset..];
+        let operators: &[(&[u8], Comparison)] = &[
+            (b"===", Comparison::Equal),
+            (b"!==", Comparison::NotEqual),
+            (b"<=", Comparison::LessEqual),
+            (b">=", Comparison::GreaterEqual),
+            (b"==", Comparison::Equal),
+            (b"!=", Comparison::NotEqual),
+            (b"<>", Comparison::NotEqual),
+            (b"<", Comparison::Less),
+            (b">", Comparison::Greater),
+        ];
+        let Some((bytes, operator)) = operators
+            .iter()
+            .find(|(bytes, _)| remaining.starts_with(bytes))
+        else {
+            return Ok((lhs, false));
+        };
+        self.offset += bytes.len();
+        self.charge()?;
+        let rhs = self.additive(0)?;
+        let result = match operator {
+            Comparison::Equal => lhs == rhs,
+            Comparison::NotEqual => lhs != rhs,
+            Comparison::Less => lhs < rhs,
+            Comparison::LessEqual => lhs <= rhs,
+            Comparison::Greater => lhs > rhs,
+            Comparison::GreaterEqual => lhs >= rhs,
+        };
+        Ok((i64::from(result), true))
+    }
+
+    fn evaluate(&mut self) -> Result<(i64, bool), EvalError> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
         }
@@ -332,7 +381,7 @@ impl<'a> Parser<'a> {
         {
             return Err(EvalError::Syntax);
         }
-        let value = self.additive(0)?;
+        let value = self.comparison()?;
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
@@ -354,13 +403,19 @@ fn run() -> Result<(), String> {
         .take((MAX_SOURCE + 1) as u64)
         .read_to_end(&mut source)
         .map_err(|error| error.to_string())?;
-    let value = Parser::new(&source)
+    let (value, boolean) = Parser::new(&source)
         .evaluate()
         .map_err(|error| format!("unsupported PHP expression: {error:?}"))?;
+    // PHP echo emits "1" for true and zero bytes for false.
     // No output is published before the entire program has been accepted.
+    let output = if boolean && value == 0 {
+        String::new()
+    } else {
+        value.to_string()
+    };
     io::stdout()
         .lock()
-        .write_all(value.to_string().as_bytes())
+        .write_all(output.as_bytes())
         .map_err(|error| error.to_string())
 }
 
@@ -376,7 +431,9 @@ mod tests {
     use super::*;
 
     fn eval(source: &str) -> Result<i64, EvalError> {
-        Parser::new(source.as_bytes()).evaluate()
+        Parser::new(source.as_bytes())
+            .evaluate()
+            .map(|(value, _)| value)
     }
 
     #[test]
@@ -388,6 +445,38 @@ mod tests {
         assert_eq!(eval("echo -(-5);"), Ok(5));
         assert_eq!(eval(" \n<?php\n echo 0; ?>\n"), Ok(0));
         assert_eq!(eval("echo 9223372036854775807;"), Ok(i64::MAX));
+    }
+
+    #[test]
+    fn php84_integer_comparison_precedence_and_boundaries() {
+        for (program, expected) in [
+            ("echo 1<2;", 1),
+            ("echo 1>2;", 0),
+            ("echo 2<=2;", 1),
+            ("echo 2>=3;", 0),
+            ("echo 1==1;", 1),
+            ("echo 1===1;", 1),
+            ("echo 1!==1;", 0),
+            ("echo 1!=2;", 1),
+            ("echo 1<>2;", 1),
+            ("echo 1+2*3==7;", 1),
+            ("echo (2+3)*4>=19;", 1),
+            ("echo 0x7fff_ffff_ffff_ffff>0;", 1),
+            ("echo (0-9223372036854775807-1)<0;", 1),
+            ("$x=4; $y=5; echo $x+1==($y*1);", 1),
+            ("$x=4; $y=5; echo $x>$y;", 0),
+        ] {
+            assert_eq!(eval(program), Ok(expected), "{program}");
+        }
+    }
+
+    #[test]
+    fn unsupported_comparison_forms_fail_closed() {
+        assert_eq!(eval("echo 1<;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo 1!==;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo 1<2<3;"), Err(EvalError::Syntax));
+        assert_eq!(eval("echo (1<2);"), Err(EvalError::Syntax));
+        assert_eq!(eval("$x=1<2; echo $x;"), Err(EvalError::Syntax));
     }
 
     #[test]
