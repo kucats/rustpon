@@ -32,6 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut max_file_uploads = None;
     let mut max_upload_bytes = None;
+    let mut max_post_bytes = None;
     // The two independent PHP quotas may be specified together, in either
     // order. Reject duplicates rather than silently overriding server policy.
     if files_mode || admit_mode {
@@ -46,6 +47,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .and_then(|arg| arg.to_str())
                         .ok_or("missing max_file_uploads value")?;
                     max_file_uploads = Some(value.parse::<usize>()?);
+                    first += 2;
+                }
+                "--php-post-max-size" if admit_mode => {
+                    if max_post_bytes.is_some() {
+                        return Err("duplicate --php-post-max-size".into());
+                    }
+                    let value = args
+                        .get(first + 1)
+                        .and_then(|arg| arg.to_str())
+                        .ok_or("missing post_max_size value")?;
+                    max_post_bytes = Some(value.parse::<u64>()?);
                     first += 2;
                 }
                 "--php-upload-max-filesize" => {
@@ -65,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.len() != first + 2 {
         eprintln!(
-            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] [--php-post-max-size BYTES (admit only)] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
         );
         std::process::exit(2);
     }
@@ -88,13 +100,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..rustpon::files::Limits::default()
     };
     if admit_mode {
-        let admitted = rustpon::admission::admit(
-            request,
-            rustpon::admission::Policy {
-                metadata,
-                ..rustpon::admission::Policy::default()
-            },
-        )
+        let policy = rustpon::admission::Policy {
+            metadata,
+            ..rustpon::admission::Policy::default()
+        };
+        let admitted = match max_post_bytes {
+            Some(max) => rustpon::admission::admit_with_php_post_max_size(request, policy, max),
+            None => rustpon::admission::admit(request, policy),
+        }
         .map_err(|error| format!("admission: {error:?}"))?;
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;

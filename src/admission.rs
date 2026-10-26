@@ -134,9 +134,7 @@ impl AdmittedRequest {
     }
 }
 
-/// Server-controlled policy enforcement consumes the raw wire request,
-/// including on errors. A metadata error cannot leak its staged file handles.
-pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Error> {
+fn enforce_server_quotas(request: &Request, policy: Policy) -> Result<(), Error> {
     if request.stats().body_bytes > policy.max_body_bytes {
         return Err(Error::BodyTooLarge);
     }
@@ -154,6 +152,38 @@ pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Er
             }
         }
     }
+    Ok(())
+}
+
+/// Opt-in PHP 8.4 post_max_size admission semantics. A nonzero limit smaller
+/// than the complete request body publishes an empty FILES projection rather
+/// than failing the request. Zero disables the PHP quota. Independent
+/// server-controlled hard limits still fail closed, even for discarded bodies.
+///
+/// This is an after-parse compatibility adapter: the wire parser has already
+/// consumed and staged the body. A future SAPI integration must reject early
+/// based on Content-Length without staging an oversized upload.
+pub fn admit_with_php_post_max_size(
+    mut request: Request,
+    policy: Policy,
+    max_post_bytes: u64,
+) -> Result<AdmittedRequest, Error> {
+    if max_post_bytes == 0 || request.stats().body_bytes <= max_post_bytes {
+        return admit(request, policy);
+    }
+    enforce_server_quotas(&request, policy)?;
+    // Drop staged upload FDs and all raw field bytes before publication.
+    // Replacing the vectors also releases their backing allocations.
+    request.parts = Vec::new();
+    request.arena = Vec::new();
+    let metadata = files::project(&request, policy.metadata)?;
+    Ok(AdmittedRequest { request, metadata })
+}
+
+/// Server-controlled policy enforcement consumes the raw wire request,
+/// including on errors. A metadata error cannot leak its staged file handles.
+pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Error> {
+    enforce_server_quotas(&request, policy)?;
 
     // Project before discarding, so all error codes, names and sizes are
     // preserved. No metadata escapes if an adapter quota fails.
@@ -316,6 +346,88 @@ mod tests {
         assert_eq!(admitted.copy_accepted(3, &mut data).unwrap(), Some(3));
         assert_eq!(data, b"xyz");
         drop(admitted);
+        spool.empty();
+    }
+
+    #[test]
+    fn php_post_max_size_publishes_empty_files_and_closes_uploads() {
+        let spool = Spool::new();
+        let exact = BODY.len() as u64;
+        let admitted = admit_with_php_post_max_size(
+            spool.parse(BODY),
+            Policy::default(),
+            exact,
+        )
+        .unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![3]);
+        drop(admitted);
+        spool.empty();
+
+        let rejected = admit_with_php_post_max_size(
+            spool.parse(BODY),
+            Policy::default(),
+            exact - 1,
+        )
+        .unwrap();
+        assert_eq!(rejected.accepted_indices().count(), 0);
+        let mut json = Vec::new();
+        rejected.metadata().write_json(&mut json).unwrap();
+        assert_eq!(json, b"[\"a\",[]]");
+        // Even while the admitted request is alive, every staged FD is gone.
+        spool.empty();
+        drop(rejected);
+        spool.empty();
+
+        let unlimited = admit_with_php_post_max_size(
+            spool.parse(BODY),
+            Policy::default(),
+            0,
+        )
+        .unwrap();
+        assert_eq!(unlimited.accepted_indices().collect::<Vec<_>>(), vec![3]);
+        drop(unlimited);
+        spool.empty();
+    }
+
+    #[test]
+    fn php_post_max_size_never_bypasses_hard_server_quotas() {
+        let spool = Spool::new();
+        let exact = BODY.len() as u64;
+        assert!(matches!(
+            admit_with_php_post_max_size(
+                spool.parse(BODY),
+                Policy {
+                    max_body_bytes: exact - 1,
+                    ..Policy::default()
+                },
+                1,
+            ),
+            Err(Error::BodyTooLarge)
+        ));
+        spool.empty();
+        assert!(matches!(
+            admit_with_php_post_max_size(
+                spool.parse(BODY),
+                Policy {
+                    max_file_bytes: 2,
+                    ..Policy::default()
+                },
+                1,
+            ),
+            Err(Error::FileTooLarge)
+        ));
+        spool.empty();
+        assert!(matches!(
+            admit_with_php_post_max_size(
+                spool.parse(BODY),
+                Policy {
+                    max_total_file_bytes: 5,
+                    ..Policy::default()
+                },
+                1,
+            ),
+            Err(Error::FilesTooLarge)
+        ));
         spool.empty();
     }
 

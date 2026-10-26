@@ -93,6 +93,11 @@ jobs:
         run: |
           cargo build --offline --locked --bin multipart
           python3 tools/differential_upload_size.py --rust-bin target/debug/multipart
+      - name: Compare PHP 8.4 post_max_size with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_post_max_size.py --rust-bin target/debug/multipart
       - name: Compare multipart FFI with real PHP 8.4 SAPI (Linux)
         if: runner.os == 'Linux'
         run: |

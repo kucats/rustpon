@@ -98,6 +98,16 @@ spool directory trusted and stable for the request lifetime.
 
 ## PHP-style adapter scope
 
+An opt-in `admission::admit_with_php_post_max_size` adapter models PHP
+8.4 `post_max_size` at the metadata publication boundary. When the
+complete body exceeds a nonzero limit, it publishes an empty `$_FILES`
+projection and immediately releases every staged upload; a zero PHP limit
+is unlimited. The CLI oracle is `multipart --admit --php-post-max-size BYTES`.
+This does **not** prevent parsing/staging the oversized body first and does
+not produce a Zend `$_POST` value. Independent hard server quotas and the
+wire parser limits still fail closed. The Linux differential compares exact,
+one-byte-over, one-byte-under and zero-limit cases against PHP's HTTP SAPI.
+
 An opt-in field-count compatibility slice is available through
 `Request::into_post_with_max_input_vars(limits, max_input_vars)` and
 `urlencoded --php-max-input-vars N`. It retains the first N ordinary
