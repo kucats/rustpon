@@ -562,8 +562,16 @@ mod tests {
             .parts()
             .map(|part| (part.name.to_vec(), part.value.unwrap().to_vec()))
             .collect();
-        assert!(pairs.iter().any(|(name, value)| name == b"f[error]" && value == b"1"));
-        assert!(pairs.iter().any(|(name, value)| name == b"g[error]" && value == b"0"));
+        assert!(
+            pairs
+                .iter()
+                .any(|(name, value)| name == b"f[error]" && value == b"1")
+        );
+        assert!(
+            pairs
+                .iter()
+                .any(|(name, value)| name == b"g[error]" && value == b"0")
+        );
         assert!(!pairs.iter().any(|(name, _)| name.starts_with(b"h[")));
         assert!(admitted.accepted_file(0).is_none());
         assert!(admitted.accepted_file(2).is_none());
