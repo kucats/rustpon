@@ -511,10 +511,17 @@ mod tests {
             for index in 0..4 {
                 let mut data = Vec::new();
                 let copied = admitted.copy_accepted(index, &mut data).unwrap();
-                assert_eq!(copied.is_some(), expected.contains(&index), "limit={limit}, index={index}");
+                assert_eq!(
+                    copied.is_some(),
+                    expected.contains(&index),
+                    "limit={limit}, index={index}"
+                );
             }
             let mut typed = Vec::new();
-            admitted.metadata().write_php_files_json(&mut typed).unwrap();
+            admitted
+                .metadata()
+                .write_php_files_json(&mut typed)
+                .unwrap();
             let typed = String::from_utf8(typed).unwrap();
             assert_eq!(typed.contains("656d707479"), limit > 0); // empty control
             assert_eq!(typed.contains("74687265652e62696e"), limit >= 3); // three.bin
@@ -523,7 +530,10 @@ mod tests {
         }
         // The default strict metadata path has no PHP file-count quota.
         let admitted = admit(spool.parse(body), Policy::default()).unwrap();
-        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![1, 2, 3]);
+        assert_eq!(
+            admitted.accepted_indices().collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
         drop(admitted);
         spool.empty();
     }

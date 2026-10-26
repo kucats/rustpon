@@ -35,10 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let post_mode = args.len() == 4 && args[1] == "--post";
-    let files_mode = (args.len() == 4 && args[1] == "--files")
-        || (php_file_limit_mode && args[1] == "--files");
-    let admit_mode = (args.len() == 4 && args[1] == "--admit")
-        || (php_file_limit_mode && args[1] == "--admit");
+    let files_mode =
+        (args.len() == 4 && args[1] == "--files") || (php_file_limit_mode && args[1] == "--files");
+    let admit_mode =
+        (args.len() == 4 && args[1] == "--admit") || (php_file_limit_mode && args[1] == "--admit");
     if args.len() != 3 && !post_mode && !files_mode && !admit_mode {
         eprintln!(
             "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
@@ -77,7 +77,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ..rustpon::admission::Policy::default()
             },
         )
-            .map_err(|error| format!("admission: {error:?}"))?;
+        .map_err(|error| format!("admission: {error:?}"))?;
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;
         admitted.metadata().write_json(&mut out)?;
