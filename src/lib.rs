@@ -137,13 +137,16 @@ pub struct Stats {
 
 #[derive(Debug)]
 pub struct Upload {
-    file: File,
+    // No descriptor exists when PHP-mode staging cannot create a temporary file.
+    file: Option<File>,
     length: u64,
     discarded: bool,
     // Opt-in PHP EOF recovery only; partial uploads must never be copied.
     partial: bool,
     // A recoverable PHP-mode staging write failure; never copy this upload.
     write_failed: bool,
+    // Missing staging directory in opt-in PHP mode (UPLOAD_ERR_NO_TMP_DIR=6).
+    no_tmp_dir: bool,
 }
 
 impl Upload {
@@ -166,14 +169,15 @@ impl Upload {
         if self.discarded {
             return Err(io::ErrorKind::InvalidData.into());
         }
-        self.file.seek(SeekFrom::Start(0))?;
+        let file = self.file.as_mut().ok_or(io::ErrorKind::InvalidData)?;
+        file.seek(SeekFrom::Start(0))?;
         let mut remaining = self.length;
         let mut buffer = [0_u8; BLOCK];
         let mut read_interrupts = 0;
         while remaining > 0 {
             // This is at most BLOCK, so the cast is safe on all Unix targets.
             let capacity = remaining.min(BLOCK as u64) as usize;
-            let count = match self.file.read(&mut buffer[..capacity]) {
+            let count = match file.read(&mut buffer[..capacity]) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
                 Ok(count) => {
                     read_interrupts = 0;
@@ -298,6 +302,8 @@ pub struct Parser {
     #[cfg(test)]
     fail_create: bool,
     #[cfg(test)]
+    fail_no_tmp_dir: bool,
+    #[cfg(test)]
     fail_write: bool,
 }
 
@@ -405,6 +411,8 @@ impl Parser {
             php_recover_write_errors: false,
             #[cfg(test)]
             fail_create: false,
+            #[cfg(test)]
+            fail_no_tmp_dir: false,
             #[cfg(test)]
             fail_write: false,
         })
@@ -519,7 +527,9 @@ impl Parser {
                     ..
                 }) = self.active.as_mut()
                 {
-                    upload.file.set_len(0)?;
+                    if let Some(file) = upload.file.as_mut() {
+                        file.set_len(0)?;
+                    }
                     upload.discarded = true;
                     upload.partial = true;
                 }
@@ -709,12 +719,30 @@ impl Parser {
             if self.fail_create {
                 return Err(Error::Io(io::ErrorKind::PermissionDenied));
             }
+            #[cfg(test)]
+            let opened = if self.fail_no_tmp_dir {
+                Err(Error::Io(io::ErrorKind::NotFound))
+            } else {
+                anonymous_upload(&mut self.spool_path)
+            };
+            #[cfg(not(test))]
+            let opened = anonymous_upload(&mut self.spool_path);
+            // PHP reports error=6 when the temporary directory disappears.
+            // Other create/unlink errors remain fatal rather than misreported.
+            let (file, no_tmp_dir) = match opened {
+                Ok(file) => (Some(file), false),
+                Err(Error::Io(io::ErrorKind::NotFound)) if self.php_recover_write_errors => {
+                    (None, true)
+                }
+                Err(error) => return Err(error),
+            };
             Payload::File(Upload {
-                file: anonymous_upload(&mut self.spool_path)?,
+                file,
                 length: 0,
-                discarded: false,
+                discarded: no_tmp_dir,
                 partial: false,
                 write_failed: false,
+                no_tmp_dir,
             })
         } else {
             let fields = add_usize(
@@ -838,7 +866,9 @@ impl Parser {
             if over_php_quota {
                 if !upload.discarded {
                     // Discard any buffered bytes and reclaim earlier chunks.
-                    upload.file.set_len(0)?;
+                    if let Some(file) = upload.file.as_mut() {
+                        file.set_len(0)?;
+                    }
                     upload.discarded = true;
                 }
                 self.output_len = 0;
@@ -874,11 +904,11 @@ impl Parser {
                     let write_result = if self.fail_write {
                         Err(io::Error::from(io::ErrorKind::StorageFull))
                     } else {
-                        write_chunk(&mut upload.file, &self.output[..self.output_len])
+                        write_chunk(upload.file.as_mut().expect("live staged upload"), &self.output[..self.output_len])
                     };
                     #[cfg(not(test))]
                     let write_result =
-                        write_chunk(&mut upload.file, &self.output[..self.output_len]);
+                        write_chunk(upload.file.as_mut().expect("live staged upload"), &self.output[..self.output_len]);
                     if let Err(error) = write_result {
                         if !self.php_recover_write_errors {
                             return Err(error.into());
@@ -886,7 +916,7 @@ impl Parser {
                         // Never publish a prefix from a failed write. Keep
                         // consuming the current part and subsequent parts.
                         // If cleanup itself fails, fail closed as before.
-                        upload.file.set_len(0)?;
+                        upload.file.as_mut().expect("live staged upload").set_len(0)?;
                         upload.discarded = true;
                         upload.write_failed = true;
                     }
