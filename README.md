@@ -863,3 +863,15 @@ states remain fail-closed. A transport short read against declared
 Content-Length must never be treated as an eligible partial upload.
 The Linux differential suite compares this narrow behavior against PHP 8.4
 HTTP SAPI; this is not an HTTP framing implementation or PHP-FPM replacement.
+
+## PHP-mode staging write failures (experimental)
+
+The PHP-oriented reader functions enable recoverable upload **write** errors:
+if writing an anonymous staged file fails, the affected upload is truncated,
+marked non-copyable, and projected with PHP 8.4 `UPLOAD_ERR_CANT_WRITE` (7).
+Later fields and uploads remain parseable. The strict `Parser::new` mode still
+aborts and discards the whole request on I/O failure. Failure to truncate a
+failed staging file also aborts the request. PHP `UPLOAD_ERR_NO_TMP_DIR` (6)
+and temporary-file **creation** failures are not recovered yet. This is a
+Rust-only compatibility model, not native PHP SAPI integration; the write-error
+path is covered by deterministic fault injection, not a live SAPI fault oracle.

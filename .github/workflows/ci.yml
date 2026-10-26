@@ -83,6 +83,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python3 tools/differential_ffi.py --library ffi/target/debug/librustpon_ffi.so
+      - name: Verify PHP 8.4 upload error constants (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4 || UPLOAD_ERR_CANT_WRITE !== 7 || UPLOAD_ERR_NO_TMP_DIR !== 6) { exit(1); }'
       - name: Compare PHP 8.4 max_file_uploads with real HTTP SAPI (Linux)
         if: runner.os == 'Linux'
         run: |

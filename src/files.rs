@@ -678,19 +678,46 @@ mod tests {
         assert_eq!(normal(0, Some(2)), UPLOAD_ERR_INI_SIZE);
         assert_eq!(normal(2, Some(2)), UPLOAD_ERR_INI_SIZE);
         assert_eq!(normal(2, Some(3)), UPLOAD_ERR_FORM_SIZE);
-        assert_eq!(upload_error(&file, 0, None, true, false), UPLOAD_ERR_PARTIAL);
-        assert_eq!(upload_error(&file, 0, Some(2), true, false), UPLOAD_ERR_INI_SIZE);
-        assert_eq!(upload_error(&file, 2, None, true, false), UPLOAD_ERR_FORM_SIZE);
+        assert_eq!(
+            upload_error(&file, 0, None, true, false),
+            UPLOAD_ERR_PARTIAL
+        );
+        assert_eq!(
+            upload_error(&file, 0, Some(2), true, false),
+            UPLOAD_ERR_INI_SIZE
+        );
+        assert_eq!(
+            upload_error(&file, 2, None, true, false),
+            UPLOAD_ERR_FORM_SIZE
+        );
         let empty = crate::PartView {
             filename: Some(b""),
             ..file
         };
-        assert_eq!(upload_error(&empty, 2, Some(1), true, false), UPLOAD_ERR_NO_FILE);
-        assert_eq!(upload_error(&file, 0, None, false, true), UPLOAD_ERR_CANT_WRITE);
-        assert_eq!(upload_error(&file, 0, None, true, true), UPLOAD_ERR_CANT_WRITE);
-        assert_eq!(upload_error(&file, 0, Some(2), false, true), UPLOAD_ERR_INI_SIZE);
-        assert_eq!(upload_error(&file, 2, None, false, true), UPLOAD_ERR_FORM_SIZE);
-        assert_eq!(upload_error(&empty, 0, None, false, true), UPLOAD_ERR_NO_FILE);
+        assert_eq!(
+            upload_error(&empty, 2, Some(1), true, false),
+            UPLOAD_ERR_NO_FILE
+        );
+        assert_eq!(
+            upload_error(&file, 0, None, false, true),
+            UPLOAD_ERR_CANT_WRITE
+        );
+        assert_eq!(
+            upload_error(&file, 0, None, true, true),
+            UPLOAD_ERR_CANT_WRITE
+        );
+        assert_eq!(
+            upload_error(&file, 0, Some(2), false, true),
+            UPLOAD_ERR_INI_SIZE
+        );
+        assert_eq!(
+            upload_error(&file, 2, None, false, true),
+            UPLOAD_ERR_FORM_SIZE
+        );
+        assert_eq!(
+            upload_error(&empty, 0, None, false, true),
+            UPLOAD_ERR_NO_FILE
+        );
     }
 
     #[test]

@@ -1735,24 +1735,36 @@ fn php_write_failure_preserves_later_fields_and_uploads_without_exposing_prefix(
     }
     let mut request = parser.finish().unwrap();
     assert_eq!(request.parts().len(), 3);
-    assert_eq!(request.parts().nth(1).unwrap().value, Some(b"still-visible".as_slice()));
+    assert_eq!(
+        request.parts().nth(1).unwrap().value,
+        Some(b"still-visible".as_slice())
+    );
     let mut denied = Vec::new();
     assert_eq!(
-        request.upload_mut(0).unwrap().copy_to(&mut denied).unwrap_err().kind(),
+        request
+            .upload_mut(0)
+            .unwrap()
+            .copy_to(&mut denied)
+            .unwrap_err()
+            .kind(),
         io::ErrorKind::InvalidData
     );
     assert!(denied.is_empty());
     let mut copied = Vec::new();
-    assert_eq!(request.upload_mut(2).unwrap().copy_to(&mut copied).unwrap(), 2);
+    assert_eq!(
+        request.upload_mut(2).unwrap().copy_to(&mut copied).unwrap(),
+        2
+    );
     assert_eq!(copied, b"ok");
     let metadata = crate::files::project(&request, crate::files::Limits::default()).unwrap();
     let mut json = Vec::new();
     metadata.write_php_files_json(&mut json).unwrap();
     let json = String::from_utf8(json).unwrap();
     // PHP 8.4 UPLOAD_ERR_CANT_WRITE=7, encoded as the tagged hex string "37".
-    assert!(json.contains("37"), "{json}");
+    assert!(json.contains("\"37\""), "{json}");
     drop(metadata);
-    let mut admitted = crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
+    let mut admitted =
+        crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
     assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![2]);
     assert!(admitted.accepted_file(0).is_none());
     assert_eq!(admitted.copy_accepted(0, &mut denied).unwrap(), None);
