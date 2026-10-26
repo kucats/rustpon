@@ -12,6 +12,7 @@ use std::ops::Range;
 
 // PHP upload error codes used by the standalone metadata projection.
 const UPLOAD_ERR_OK: u8 = 0;
+const UPLOAD_ERR_INI_SIZE: u8 = 1;
 const UPLOAD_ERR_FORM_SIZE: u8 = 2;
 const UPLOAD_ERR_NO_FILE: u8 = 4;
 
@@ -37,6 +38,9 @@ pub struct Limits {
     /// Opt-in PHP 8.4 max_file_uploads quota. None retains the strict wire
     /// quotas without applying a second file-count limit.
     pub max_file_uploads: Option<usize>,
+    /// Opt-in PHP upload_max_filesize in bytes. Zero disables the PHP quota.
+    /// This is a metadata/admission rule, not a wire parser size limit.
+    pub max_upload_bytes: Option<u64>,
 }
 
 impl Default for Limits {
@@ -46,6 +50,7 @@ impl Default for Limits {
             memory_capacity: 512 * 1024,
             post: post::Limits::default(),
             max_file_uploads: None,
+            max_upload_bytes: None,
         }
     }
 }
@@ -154,7 +159,7 @@ fn project_impl(
         parts_count = parts_count
             .checked_add(ATTRIBUTES.len())
             .ok_or(Error::InvalidLimits)?;
-        let upload_error = upload_error(&part, form_max);
+        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes);
         for &attr in &ATTRIBUTES {
             let value = projected_value(&part, attr, upload_error, index, tag_uploads);
             // root + "[" + attr + "]" + original bracket suffix + value
@@ -221,7 +226,7 @@ fn project_impl(
         ) else {
             continue;
         };
-        let upload_error = upload_error(&part, form_max);
+        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes);
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
             let start = arena.len();
@@ -316,9 +321,14 @@ pub(crate) fn parse_form_max(bytes: &[u8]) -> i64 {
     }
 }
 
-fn upload_error(part: &crate::PartView<'_>, form_max: i64) -> u8 {
+fn upload_error(part: &crate::PartView<'_>, form_max: i64, max_upload_bytes: Option<u64>) -> u8 {
     if part.filename.expect("file parts only").is_empty() {
         return UPLOAD_ERR_NO_FILE;
+    }
+    // PHP's upload_max_filesize is checked before the client-supplied
+    // MAX_FILE_SIZE. A configured zero means unlimited in PHP 8.4.
+    if max_upload_bytes.is_some_and(|max| max != 0 && part.file_bytes.unwrap_or(0) > max) {
+        return UPLOAD_ERR_INI_SIZE;
     }
     if form_max != 0 && (form_max < 0 || part.file_bytes.unwrap_or(0) > form_max as u64) {
         return UPLOAD_ERR_FORM_SIZE;
@@ -553,6 +563,94 @@ mod tests {
         drop(original);
         assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
         fs::remove_dir(&path).unwrap();
+    }
+
+
+    #[test]
+    fn php_upload_max_filesize_errors_are_per_file_and_release_rejected_fds() {
+        let path = std::env::temp_dir().join(format!(
+            "rustpon-ini-file-limit-{}",
+            std::process::id()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let body = b"--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n2\r\n--b\r\nContent-Disposition: form-data; name=f; filename=oversize.bin\r\n\r\nabcd\r\n--b\r\nContent-Disposition: form-data; name=g; filename=form.bin\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=h; filename=good.bin\r\n\r\nx\r\n--b\r\nContent-Disposition: form-data; name=empty; filename=\"\"\r\n\r\n\r\n--b--\r\n";
+        let parse = || {
+            let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
+            parser.feed(body).unwrap();
+            parser.finish().unwrap()
+        };
+        let limits = Limits {
+            max_upload_bytes: Some(3),
+            ..Limits::default()
+        };
+        let projection = project(&parse(), limits).unwrap();
+        let pairs: Vec<_> = projection
+            .wire()
+            .parts()
+            .map(|part| (part.name.to_vec(), part.value.unwrap().to_vec()))
+            .collect();
+        for (name, value) in [
+            (b"f[error]".as_slice(), b"1".as_slice()),
+            (b"f[size]", b"0"),
+            (b"f[type]", b""),
+            (b"f[tmp_name]", b""),
+            (b"g[error]", b"2"),
+            (b"g[size]", b"0"),
+            (b"h[error]", b"0"),
+            (b"h[size]", b"1"),
+            (b"h[tmp_name]", STAGED_SENTINEL),
+            (b"empty[error]", b"4"),
+        ] {
+            assert!(
+                pairs.iter().any(|(key, data)| key == name && data == value),
+                "missing {name:?} = {value:?}"
+            );
+        }
+        drop(projection);
+
+        let mut admitted = crate::admission::admit(
+            parse(),
+            crate::admission::Policy {
+                metadata: limits,
+                ..crate::admission::Policy::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![3]);
+        for index in [1, 2, 4] {
+            assert!(admitted.accepted_file(index).is_none());
+            let mut discarded = Vec::new();
+            assert_eq!(admitted.copy_accepted(index, &mut discarded).unwrap(), None);
+            assert!(discarded.is_empty());
+        }
+        let mut bytes = Vec::new();
+        assert_eq!(admitted.copy_accepted(3, &mut bytes).unwrap(), Some(1));
+        assert_eq!(bytes, b"x");
+        drop(admitted);
+        assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
+    fn php_upload_max_filesize_zero_disables_quota_and_exact_limit_succeeds() {
+        let file = crate::PartView {
+            name: b"f",
+            filename: Some(b"x.bin"),
+            content_type: Some(b"application/octet-stream"),
+            value: None,
+            file_bytes: Some(3),
+        };
+        assert_eq!(upload_error(&file, 0, None), UPLOAD_ERR_OK);
+        assert_eq!(upload_error(&file, 0, Some(0)), UPLOAD_ERR_OK);
+        assert_eq!(upload_error(&file, 0, Some(3)), UPLOAD_ERR_OK);
+        assert_eq!(upload_error(&file, 0, Some(2)), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(upload_error(&file, 2, Some(2)), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(upload_error(&file, 2, Some(3)), UPLOAD_ERR_FORM_SIZE);
+        let empty = crate::PartView {
+            filename: Some(b""),
+            ..file
+        };
+        assert_eq!(upload_error(&empty, 2, Some(1)), UPLOAD_ERR_NO_FILE);
     }
 
     #[test]

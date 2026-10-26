@@ -24,6 +24,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let php_file_limit_mode = args.len() == 6
         && (args[1] == "--files" || args[1] == "--admit")
         && args[2] == "--php-max-file-uploads";
+    let php_upload_size_mode = args.len() == 6
+        && (args[1] == "--files" || args[1] == "--admit")
+        && args[2] == "--php-upload-max-filesize";
+    let max_upload_bytes = if php_upload_size_mode {
+        Some(
+            args[3]
+                .to_str()
+                .ok_or("upload_max_filesize must be decimal bytes")?
+                .parse::<u64>()?,
+        )
+    } else {
+        None
+    };
     let max_file_uploads = if php_file_limit_mode {
         Some(
             args[3]
@@ -36,16 +49,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let post_mode = args.len() == 4 && args[1] == "--post";
     let files_mode =
-        (args.len() == 4 && args[1] == "--files") || (php_file_limit_mode && args[1] == "--files");
+        (args.len() == 4 && args[1] == "--files") || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--files");
     let admit_mode =
-        (args.len() == 4 && args[1] == "--admit") || (php_file_limit_mode && args[1] == "--admit");
+        (args.len() == 4 && args[1] == "--admit") || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--admit");
     if args.len() != 3 && !post_mode && !files_mode && !admit_mode {
         eprintln!(
-            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N|--php-upload-max-filesize BYTES] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
         );
         std::process::exit(2);
     }
-    let first = if php_file_limit_mode {
+    let first = if php_file_limit_mode || php_upload_size_mode {
         4
     } else if post_mode || files_mode || admit_mode {
         2
@@ -67,6 +80,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let metadata = rustpon::files::Limits {
         max_file_uploads,
+        max_upload_bytes,
         ..rustpon::files::Limits::default()
     };
     if admit_mode {

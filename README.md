@@ -112,6 +112,16 @@ empty-filename controls until the quota is reached), as observed with PHP
 `multipart --admit --php-max-file-uploads N` for the oracle harness. Uploads
 excluded by this quota are dropped at admission, including their staging FDs;
 raw wire parsing and its independent strict resource quotas are unchanged.
+An independent opt-in `files::Limits::max_upload_bytes` models PHP 8.4
+`upload_max_filesize` for metadata and admission. `Some(0)` disables
+this PHP quota; positive limits accept the exact byte count and produce
+`UPLOAD_ERR_INI_SIZE=1` for oversized files. This error takes precedence
+over form-supplied `MAX_FILE_SIZE` (error 2), and rejected uploads lose
+their staged descriptors without preventing later files from succeeding.
+The CLI exposes `--files/--admit --php-upload-max-filesize BYTES`; ten
+real PHP 8.4 HTTP SAPI comparisons and Rust FD cleanup tests guard this
+behavior. The parser's independent strict wire limits remain in force,
+and the two opt-in CLI quota flags cannot yet be combined.
 This is **not yet a full PHP limit policy**:
 the wire parser may reject requests before projection (including empty
 names or too many parts), and nesting, append exhaustion, allocation and
