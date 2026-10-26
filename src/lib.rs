@@ -904,11 +904,17 @@ impl Parser {
                     let write_result = if self.fail_write {
                         Err(io::Error::from(io::ErrorKind::StorageFull))
                     } else {
-                        write_chunk(upload.file.as_mut().expect("live staged upload"), &self.output[..self.output_len])
+                        write_chunk(
+                            upload.file.as_mut().expect("live staged upload"),
+                            &self.output[..self.output_len],
+                        )
                     };
                     #[cfg(not(test))]
                     let write_result =
-                        write_chunk(upload.file.as_mut().expect("live staged upload"), &self.output[..self.output_len]);
+                        write_chunk(
+                            upload.file.as_mut().expect("live staged upload"),
+                            &self.output[..self.output_len],
+                        );
                     if let Err(error) = write_result {
                         if !self.php_recover_write_errors {
                             return Err(error.into());
@@ -916,7 +922,11 @@ impl Parser {
                         // Never publish a prefix from a failed write. Keep
                         // consuming the current part and subsequent parts.
                         // If cleanup itself fails, fail closed as before.
-                        upload.file.as_mut().expect("live staged upload").set_len(0)?;
+                        upload
+                            .file
+                            .as_mut()
+                            .expect("live staged upload")
+                            .set_len(0)?;
                         upload.discarded = true;
                         upload.write_failed = true;
                     }
