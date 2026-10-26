@@ -353,37 +353,25 @@ mod tests {
     fn php_post_max_size_publishes_empty_files_and_closes_uploads() {
         let spool = Spool::new();
         let exact = BODY.len() as u64;
-        let admitted = admit_with_php_post_max_size(
-            spool.parse(BODY),
-            Policy::default(),
-            exact,
-        )
-        .unwrap();
+        let admitted =
+            admit_with_php_post_max_size(spool.parse(BODY), Policy::default(), exact).unwrap();
         assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![3]);
         drop(admitted);
         spool.empty();
 
-        let rejected = admit_with_php_post_max_size(
-            spool.parse(BODY),
-            Policy::default(),
-            exact - 1,
-        )
-        .unwrap();
+        let rejected =
+            admit_with_php_post_max_size(spool.parse(BODY), Policy::default(), exact - 1).unwrap();
         assert_eq!(rejected.accepted_indices().count(), 0);
         let mut json = Vec::new();
         rejected.metadata().write_json(&mut json).unwrap();
-        assert_eq!(json, b"[\"a\",[]]");
+        assert_eq!(json.as_slice(), b"[\"a\",[]]");
         // Even while the admitted request is alive, every staged FD is gone.
         spool.empty();
         drop(rejected);
         spool.empty();
 
-        let unlimited = admit_with_php_post_max_size(
-            spool.parse(BODY),
-            Policy::default(),
-            0,
-        )
-        .unwrap();
+        let unlimited =
+            admit_with_php_post_max_size(spool.parse(BODY), Policy::default(), 0).unwrap();
         assert_eq!(unlimited.accepted_indices().collect::<Vec<_>>(), vec![3]);
         drop(unlimited);
         spool.empty();
