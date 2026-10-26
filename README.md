@@ -846,3 +846,17 @@ The Linux PHP 8.4 SAPI differential suite now checks four additional
 parameterized/mixed-case upload types; a Rust unit test also checks the
 binary payload length, metadata and nested-multipart rejection. The oracle
 checks upload metadata, not MIME sniffing or native Zend integration.
+
+## Opt-in PHP 8.4 partial upload EOF compatibility
+
+The `parse_reader_with_php_partial` API and `multipart --admit --php-partial-upload`
+CLI mode preserve completed multipart parts if EOF occurs within a file body
+whose headers were already parsed. The unfinished file is registered with
+`UPLOAD_ERR_PARTIAL=3`, zero reported size, empty `type` and `tmp_name`.
+Staged partial bytes are erased and cannot be copied through admission.
+PHP's file size errors (1/2) and empty-filename error (4) take precedence.
+The ordinary parser, trusted Content-Length path, and other incomplete
+states remain fail-closed. A transport short read against declared
+Content-Length must never be treated as an eligible partial upload.
+The Linux differential suite compares this narrow behavior against PHP 8.4
+HTTP SAPI; this is not an HTTP framing implementation or PHP-FPM replacement.

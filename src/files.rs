@@ -654,17 +654,21 @@ mod tests {
             value: None,
             file_bytes: Some(3),
         };
-        assert_eq!(upload_error(&file, 0, None), UPLOAD_ERR_OK);
-        assert_eq!(upload_error(&file, 0, Some(0)), UPLOAD_ERR_OK);
-        assert_eq!(upload_error(&file, 0, Some(3)), UPLOAD_ERR_OK);
-        assert_eq!(upload_error(&file, 0, Some(2)), UPLOAD_ERR_INI_SIZE);
-        assert_eq!(upload_error(&file, 2, Some(2)), UPLOAD_ERR_INI_SIZE);
-        assert_eq!(upload_error(&file, 2, Some(3)), UPLOAD_ERR_FORM_SIZE);
+        let normal = |form, ini| upload_error(&file, form, ini, false);
+        assert_eq!(normal(0, None), UPLOAD_ERR_OK);
+        assert_eq!(normal(0, Some(0)), UPLOAD_ERR_OK);
+        assert_eq!(normal(0, Some(3)), UPLOAD_ERR_OK);
+        assert_eq!(normal(0, Some(2)), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(normal(2, Some(2)), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(normal(2, Some(3)), UPLOAD_ERR_FORM_SIZE);
+        assert_eq!(upload_error(&file, 0, None, true), UPLOAD_ERR_PARTIAL);
+        assert_eq!(upload_error(&file, 0, Some(2), true), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(upload_error(&file, 2, None, true), UPLOAD_ERR_FORM_SIZE);
         let empty = crate::PartView {
             filename: Some(b""),
             ..file
         };
-        assert_eq!(upload_error(&empty, 2, Some(1)), UPLOAD_ERR_NO_FILE);
+        assert_eq!(upload_error(&empty, 2, Some(1), true), UPLOAD_ERR_NO_FILE);
     }
 
     #[test]
