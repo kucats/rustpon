@@ -102,9 +102,15 @@ identity changes during canonicalization. Before each upload, the parser
 rechecks the resolved directory's original device/inode identity and
 private permissions; a symlink swap, a recreated directory, or a permission
 relaxation fails closed. A missing directory still follows the opt-in PHP
-`UPLOAD_ERR_NO_TMP_DIR=6` policy. This pathname recheck does **not** close
-the check/open race; descriptor-relative creation with an independently audited
-OS interface is required before treating a mutable spool path as safe.
+`UPLOAD_ERR_NO_TMP_DIR=6` policy. After creating a staging file, the parser
+also checks that the directory still has its original identity and that the
+pathname still names the opened file before unlinking it or writing request
+bytes. Deterministic fault-injection tests cover directory retargeting and
+filename replacement at this point. A detected race fails closed without
+writing request bytes; an empty orphan may remain in a renamed directory.
+These pathname checks do **not** close the final check/unlink race:
+descriptor-relative creation and unlinking with an independently audited
+OS interface are required before treating a mutable spool path as safe.
 
 ## PHP-style adapter scope
 
