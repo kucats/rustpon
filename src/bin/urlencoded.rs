@@ -7,9 +7,11 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let max_input_vars = match (args.next(), args.next(), args.next()) {
         (None, None, None) => None,
-        (Some(flag), Some(value), None) if flag == "--php-max-input-vars" => {
-            Some(value.parse::<usize>().map_err(|_| "invalid max_input_vars".to_owned())?)
-        }
+        (Some(flag), Some(value), None) if flag == "--php-max-input-vars" => Some(
+            value
+                .parse::<usize>()
+                .map_err(|_| "invalid max_input_vars".to_owned())?,
+        ),
         _ => return Err("usage: urlencoded [--php-max-input-vars N] < body.bin".to_owned()),
     };
     let request = urlencoded::parse_reader(&mut io::stdin().lock(), Limits::default())
