@@ -1548,7 +1548,10 @@ fn php_partial_eof_after_complete_file_header_registers_error_three() {
     let spool = Spool::new();
     let full = body(&[(FIELD, b"kept"), (FILE, b"unreceived")]);
     let marker = b"\r\nContent-Type: application/octet-stream";
-    let header_end = full.windows(marker.len()).position(|w| w == marker).unwrap();
+    let header_end = full
+        .windows(marker.len())
+        .position(|w| w == marker)
+        .unwrap();
     // A complete Content-Disposition line, but no Content-Type or blank line.
     let partial = &full[..header_end + 2];
     assert_eq!(
@@ -1569,10 +1572,12 @@ fn php_partial_eof_after_complete_file_header_registers_error_three() {
             (b"file[type]", b""),
             (b"file[tmp_name]", b""),
         ] {
-            assert!(projection
-                .wire()
-                .parts()
-                .any(|p| p.name == name && p.value == Some(value)));
+            assert!(
+                projection
+                    .wire()
+                    .parts()
+                    .any(|p| p.name == name && p.value == Some(value))
+            );
         }
         assert_eq!(
             raw.upload_mut(1)
