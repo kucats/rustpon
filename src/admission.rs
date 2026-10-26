@@ -18,6 +18,10 @@ pub struct Policy {
     /// Server-controlled maximum size of each staged upload, inclusive.
     /// This never comes from MAX_FILE_SIZE in the request body.
     pub max_file_bytes: u64,
+    /// Server-controlled aggregate size of all staged uploads, including
+    /// uploads later discarded by PHP-style name collisions or form limits.
+    /// Enforced on raw bytes before publishing metadata.
+    pub max_total_file_bytes: u64,
     /// Additional quotas for the metadata projection.
     pub metadata: files::Limits,
 }
@@ -27,6 +31,7 @@ impl Default for Policy {
         Self {
             max_body_bytes: crate::Limits::default().body_bytes,
             max_file_bytes: crate::Limits::default().file_bytes,
+            max_total_file_bytes: crate::Limits::default().file_bytes_total,
             metadata: files::Limits::default(),
         }
     }
@@ -36,6 +41,7 @@ impl Default for Policy {
 pub enum Error {
     BodyTooLarge,
     FileTooLarge,
+    FilesTooLarge,
     Metadata(files::Error),
     Allocation,
 }
@@ -134,11 +140,19 @@ pub fn admit(mut request: Request, policy: Policy) -> Result<AdmittedRequest, Er
     if request.stats().body_bytes > policy.max_body_bytes {
         return Err(Error::BodyTooLarge);
     }
-    if request.parts().any(|part| {
-        part.file_bytes
-            .is_some_and(|len| len > policy.max_file_bytes || len > i64::MAX as u64)
-    }) {
-        return Err(Error::FileTooLarge);
+    let mut total_file_bytes = 0u64;
+    for part in request.parts() {
+        if let Some(len) = part.file_bytes {
+            if len > policy.max_file_bytes || len > i64::MAX as u64 {
+                return Err(Error::FileTooLarge);
+            }
+            total_file_bytes = total_file_bytes
+                .checked_add(len)
+                .ok_or(Error::FilesTooLarge)?;
+            if total_file_bytes > policy.max_total_file_bytes {
+                return Err(Error::FilesTooLarge);
+            }
+        }
     }
 
     // Project before discarding, so all error codes, names and sizes are
@@ -301,6 +315,65 @@ mod tests {
         let mut data = Vec::new();
         assert_eq!(admitted.copy_accepted(3, &mut data).unwrap(), Some(3));
         assert_eq!(data, b"xyz");
+        drop(admitted);
+        spool.empty();
+    }
+
+    #[test]
+    fn aggregate_server_upload_quota_includes_rejected_and_overwritten_bytes() {
+        let spool = Spool::new();
+        // BODY contains two three-byte uploads and an empty filename control.
+        // The first upload is rejected by MAX_FILE_SIZE, but still counts
+        // toward the server-controlled aggregate admission budget.
+        assert!(matches!(
+            admit(
+                spool.parse(BODY),
+                Policy {
+                    max_total_file_bytes: 5,
+                    ..Policy::default()
+                }
+            ),
+            Err(Error::FilesTooLarge)
+        ));
+        spool.empty();
+
+        let mut admitted = admit(
+            spool.parse(BODY),
+            Policy {
+                max_total_file_bytes: 6,
+                ..Policy::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![3]);
+        let mut bytes = Vec::new();
+        assert_eq!(admitted.copy_accepted(3, &mut bytes).unwrap(), Some(3));
+        assert_eq!(bytes, b"xyz");
+        drop(admitted);
+        spool.empty();
+
+        // An overwritten wire upload must still consume ingress resources.
+        let duplicate = b"--b\r\nContent-Disposition: form-data; name=f; filename=a\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=f; filename=b\r\n\r\ndef\r\n--b--\r\n";
+        assert!(matches!(
+            admit(
+                spool.parse(duplicate),
+                Policy {
+                    max_total_file_bytes: 5,
+                    ..Policy::default()
+                }
+            ),
+            Err(Error::FilesTooLarge)
+        ));
+        spool.empty();
+        let admitted = admit(
+            spool.parse(duplicate),
+            Policy {
+                max_total_file_bytes: 6,
+                ..Policy::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![1]);
         drop(admitted);
         spool.empty();
     }
