@@ -333,6 +333,25 @@ pub fn exercise_admission(data: &[u8]) {
         spool.assert_empty();
     }
 
+    // Aggregate server quota charges *all* staged uploads, even if PHP's
+    // final FILES tree would overwrite or reject some of them.
+    let total_file_bytes: usize = originals.iter().flatten().map(Vec::len).sum();
+    if total_file_bytes > 0 {
+        let raw = rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
+            .expect("repeat parse");
+        assert!(matches!(
+            admission::admit(
+                raw,
+                admission::Policy {
+                    max_total_file_bytes: (total_file_bytes - 1) as u64,
+                    ..admission::Policy::default()
+                }
+            ),
+            Err(admission::Error::FilesTooLarge)
+        ));
+        spool.assert_empty();
+    }
+
     // Metadata quota failure cannot publish FILES or retain descriptors.
     if originals.iter().any(Option::is_some) {
         let raw = rustpon::parse_reader(&mut Cursor::new(body), boundary, limits(), spool.path())
