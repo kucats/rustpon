@@ -1964,3 +1964,56 @@ fn php_missing_temp_directory_precedes_upload_max_filesize() {
     );
     spool.empty();
 }
+
+#[test]
+fn upload_spool_replacement_and_permission_changes_fail_closed() {
+    let spool = Spool::new();
+    let other = Spool::new();
+    let wire = body(&[(FILE, b"must-not-stage")]);
+
+    // The directory was private at construction, but became public before
+    // the first upload. Both strict and opt-in PHP paths must reject it.
+    for php_mode in [false, true] {
+        let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+        if php_mode {
+            parser = parser.with_php_upload_write_recovery();
+        }
+        fs::set_permissions(&spool.0, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(parser.feed(&wire), Err(Error::InvalidSpoolDirectory));
+        fs::set_permissions(&spool.0, fs::Permissions::from_mode(0o700)).unwrap();
+        spool.empty();
+    }
+
+    // Replacing the trusted directory with a symlink to another private
+    // directory is forbidden even when the target itself is mode 0700.
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+    let saved = spool.0.with_extension("saved");
+    fs::rename(&spool.0, &saved).unwrap();
+    std::os::unix::fs::symlink(&other.0, &spool.0).unwrap();
+    assert_eq!(parser.feed(&wire), Err(Error::InvalidSpoolDirectory));
+    fs::remove_file(&spool.0).unwrap();
+    fs::rename(&saved, &spool.0).unwrap();
+    spool.empty();
+    other.empty();
+
+    // A fresh 0700 directory at the same path is not the originally
+    // validated inode and must not silently become a new staging target.
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+    fs::rename(&spool.0, &saved).unwrap();
+    fs::DirBuilder::new().mode(0o700).create(&spool.0).unwrap();
+    assert_eq!(parser.feed(&wire), Err(Error::InvalidSpoolDirectory));
+    fs::remove_dir(&spool.0).unwrap();
+    fs::rename(&saved, &spool.0).unwrap();
+    spool.empty();
+
+    // An unchanged directory still permits normal staged upload copying.
+    let mut request = parse(&wire, Limits::default(), &spool).unwrap();
+    let mut copied = Vec::new();
+    assert_eq!(
+        request.upload_mut(0).unwrap().copy_to(&mut copied).unwrap(),
+        14
+    );
+    assert_eq!(copied, b"must-not-stage");
+    drop(request);
+    spool.empty();
+}
