@@ -55,7 +55,7 @@ def main():
             body = body_for(parts)
             for limit in (0, len(body) - 1, len(body), len(body) + 1):
                 server, port = start_server(
-                    args.php_bin, 1024, router, post_limit=limit,
+                    args.php_bin, 2 * 1024 * 1024, router, post_limit=limit,
                 )
                 try:
                     php = php_post(port, body)
