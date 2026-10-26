@@ -16,6 +16,7 @@ const UPLOAD_ERR_INI_SIZE: u8 = 1;
 const UPLOAD_ERR_FORM_SIZE: u8 = 2;
 const UPLOAD_ERR_PARTIAL: u8 = 3;
 const UPLOAD_ERR_NO_FILE: u8 = 4;
+const UPLOAD_ERR_CANT_WRITE: u8 = 7;
 
 const ATTRIBUTES: [&[u8]; 6] = [
     b"name",
@@ -160,11 +161,17 @@ fn project_impl(
         parts_count = parts_count
             .checked_add(ATTRIBUTES.len())
             .ok_or(Error::InvalidLimits)?;
-        let partial = matches!(
-            &request.parts[index].payload,
-            crate::Payload::File(upload) if upload.partial
+        let (partial, write_failed) = match &request.parts[index].payload {
+            crate::Payload::File(upload) => (upload.partial, upload.write_failed),
+            crate::Payload::Field(_) => (false, false),
+        };
+        let upload_error = upload_error(
+            &part,
+            form_max,
+            limits.max_upload_bytes,
+            partial,
+            write_failed,
         );
-        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes, partial);
         for &attr in &ATTRIBUTES {
             let value = projected_value(&part, attr, upload_error, index, tag_uploads);
             // root + "[" + attr + "]" + original bracket suffix + value
@@ -231,11 +238,17 @@ fn project_impl(
         ) else {
             continue;
         };
-        let partial = matches!(
-            &request.parts[index].payload,
-            crate::Payload::File(upload) if upload.partial
+        let (partial, write_failed) = match &request.parts[index].payload {
+            crate::Payload::File(upload) => (upload.partial, upload.write_failed),
+            crate::Payload::Field(_) => (false, false),
+        };
+        let upload_error = upload_error(
+            &part,
+            form_max,
+            limits.max_upload_bytes,
+            partial,
+            write_failed,
         );
-        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes, partial);
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
             let start = arena.len();
@@ -335,6 +348,7 @@ fn upload_error(
     form_max: i64,
     max_upload_bytes: Option<u64>,
     partial: bool,
+    write_failed: bool,
 ) -> u8 {
     if part.filename.expect("file parts only").is_empty() {
         return UPLOAD_ERR_NO_FILE;
@@ -346,6 +360,9 @@ fn upload_error(
     }
     if form_max != 0 && (form_max < 0 || part.file_bytes.unwrap_or(0) > form_max as u64) {
         return UPLOAD_ERR_FORM_SIZE;
+    }
+    if write_failed {
+        return UPLOAD_ERR_CANT_WRITE;
     }
     if partial {
         return UPLOAD_ERR_PARTIAL;
@@ -654,21 +671,26 @@ mod tests {
             value: None,
             file_bytes: Some(3),
         };
-        let normal = |form, ini| upload_error(&file, form, ini, false);
+        let normal = |form, ini| upload_error(&file, form, ini, false, false);
         assert_eq!(normal(0, None), UPLOAD_ERR_OK);
         assert_eq!(normal(0, Some(0)), UPLOAD_ERR_OK);
         assert_eq!(normal(0, Some(3)), UPLOAD_ERR_OK);
         assert_eq!(normal(0, Some(2)), UPLOAD_ERR_INI_SIZE);
         assert_eq!(normal(2, Some(2)), UPLOAD_ERR_INI_SIZE);
         assert_eq!(normal(2, Some(3)), UPLOAD_ERR_FORM_SIZE);
-        assert_eq!(upload_error(&file, 0, None, true), UPLOAD_ERR_PARTIAL);
-        assert_eq!(upload_error(&file, 0, Some(2), true), UPLOAD_ERR_INI_SIZE);
-        assert_eq!(upload_error(&file, 2, None, true), UPLOAD_ERR_FORM_SIZE);
+        assert_eq!(upload_error(&file, 0, None, true, false), UPLOAD_ERR_PARTIAL);
+        assert_eq!(upload_error(&file, 0, Some(2), true, false), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(upload_error(&file, 2, None, true, false), UPLOAD_ERR_FORM_SIZE);
         let empty = crate::PartView {
             filename: Some(b""),
             ..file
         };
-        assert_eq!(upload_error(&empty, 2, Some(1), true), UPLOAD_ERR_NO_FILE);
+        assert_eq!(upload_error(&empty, 2, Some(1), true, false), UPLOAD_ERR_NO_FILE);
+        assert_eq!(upload_error(&file, 0, None, false, true), UPLOAD_ERR_CANT_WRITE);
+        assert_eq!(upload_error(&file, 0, None, true, true), UPLOAD_ERR_CANT_WRITE);
+        assert_eq!(upload_error(&file, 0, Some(2), false, true), UPLOAD_ERR_INI_SIZE);
+        assert_eq!(upload_error(&file, 2, None, false, true), UPLOAD_ERR_FORM_SIZE);
+        assert_eq!(upload_error(&empty, 0, None, false, true), UPLOAD_ERR_NO_FILE);
     }
 
     #[test]
