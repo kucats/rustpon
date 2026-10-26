@@ -1170,7 +1170,9 @@ pub fn parse_reader(
     spool_dir: &Path,
 ) -> Result<Request, Error> {
     // The generic reader retains strict transactional I/O semantics.
-    parse_reader_with_php_limits_impl(reader, boundary, limits, spool_dir, None, None, false, false)
+    parse_reader_with_php_limits_impl(
+        reader, boundary, limits, spool_dir, None, None, false, false,
+    )
 }
 
 /// Standalone PHP upload_max_filesize policy applied during parsing.
@@ -1254,8 +1256,8 @@ fn parse_reader_with_php_limits_impl(
     php_partial_upload: bool,
     php_recover_write_errors: bool,
 ) -> Result<Request, Error> {
-    let mut configured = Parser::new(boundary, limits, spool_dir)?
-        .with_php_upload_max_bytes(php_max_upload_bytes);
+    let mut configured =
+        Parser::new(boundary, limits, spool_dir)?.with_php_upload_max_bytes(php_max_upload_bytes);
     if php_recover_write_errors {
         configured = configured.with_php_upload_write_recovery();
     }
