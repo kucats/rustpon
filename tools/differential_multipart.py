@@ -80,17 +80,24 @@ CASES = [
     ("file-append-zero-binary", [(b"f[]", b"", b"zero.bin"),
                                  (b"f[]", b"\x00\xff", b"two.bin")]),
     ("file-near-delimiter", [(b"f", b"start\r\n--rustpon-difx\r\nend", b"near.bin")]),
+    # PHP registers only the bytes before the first Content-Type semicolon.
+    ("file-type-charset", [(b"f", b"hi", b"x.txt", b"text/plain; charset=UTF-8")]),
+    ("file-type-space", [(b"f", b"hi", b"x.txt", b'text/plain ; charset="utf-8"')]),
+    ("file-type-opaque-param", [(b"f", b"hi", b"x.txt", b"text/plain; invalid")]),
+    ("file-type-mixedcase", [(b"f", b"hi", b"x.txt", b"TEXT/PLAIN; charset=UTF-8")]),
 
 ]
 
 def body_for(parts):
     output = bytearray()
-    for name, data, filename in parts:
+    for part in parts:
+        name, data, filename = part[:3]
+        content_type = part[3] if len(part) == 4 else b"application/octet-stream"
         output.extend(b"--" + BOUNDARY + b"\r\n")
         output.extend(b'Content-Disposition: form-data; name="' + name + b'"')
         if filename is not None:
             output.extend(b'; filename="' + filename + b'"')
-            output.extend(b"\r\nContent-Type: application/octet-stream")
+            output.extend(b"\r\nContent-Type: " + content_type)
         output.extend(b"\r\n\r\n")
         output.extend(data)
         output.extend(b"\r\n")
