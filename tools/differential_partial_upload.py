@@ -17,6 +17,18 @@ CASES = [
     ("nested", [(b"f[x][]", b"payload", b"a.bin")], 0, []),
     ("buffer-boundary", [(b"f", b"Z" * 16387, b"big.bin")], 0, []),
     ("quota-precedes-partial", [(b"f", b"abc", b"a.bin")], 2, []),
+    ("field-eof-single", [(b"tail", b"unfinished", None)], 0, []),
+    ("field-eof-empty", [(b"tail", b"", None)], 0, []),
+    ("field-eof-after-field", [(b"note", b"keep", None),
+                               (b"tail", b"unfinished", None)], 0, []),
+    ("field-eof-after-file", [(b"first", b"ok", b"one.bin"),
+                              (b"tail", b"unfinished", None)], 0, [0]),
+    ("field-eof-large", [(b"tail", b"Z" * 16387, None)], 0, []),
+    ("field-header-eof", [(b"tail", b"ignored", None)], 0, [],
+     b'name="tail"\r\n'),
+    ("field-header-after-file", [(b"first", b"ok", b"one.bin"),
+                                  (b"tail", b"ignored", None)], 0, [0],
+     b'name="tail"\r\n'),
     # Fifth element: cut immediately after this complete header line, before
     # the blank line. PHP 8.4 already registers the upload with error=3.
     ("header-eof-single", [(b"f", b"abc", b"a.bin")], 0, [],
@@ -63,7 +75,7 @@ def main():
                 if proc.returncode:
                     raise AssertionError(f"{label}: Rust exit {proc.returncode}: {proc.stderr[:500]!r}")
                 rust = json.loads(proc.stdout)
-                for key in ("files_tree", "files_tree_typed"):
+                for key in ("post_tree", "files_tree", "files_tree_typed"):
                     if php[key] != rust[key]:
                         raise AssertionError(f"{label}: {key}: PHP={php[key]!r} Rust={rust[key]!r}")
                 if rust["accepted_indices"] != expected_indices:
