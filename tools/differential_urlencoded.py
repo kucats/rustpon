@@ -33,6 +33,15 @@ CASES = [
     ("utf8-encoded", b"key=%E6%9D%B1%E4%BA%AC"),
     ("mixed-hex", b"n%5b0%5d=%ff&n%5B1%5D=%FF"),
     ("empty-value-no-equal", b"bare&bare=&x=1"),
+    ("bracket-leading-space", b"a%5B+x%5D=1"),
+    ("bracket-leading-tab", b"a%5B%09x%5D=1"),
+    ("bracket-leading-newline", b"a%5B%0Ax%5D=1"),
+    ("bracket-two-spaces", b"a%5B++%5D=1"),
+    ("bracket-space-tab", b"a%5B+%09%5D=1"),
+    ("bracket-single-space-append", b"a%5B+%5D=1"),
+    ("bracket-single-tab-append", b"a%5B%09%5D=1"),
+    ("bracket-single-vtab-append", b"a%5B%0B%5D=1"),
+    ("bracket-single-formfeed-append", b"a%5B%0C%5D=1"),
 ]
 
 def run(command, body):
