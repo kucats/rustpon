@@ -46,9 +46,13 @@ fn run() -> Result<(), String> {
         }
     }
     let request = if php_nul_name_truncation {
-        let separators = php_arg_separators.as_deref().map(str::as_bytes).unwrap_or(
-            if php_semicolon_separator { b"&;" } else { b"&" },
-        );
+        let separators: &[u8] = if let Some(ref separators) = php_arg_separators {
+            separators.as_bytes()
+        } else if php_semicolon_separator {
+            b"&;"
+        } else {
+            b"&"
+        };
         urlencoded::parse_reader_with_php_nul_name_truncation(
             &mut io::stdin().lock(),
             Limits::default(),
