@@ -1278,7 +1278,14 @@ fn anonymous_upload_with_hook(
                     // Do not retry an unlink error: the pathname may now
                     // refer to a different file after an adversarial swap.
                     fs::remove_file(&*path).map_err(Error::from)?;
-                    Ok(file)
+                    // A rename/hard-link race could leave the opened inode
+                    // reachable under another name. Never write upload bytes
+                    // unless the descriptor is genuinely anonymous.
+                    if file.metadata()?.nlink() != 0 {
+                        Err(Error::InvalidSpoolDirectory)
+                    } else {
+                        Ok(file)
+                    }
                 }
             }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
