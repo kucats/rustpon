@@ -22,6 +22,11 @@ OK, BUFFER_TOO_SMALL, NOT_ADMITTED = 0, 4, 7
 # canonical name collision and MAX_FILE_SIZE metadata behavior.
 OVERRIDES = {
     "empty-upload-name": [],
+    "file-invalid-first": [],
+    "file-invalid-after-good": [0],
+    "file-invalid-trailing-bracket": [],
+    "file-invalid-nested-tail": [],
+    "file-invalid-root-ignored": [1],
     "file-overwrite": [1],
     "file-nested-then-flat": [1],
     "file-flat-then-nested": [1],
