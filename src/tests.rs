@@ -1879,9 +1879,12 @@ fn php_missing_temp_directory_on_disk_recovers_without_staging() {
     let mut request = parser.finish().unwrap();
     fs::DirBuilder::new().mode(0o700).create(&spool.0).unwrap();
     let projection = crate::files::project(&request, crate::files::Limits::default()).unwrap();
-    assert!(projection.wire().parts().any(|part| {
-        part.name == b"file[error]" && part.value == Some(b"6".as_slice())
-    }));
+    assert!(
+        projection
+            .wire()
+            .parts()
+            .any(|part| { part.name == b"file[error]" && part.value == Some(b"6".as_slice()) })
+    );
     assert_eq!(
         request.parts().nth(1).unwrap().value,
         Some(b"kept".as_slice())
@@ -1918,9 +1921,12 @@ fn php_missing_temp_directory_precedes_upload_max_filesize() {
         },
     )
     .unwrap();
-    assert!(metadata.wire().parts().any(|part| {
-        part.name == b"file[error]" && part.value == Some(b"6".as_slice())
-    }));
+    assert!(
+        metadata
+            .wire()
+            .parts()
+            .any(|part| { part.name == b"file[error]" && part.value == Some(b"6".as_slice()) })
+    );
     drop(metadata);
     let admitted =
         crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
@@ -1937,9 +1943,12 @@ fn php_missing_temp_directory_precedes_upload_max_filesize() {
     parser.feed(&body(&[(empty_name, b"")])).unwrap();
     let request = parser.finish().unwrap();
     let metadata = crate::files::project(&request, crate::files::Limits::default()).unwrap();
-    assert!(metadata.wire().parts().any(|part| {
-        part.name == b"file[error]" && part.value == Some(b"4".as_slice())
-    }));
+    assert!(
+        metadata
+            .wire()
+            .parts()
+            .any(|part| { part.name == b"file[error]" && part.value == Some(b"4".as_slice()) })
+    );
     drop(metadata);
     drop(request);
     spool.empty();
