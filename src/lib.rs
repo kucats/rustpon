@@ -910,11 +910,10 @@ impl Parser {
                         )
                     };
                     #[cfg(not(test))]
-                    let write_result =
-                        write_chunk(
-                            upload.file.as_mut().expect("live staged upload"),
-                            &self.output[..self.output_len],
-                        );
+                    let write_result = write_chunk(
+                        upload.file.as_mut().expect("live staged upload"),
+                        &self.output[..self.output_len],
+                    );
                     if let Err(error) = write_result {
                         if !self.php_recover_write_errors {
                             return Err(error.into());
