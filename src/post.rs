@@ -273,7 +273,9 @@ impl PostRequest {
             // PHP's max_input_vars counts submitted ordinary fields, not
             // uploads. Check before name normalization and adapter work so
             // a discarded field cannot trigger a later adapter quota error.
-            if leaf.is_some() && let Some(limit) = max_input_vars {
+            if leaf.is_some()
+                && let Some(limit) = max_input_vars
+            {
                 if seen_fields >= limit {
                     this.stats.skipped_fields += 1;
                     continue;
