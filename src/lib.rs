@@ -1171,7 +1171,13 @@ pub fn parse_reader(
 ) -> Result<Request, Error> {
     // The generic reader retains strict transactional I/O semantics.
     parse_reader_with_php_limits_impl(
-        reader, boundary, limits, spool_dir, None, None, ReaderMode::Strict,
+        reader,
+        boundary,
+        limits,
+        spool_dir,
+        None,
+        None,
+        ReaderMode::Strict,
     )
 }
 
@@ -1275,7 +1281,7 @@ fn parse_reader_with_php_limits_impl(
                 return match parser {
                     Some(parser) if matches!(mode, ReaderMode::PhpPartial) => {
                         parser.finish_with_php_partial()
-                    },
+                    }
                     Some(parser) => parser.finish(),
                     None => Ok(Request {
                         arena: Vec::new(),
