@@ -1928,8 +1928,7 @@ fn php_missing_temp_directory_precedes_upload_max_filesize() {
             .any(|part| { part.name == b"file[error]" && part.value == Some(b"6".as_slice()) })
     );
     drop(metadata);
-    let admitted =
-        crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
+    let admitted = crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
     assert_eq!(admitted.accepted_indices().count(), 0);
     drop(admitted);
     spool.empty();
