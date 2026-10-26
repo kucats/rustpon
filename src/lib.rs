@@ -1169,7 +1169,8 @@ pub fn parse_reader(
     limits: Limits,
     spool_dir: &Path,
 ) -> Result<Request, Error> {
-    parse_reader_with_php_upload_max_bytes(reader, boundary, limits, spool_dir, None)
+    // The generic reader retains strict transactional I/O semantics.
+    parse_reader_with_php_limits_impl(reader, boundary, limits, spool_dir, None, None, false, false)
 }
 
 /// Standalone PHP upload_max_filesize policy applied during parsing.
@@ -1217,6 +1218,7 @@ pub fn parse_reader_with_php_limits(
         php_max_upload_bytes,
         php_max_post_bytes,
         false,
+        true,
     )
 }
 
@@ -1238,6 +1240,7 @@ pub fn parse_reader_with_php_partial(
         php_max_upload_bytes,
         php_max_post_bytes,
         true,
+        true,
     )
 }
 
@@ -1249,12 +1252,14 @@ fn parse_reader_with_php_limits_impl(
     php_max_upload_bytes: Option<u64>,
     php_max_post_bytes: Option<u64>,
     php_partial_upload: bool,
+    php_recover_write_errors: bool,
 ) -> Result<Request, Error> {
-    let mut parser = Some(
-        Parser::new(boundary, limits, spool_dir)?
-            .with_php_upload_max_bytes(php_max_upload_bytes)
-            .with_php_upload_write_recovery(),
-    );
+    let mut configured = Parser::new(boundary, limits, spool_dir)?
+        .with_php_upload_max_bytes(php_max_upload_bytes);
+    if php_recover_write_errors {
+        configured = configured.with_php_upload_write_recovery();
+    }
+    let mut parser = Some(configured);
     let mut body_bytes = 0u64;
     let mut buffer = [0; BLOCK];
     let mut consecutive_interrupts = 0usize;
