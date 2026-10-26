@@ -717,11 +717,7 @@ fn normalize(
         else {
             if count == 1 {
                 for &byte in &raw[base..] {
-                    scratch.push(if b" .[".contains(&byte) {
-                        b'_'
-                    } else {
-                        byte
-                    });
+                    scratch.push(if b" .[".contains(&byte) { b'_' } else { byte });
                 }
                 path[0] = Segment::Key(Span {
                     start: 0,
