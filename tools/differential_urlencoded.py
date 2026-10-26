@@ -89,6 +89,29 @@ def main():
         if lhs != rhs:
             failures += 1
             print(f"FAIL {label}: body={data!r}\nPHP={lhs!r}\nRust={rhs!r}", file=sys.stderr)
+    # The opt-in field-count policy mirrors parse_str(max_input_vars=N).
+    # Keep this separate from the strict/default comparison above.
+    limited = [
+        (0, b"a=1&b=2&c=3"),
+        (1, b"a=1&b=2&c=3"),
+        (2, b"a=1&b=2&c=3"),
+        (3, b"a=1&b=2&c=3"),
+        (2, b"a=1&a=2&b=3"),
+        (2, b"a%5Bx%5D=1&a%5By%5D=2&b=3"),
+    ]
+    for limit, data in limited:
+        expected = run([args.php_bin, "-d", f"max_input_vars={limit}", oracle], data)
+        actual = run([str(args.rust_bin), "--php-max-input-vars", str(limit)], data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL max_input_vars={limit} body={data!r}: {exc}", file=sys.stderr)
     # Explicit strict deviations: no partial JSON publication.
     for label, data in [
         ("NUL-in-name", b"a%00b=1"),
@@ -99,7 +122,7 @@ def main():
         if result.returncode == 0 or result.stdout:
             failures += 1
             print(f"FAIL {label}: expected nonzero exit without stdout", file=sys.stderr)
-    print(f"PHP differential: {len(cases)} compatibility, 3 strict, {failures} failures")
+    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, 3 strict, {failures} failures")
     return int(failures != 0)
 if __name__ == "__main__":
     sys.exit(main())
