@@ -116,15 +116,22 @@ OS interface are required before treating a mutable spool path as safe.
 ## PHP 8.4 URL-encoded separator option
 
 The default URL-encoded decoder splits fields only at raw `&`. PHP's
-`arg_separator.input` can be configured to accept semicolons too. Opt in
-with `FormParser::with_php_semicolon_separator()`,
-`urlencoded::parse_reader_with_php_semicolon_separator()`, or the CLI
-`urlencoded --php-semicolon-separator`. This models
-`arg_separator.input='&;'` only, not arbitrary separator sets. Raw `;`
-separates fields even across feed boundaries; percent-encoded `%3B` stays
-within the field. The option composes with the existing PHP input-variable
-and nesting limits. Nine CLI comparisons against PHP 8.4 `parse_str()`
-exercise the configured separator and combined variable quota.
+`arg_separator.input` accepts a set of raw separator bytes, which need not
+include `&`. Use `FormParser::with_php_arg_separators(b"|")` or
+`urlencoded::parse_reader_with_php_arg_separators(reader, limits, b"|")`
+to select a set. The CLI equivalent is `urlencoded --php-arg-separators '|'`.
+An empty set follows PHP's fallback to `&`. Separators are recognized
+before percent-decoding; `%7C` does not split when `|` is configured.
+Even `=` can be a separator, in which case it takes precedence over the
+name/value delimiter. The separator lookup uses a fixed-size byte bitmap.
+
+The earlier `--php-semicolon-separator` flag and
+`with_php_semicolon_separator()` API remain shorthands for `&;`; the two
+CLI separator options are mutually exclusive. The option composes with PHP
+input-variable and nesting limits. The differential suite compares custom
+separator sets, encoded separators, empty settings and `=` precedence
+against the installed PHP CLI `parse_str()` oracle. This is a request
+parsing prototype, not a PHP SAPI integration.
 
 ## PHP-style adapter scope
 
