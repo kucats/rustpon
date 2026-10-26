@@ -235,6 +235,9 @@ impl PostRequest {
             value: Value::Array(Array::empty()),
             next: None,
         });
+        // PHP's rfc1867 handler stops registering further uploads after a
+        // malformed file control, but continues processing ordinary fields.
+        let mut uploads_stopped = false;
         for index in 0..this.request.parts.len() {
             let part = &this.request.parts[index];
             let name = Span {
@@ -251,8 +254,14 @@ impl PostRequest {
             let raw = name.bytes(&this.request.arena);
             this.charge(raw.len() as u64)?;
             let raw = name.bytes(&this.request.arena);
-            if leaf.is_none() && !valid_upload_name(raw) {
-                return Err(Error::MalformedUploadName);
+            if leaf.is_none() {
+                if uploads_stopped {
+                    continue;
+                }
+                if !valid_upload_name(raw) {
+                    uploads_stopped = true;
+                    continue;
+                }
             }
             let count = normalize(
                 raw,
@@ -271,8 +280,7 @@ impl PostRequest {
             } else if count != 0 {
                 this.add_protection()?;
                 // Well-formed upload names generate root[tmp_name][indices...].
-                // PHP skips malformed upload controls; this adapter rejects the
-                // whole conversion instead of publishing a partial projection.
+                // Malformed controls and later uploads were skipped above.
                 {
                     let Segment::Key(base) = this.segments[0] else {
                         unreachable!()

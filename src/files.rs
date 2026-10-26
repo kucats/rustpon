@@ -87,12 +87,13 @@ fn project_impl(
     limits: Limits,
     tag_uploads: bool,
 ) -> Result<post::PostRequest, Error> {
-    let file_count = request.parts().filter(|p| p.filename.is_some()).count();
-    let parts_count = file_count
-        .checked_mul(ATTRIBUTES.len())
-        .ok_or(Error::InvalidLimits)?;
+    // PHP stops registering uploads at the first malformed file name.
+    // Count only metadata that can actually be published; otherwise a
+    // rejected suffix could exhaust the synthetic projection budget.
+    let mut parts_count = 0usize;
     let mut needed = 0usize;
     let mut form_max = 0i64;
+    let mut uploads_stopped = false;
     for (index, part) in request.parts().enumerate() {
         if part.filename.is_none() {
             if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
@@ -100,17 +101,28 @@ fn project_impl(
             }
             continue;
         }
-        let upload_error = upload_error(&part, form_max);
-        if !post::valid_upload_name(part.name) {
-            return Err(Error::MalformedUploadName);
+        if uploads_stopped {
+            continue;
         }
+        if !post::valid_upload_name(part.name) {
+            uploads_stopped = true;
+            continue;
+        }
+        let prefix_len = part
+            .name
+            .iter()
+            .position(|c| *c == b'[')
+            .unwrap_or(part.name.len());
+        // Empty or bracket-only roots are ignored without stopping later files.
+        if prefix_len == 0 {
+            continue;
+        }
+        parts_count = parts_count
+            .checked_add(ATTRIBUTES.len())
+            .ok_or(Error::InvalidLimits)?;
+        let upload_error = upload_error(&part, form_max);
         for &attr in &ATTRIBUTES {
             let value = projected_value(&part, attr, upload_error, index, tag_uploads);
-            let prefix_len = part
-                .name
-                .iter()
-                .position(|c| *c == b'[')
-                .unwrap_or(part.name.len());
             // root + "[" + attr + "]" + original bracket suffix + value
             let entry_len = part
                 .name
@@ -118,9 +130,6 @@ fn project_impl(
                 .checked_add(attr.len() + 2)
                 .and_then(|n| n.checked_add(value.len()))
                 .ok_or(Error::InvalidLimits)?;
-            if prefix_len == 0 {
-                return Err(Error::MalformedUploadName);
-            }
             needed = needed.checked_add(entry_len).ok_or(Error::InvalidLimits)?;
             if needed > limits.metadata_bytes {
                 return Err(Error::MetadataBytes);
@@ -161,6 +170,7 @@ fn project_impl(
     }
 
     form_max = 0;
+    uploads_stopped = false;
     for (index, part) in request.parts().enumerate() {
         if part.filename.is_none() {
             if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
@@ -168,12 +178,22 @@ fn project_impl(
             }
             continue;
         }
-        let upload_error = upload_error(&part, form_max);
+        if uploads_stopped {
+            continue;
+        }
+        if !post::valid_upload_name(part.name) {
+            uploads_stopped = true;
+            continue;
+        }
         let root_len = part
             .name
             .iter()
             .position(|c| *c == b'[')
             .unwrap_or(part.name.len());
+        if root_len == 0 {
+            continue;
+        }
+        let upload_error = upload_error(&part, form_max);
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
             let start = arena.len();
@@ -504,6 +524,73 @@ mod tests {
         assert_eq!(content, b"payload");
         drop(original);
         assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        fs::remove_dir(&path).unwrap();
+    }
+
+    #[test]
+    fn malformed_upload_name_stops_later_files_without_losing_fields() {
+        let path = std::env::temp_dir().join(format!(
+            "rustpon-invalid-upload-{}",
+            std::process::id()
+        ));
+        fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
+        let cases: &[(&[&[u8]], &[usize])] = &[
+            (&[b"bad[x", b"later"], &[]),
+            (&[b"good", b"bad[x", b"later"], &[0]),
+            (&[b"bad]", b"later"], &[]),
+            (&[b"bad[x][", b"later"], &[]),
+            (&[b"[ignored]", b"later"], &[1]),
+            (&[b"", b"later"], &[1]),
+        ];
+        for &(names, expected) in cases {
+            let mut body = Vec::new();
+            for &name in names {
+                body.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"");
+                body.extend_from_slice(name);
+                body.extend_from_slice(b"\"; filename=\"upload.bin\"\r\n\r\nxyz\r\n");
+            }
+            body.extend_from_slice(
+                b"--b\r\nContent-Disposition: form-data; name=\"plain\"\r\n\r\nstill\r\n--b--\r\n",
+            );
+            let parse = || {
+                let mut parser = Parser::new(b"b", WireLimits::default(), &path).unwrap();
+                parser.feed(&body).unwrap();
+                parser.finish().unwrap()
+            };
+            let request = parse();
+            let metadata = project(&request, Limits::default()).unwrap();
+            let mut tree = Vec::new();
+            metadata.write_php_files_json(&mut tree).unwrap();
+            assert!(!tree.is_empty(), "names={names:?}");
+            drop(metadata);
+
+            let mut admitted =
+                crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
+            assert_eq!(
+                admitted.accepted_indices().collect::<Vec<_>>().as_slice(),
+                expected,
+                "names={names:?}"
+            );
+            for index in 0..names.len() {
+                let mut bytes = Vec::new();
+                let copied = admitted.copy_accepted(index, &mut bytes).unwrap();
+                assert_eq!(copied.is_some(), expected.contains(&index), "index={index}");
+                if copied.is_some() {
+                    assert_eq!(bytes, b"xyz");
+                }
+            }
+            drop(admitted);
+
+            let post = parse().into_post(post::Limits::default()).unwrap();
+            let mut post_json = Vec::new();
+            post.write_json(&mut post_json).unwrap();
+            assert!(
+                String::from_utf8(post_json).unwrap().contains("7374696c6c"),
+                "ordinary field after invalid upload must survive"
+            );
+            drop(post);
+            assert_eq!(fs::read_dir(&path).unwrap().count(), 0);
+        }
         fs::remove_dir(&path).unwrap();
     }
 }

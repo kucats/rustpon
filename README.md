@@ -111,8 +111,13 @@ For ordinary fields, a missing first closing bracket flattens the name
 (`a[x` becomes `a_x`); after a completed bracket, an unfinished tail
 is ignored (`a[x][y` becomes `a[x]`). This matches PHP 8.4
 `php_register_variable_ex` and is checked by the CLI/SAPI differential
-corpora. Malformed upload names remain a documented strict-mode rejection
-rather than a partial `$_FILES` projection.
+corpora. For file controls, malformed bracket syntax (such as `f[x` or
+`f[x][`) stops registration of subsequent uploads, matching PHP 8.4
+rfc1867 behavior; earlier valid files and later ordinary form fields remain
+visible. Empty or bracket-only upload roots are ignored without stopping
+later files. The admission gate closes descriptors for every discarded file.
+This is distinct from strict resource-limit failures, which still reject the
+whole request.
 
 The behavior is a bounded compatibility experiment for 64-bit PHP 8.4-style
 semantics; it is not a substitute for differential validation against every
