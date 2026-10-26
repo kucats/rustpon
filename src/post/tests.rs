@@ -80,17 +80,17 @@ fn ordered_tree_normalizes_keys_preserves_binary_and_replaces_in_place() {
 fn bracket_index_whitespace_matches_php_84() {
     let cases: &[(&[u8], Option<&[u8]>)] = &[
         (b"a[ x]", Some(b" x")),
-        (b"a[\${escaped}x]", Some(b"\${escaped}x")),
-        (b"a[\${escaped}x]", Some(b"\${escaped}x")),
+        (b"a[\tx]", Some(b"\tx")),
+        (b"a[\nx]", Some(b"\nx")),
         (b"a[  ]", Some(b"  ")),
-        (b"a[ \${escaped}]", Some(b" \${escaped}")),
+        (b"a[ \t]", Some(b" \t")),
         (b"a[]", None),
         (b"a[ ]", None),
-        (b"a[\${escaped}]", None),
-        (b"a[\${escaped}]", None),
-        (b"a[\${escaped}]", None),
-        (b"a[\${escaped}]", None),
-        (b"a[\${escaped}]", None),
+        (b"a[\t]", None),
+        (b"a[\n]", None),
+        (b"a[\r]", None),
+        (b"a[\x0b]", None),
+        (b"a[\x0c]", None),
     ];
     for &(raw, expected) in cases {
         let mut scratch = Vec::new();
