@@ -21,8 +21,9 @@ pub struct FormParser {
     raw_name: usize,
     raw_value: usize,
     raw_values_total: usize,
-    // Opt-in PHP arg_separator.input='&;' behavior; default remains '&'.
-    php_semicolon_separator: bool,
+    // A fixed-size set of raw separator bytes (PHP arg_separator.input).
+    // Four words cover all 256 byte values without per-request allocation.
+    separators: [u64; 4],
 }
 
 impl FormParser {
@@ -72,15 +73,33 @@ impl FormParser {
             raw_name: 0,
             raw_value: 0,
             raw_values_total: 0,
-            php_semicolon_separator: false,
+            separators: [1u64 << (b'&' as usize % 64), 0, 0, 0],
         })
     }
 
-    /// Enable ';' as an additional raw field separator, as in PHP 8.4
-    /// arg_separator.input='&;'. Percent-encoded %3B stays within a field.
-    pub fn with_php_semicolon_separator(mut self) -> Self {
-        self.php_semicolon_separator = true;
+    /// Configure the raw separator byte set used by PHP arg_separator.input.
+    /// Empty settings fall back to PHP's default '&'. Percent-encoded bytes
+    /// are decoded only after splitting and therefore cannot be separators.
+    pub fn with_php_arg_separators(mut self, separators: &[u8]) -> Self {
+        self.separators = [0; 4];
+        let separators = if separators.is_empty() {
+            b"&".as_slice()
+        } else {
+            separators
+        };
+        for &byte in separators {
+            self.separators[usize::from(byte) / 64] |= 1u64 << (byte % 64);
+        }
         self
+    }
+
+    /// Compatibility shorthand for PHP arg_separator.input='&;'.
+    pub fn with_php_semicolon_separator(self) -> Self {
+        self.with_php_arg_separators(b"&;")
+    }
+
+    fn is_separator(&self, byte: u8) -> bool {
+        self.separators[usize::from(byte) / 64] & (1u64 << (byte % 64)) != 0
     }
 
     fn request(&mut self) -> &mut Request {
@@ -119,13 +138,12 @@ impl FormParser {
         )?;
         self.request().stats.body_bytes = total;
         for &byte in bytes {
-            match byte {
-                b'&' => self.complete_field()?,
-                b';' if self.php_semicolon_separator => self.complete_field()?,
-                b'=' if self.value_start.is_none() => {
-                    self.value_start = Some(self.request().arena.len());
-                }
-                _ => self.raw_byte(byte)?,
+            if self.is_separator(byte) {
+                self.complete_field()?;
+            } else if byte == b'=' && self.value_start.is_none() {
+                self.value_start = Some(self.request().arena.len());
+            } else {
+                self.raw_byte(byte)?;
             }
         }
         Ok(())
@@ -270,7 +288,7 @@ fn url_decode(bytes: &mut [u8]) -> usize {
 
 /// Standalone blocking-Read adapter with no HTTP transport assumptions.
 pub fn parse_reader(reader: &mut impl Read, limits: Limits) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, false)
+    parse_reader_impl(reader, limits, b"&")
 }
 
 /// Opt-in PHP 8.4 `arg_separator.input='&;'` parsing for trusted SAPI settings.
@@ -279,18 +297,25 @@ pub fn parse_reader_with_php_semicolon_separator(
     reader: &mut impl Read,
     limits: Limits,
 ) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, true)
+    parse_reader_impl(reader, limits, b"&;")
+}
+
+/// Parse using PHP's configured arg_separator.input byte set. The empty
+/// setting follows PHP's fallback to '&'; this API does not parse INI syntax.
+pub fn parse_reader_with_php_arg_separators(
+    reader: &mut impl Read,
+    limits: Limits,
+    separators: &[u8],
+) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, separators)
 }
 
 fn parse_reader_impl(
     reader: &mut impl Read,
     limits: Limits,
-    php_semicolon_separator: bool,
+    separators: &[u8],
 ) -> Result<Request, Error> {
-    let mut parser = FormParser::new(limits)?;
-    if php_semicolon_separator {
-        parser = parser.with_php_semicolon_separator();
-    }
+    let mut parser = FormParser::new(limits)?.with_php_arg_separators(separators);
     let mut buffer = [0u8; 8192];
     let mut consecutive_interrupts = 0usize;
     loop {
@@ -331,6 +356,85 @@ mod tests {
             .parts()
             .map(|p| (p.name.to_vec(), p.value.unwrap().to_vec()))
             .collect()
+    }
+
+    #[test]
+    fn php_configured_separator_bytes_match_raw_split_semantics() {
+        let body = b"a=1|b=2&c=3;d=4";
+        let expected = vec![
+            (b"a".to_vec(), b"1".to_vec()),
+            (b"b".to_vec(), b"2&c=3;d=4".to_vec()),
+        ];
+        assert_eq!(
+            fields(
+                &parse_reader_with_php_arg_separators(
+                    &mut Cursor::new(body),
+                    Limits::default(),
+                    b"|",
+                )
+                .unwrap()
+            ),
+            expected
+        );
+        for split in 0..=body.len() {
+            let mut parser = FormParser::new(Limits::default())
+                .unwrap()
+                .with_php_arg_separators(b"|");
+            parser.feed(&body[..split]).unwrap();
+            parser.feed(&body[split..]).unwrap();
+            assert_eq!(fields(&parser.finish().unwrap()), expected, "split {split}");
+        }
+        // A separator may itself be '='. Separators are applied before the
+        // first name/value delimiter, just as in PHP's parse_str().
+        let equal = parse_reader_with_php_arg_separators(
+            &mut Cursor::new(b"a=1=b=2"),
+            Limits::default(),
+            b"=",
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&equal),
+            vec![
+                (b"a".to_vec(), Vec::new()),
+                (b"1".to_vec(), Vec::new()),
+                (b"b".to_vec(), Vec::new()),
+                (b"2".to_vec(), Vec::new()),
+            ]
+        );
+        // Raw '+' is a separator, but its percent-encoded spelling is not.
+        let plus = parse_reader_with_php_arg_separators(
+            &mut Cursor::new(b"a=1%2B2+b=3"),
+            Limits::default(),
+            b"+",
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&plus),
+            vec![
+                (b"a".to_vec(), b"1+2".to_vec()),
+                (b"b".to_vec(), b"3".to_vec()),
+            ]
+        );
+        assert_eq!(
+            fields(
+                &parse_reader_with_php_arg_separators(
+                    &mut Cursor::new(b"a=1&b=2"),
+                    Limits::default(),
+                    b"",
+                )
+                .unwrap()
+            ),
+            fields(&parse(b"a=1&b=2", Limits::default()).unwrap())
+        );
+        let mut limited = FormParser::new(Limits {
+            parts: 1,
+            fields: 1,
+            ..Limits::default()
+        })
+        .unwrap()
+        .with_php_arg_separators(b"|");
+        assert_eq!(limited.feed(b"a=1|b=2"), Err(Error::Limit(Limit::Parts)));
+        assert!(matches!(limited.finish(), Err(Error::Limit(Limit::Parts))));
     }
 
     #[test]
