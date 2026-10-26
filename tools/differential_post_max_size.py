@@ -23,10 +23,12 @@ CASES = [
 ]
 
 
-def run_rust(binary, spool, data, limit):
+def run_rust(binary, spool, data, limit, preflight):
+    flags = [str(binary), "--admit", "--php-post-max-size", str(limit)]
+    if preflight:
+        flags.extend(["--content-length", str(len(data))])
     proc = subprocess.run(
-        [str(binary), "--admit", "--php-post-max-size", str(limit),
-         BOUNDARY.decode(), str(spool)],
+        [*flags, BOUNDARY.decode(), str(spool)],
         input=data, capture_output=True, timeout=15, check=False,
     )
     if proc.returncode:
@@ -59,18 +61,20 @@ def main():
                 )
                 try:
                     php = php_post(port, body)
-                    rust = run_rust(args.rust_bin, spool, body, limit)
-                    for key in ("files_tree", "files_tree_typed"):
-                        if php[key] != rust[key]:
-                            raise AssertionError(
-                                f"{key}: PHP={php[key]!r} Rust={rust[key]!r}"
-                            )
-                    if limit != 0 and len(body) > limit:
-                        if php["post_tree"] != ["a", []]:
-                            raise AssertionError("PHP did not discard oversized POST")
-                        if rust["accepted_indices"]:
-                            raise AssertionError("oversized upload remained accepted")
-                    checked += 1
+                    for preflight in (False, True):
+                        rust = run_rust(args.rust_bin, spool, body, limit, preflight)
+                        for key in ("files_tree", "files_tree_typed"):
+                            if php[key] != rust[key]:
+                                raise AssertionError(
+                                    f"preflight={preflight} {key}: "
+                                    f"PHP={php[key]!r} Rust={rust[key]!r}"
+                                )
+                        if limit != 0 and len(body) > limit:
+                            if php["post_tree"] != ["a", []]:
+                                raise AssertionError("PHP did not discard oversized POST")
+                            if rust["accepted_indices"]:
+                                raise AssertionError("oversized upload remained accepted")
+                        checked += 1
                 except (AssertionError, RuntimeError, ValueError) as error:
                     failures += 1
                     print(
