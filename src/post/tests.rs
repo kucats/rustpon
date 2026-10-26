@@ -120,6 +120,41 @@ fn bracket_index_whitespace_matches_php_84() {
 }
 
 #[test]
+fn php_nesting_limit_skips_overdeep_fields_and_counts_them_toward_input_vars() {
+    let spool = Spool::new();
+    let fields: &[(&[u8], &[u8])] = &[
+        (b"a[x][y]", b"too-deep"),
+        (b"ok", b"1"),
+        (b"a[x]", b"2"),
+        (b"tail", b"3"),
+    ];
+    let post = request(&spool, fields, false)
+        .into_post_with_php_limits(Limits::default(), 3, 1)
+        .unwrap();
+    assert_eq!(post.stats().skipped_fields, 2);
+    assert_eq!(post.stats().fields, 2);
+    assert_eq!(
+        json(&post),
+        r#"["a",[[["s","6f6b"],["s","31"]],[["s","61"],["a",[[["s","78"],["s","32"]]]]]]]"#
+    );
+
+    // A zero nesting limit drops bracketed names but keeps plain fields.
+    let zero = request(&spool, &[(b"a[x]", b"1"), (b"ok", b"2")], false)
+        .into_post_with_php_limits(Limits::default(), usize::MAX, 0)
+        .unwrap();
+    assert_eq!(json(&zero), r#"["a",[[["s","6f6b"],["s","32"]]]]"#);
+    assert_eq!(zero.stats().skipped_fields, 1);
+
+    // Strict callers still reject over-depth names atomically.
+    let mut strict = Limits::default();
+    strict.depth = 1;
+    assert_eq!(
+        request(&spool, fields, false).into_post(strict).unwrap_err(),
+        Error::Depth
+    );
+}
+
+#[test]
 fn numeric_keys_follow_signed_64_bit_php_rules() {
     for (input, expected) in [
         ("0", Some(0)),

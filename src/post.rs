@@ -149,7 +149,7 @@ impl Request {
     /// Consumes this request on both success and failure. On adapter failure,
     /// all field storage and upload descriptors are released before returning.
     pub fn into_post(self, limits: Limits) -> Result<PostRequest, Error> {
-        PostRequest::build(self, limits, false, None)
+        PostRequest::build(self, limits, false, None, false)
     }
 
     /// PHP-style field-count handling for form bodies. Once the first
@@ -162,13 +162,27 @@ impl Request {
         limits: Limits,
         max_input_vars: usize,
     ) -> Result<PostRequest, Error> {
-        PostRequest::build(self, limits, false, Some(max_input_vars))
+        PostRequest::build(self, limits, false, Some(max_input_vars), false)
+    }
+
+    /// Opt-in PHP 8.4 nesting policy for ordinary POST fields. Fields that
+    /// exceed max_input_nesting_level are skipped without discarding later
+    /// fields, but still count toward max_input_vars. The wire parser's hard
+    /// quotas and FILES/upload-name handling remain unchanged.
+    pub fn into_post_with_php_limits(
+        self,
+        mut limits: Limits,
+        max_input_vars: usize,
+        max_input_nesting_level: usize,
+    ) -> Result<PostRequest, Error> {
+        limits.depth = limits.depth.min(max_input_nesting_level);
+        PostRequest::build(self, limits, false, Some(max_input_vars), true)
     }
 
     /// Synthetic $_FILES metadata uses PHP's upload-index normalization,
     /// which trims leading bracket whitespace unlike ordinary $_POST.
     pub(crate) fn into_files_post(self, limits: Limits) -> Result<PostRequest, Error> {
-        PostRequest::build(self, limits, true, None)
+        PostRequest::build(self, limits, true, None, false)
     }
 }
 
@@ -178,6 +192,7 @@ impl PostRequest {
         limits: Limits,
         files_projection: bool,
         max_input_vars: Option<usize>,
+        php_nesting: bool,
     ) -> Result<Self, Error> {
         if limits.depth > MAX_DEPTH || limits.name_bytes > MAX_NAME {
             return Err(Error::InvalidLimits);
@@ -294,13 +309,20 @@ impl PostRequest {
                     continue;
                 }
             }
-            let count = normalize(
+            let count = match normalize(
                 raw,
                 &mut this.scratch,
                 &mut this.segments,
                 limits,
                 files_projection || leaf.is_none(),
-            )?;
+            ) {
+                Ok(count) => count,
+                Err(Error::Depth) if php_nesting && leaf.is_some() => {
+                    this.stats.skipped_fields += 1;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             if let Some(value) = leaf {
                 this.stats.fields += 1;
                 if count == 0 || this.is_protected()? {

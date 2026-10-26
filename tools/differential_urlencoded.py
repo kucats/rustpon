@@ -112,6 +112,52 @@ def main():
         except (KeyError, ValueError) as exc:
             failures += 1
             print(f"FAIL max_input_vars={limit} body={data!r}: {exc}", file=sys.stderr)
+    # PHP counts an over-depth field against max_input_vars even when the
+    # variable is dropped. Compare the full tagged tree, not only exit codes.
+    nested = [
+        (0, b"a%5Bx%5D=1&ok=2"),
+        (1, b"a%5Bx%5D=1&ok=2"),
+        (1, b"a%5Bx%5D%5By%5D=1&ok=2"),
+        (2, b"a%5Bx%5D%5By%5D=1&ok=2"),
+        (1, b"a%5Bx%5D%5By=1&ok=2"),
+        (2, b"a%5Bx%5D%5By=1&ok=2"),
+        (64, b"a" + b"%5Bx%5D" * 65 + b"=deep&ok=2"),
+    ]
+    combined = [
+        (1, 1, b"a%5Bx%5D%5By%5D=1&ok=2"),
+        (2, 1, b"a%5Bx%5D%5By%5D=1&ok=2&tail=3"),
+        (3, 2, b"a%5Bx%5D%5By%5D%5Bz%5D=1&a%5Bx%5D%5By%5D=2&ok=3"),
+        (0, 2, b"a%5Bx%5D=1&ok=2"),
+    ]
+    for depth, data in nested:
+        expected = run([args.php_bin, "-d", "max_input_vars=10000",
+                        "-d", f"max_input_nesting_level={depth}", oracle], data)
+        actual = run([str(args.rust_bin), "--php-max-input-nesting-level", str(depth)], data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL nesting={depth} body={data!r}: {exc}", file=sys.stderr)
+    for count, depth, data in combined:
+        expected = run([args.php_bin, "-d", f"max_input_vars={count}",
+                        "-d", f"max_input_nesting_level={depth}", oracle], data)
+        actual = run([str(args.rust_bin), "--php-max-input-vars", str(count),
+                      "--php-max-input-nesting-level", str(depth)], data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL vars={count} nesting={depth} body={data!r}: {exc}", file=sys.stderr)
     # Explicit strict deviations: no partial JSON publication.
     for label, data in [
         ("NUL-in-name", b"a%00b=1"),
@@ -122,7 +168,7 @@ def main():
         if result.returncode == 0 or result.stdout:
             failures += 1
             print(f"FAIL {label}: expected nonzero exit without stdout", file=sys.stderr)
-    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, 3 strict, {failures} failures")
+    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, 3 strict, {failures} failures")
     return int(failures != 0)
 if __name__ == "__main__":
     sys.exit(main())

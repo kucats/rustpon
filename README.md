@@ -108,6 +108,17 @@ not produce a Zend `$_POST` value. Independent hard server quotas and the
 wire parser limits still fail closed. The Linux differential compares exact,
 one-byte-over, one-byte-under and zero-limit cases against PHP's HTTP SAPI.
 
+An additional opt-in PHP 8.4 nesting slice is exposed by
+`Request::into_post_with_php_limits(limits, max_input_vars,
+max_input_nesting_level)` and the `urlencoded` CLI flags
+`--php-max-input-vars` and `--php-max-input-nesting-level`.
+Ordinary fields exceeding the nesting level are discarded while later fields
+are retained; discarded fields still count toward `max_input_vars`. The
+wire parser's hard limits and FILES upload-name policy remain strict.
+Differential tests compare the resulting tagged trees with PHP CLI
+`parse_str()` under explicit `-d max_input_nesting_level` and
+`-d max_input_vars` settings, including zero, boundary and combined cases.
+
 An opt-in field-count compatibility slice is available through
 `Request::into_post_with_max_input_vars(limits, max_input_vars)` and
 `urlencoded --php-max-input-vars N`. It retains the first N ordinary
