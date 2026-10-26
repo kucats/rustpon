@@ -149,12 +149,18 @@ impl Request {
     /// Consumes this request on both success and failure. On adapter failure,
     /// all field storage and upload descriptors are released before returning.
     pub fn into_post(self, limits: Limits) -> Result<PostRequest, Error> {
-        PostRequest::build(self, limits)
+        PostRequest::build(self, limits, false)
+    }
+
+    /// Synthetic $_FILES metadata uses PHP's upload-index normalization,
+    /// which trims leading bracket whitespace unlike ordinary $_POST.
+    pub(crate) fn into_files_post(self, limits: Limits) -> Result<PostRequest, Error> {
+        PostRequest::build(self, limits, true)
     }
 }
 
 impl PostRequest {
-    fn build(request: Request, limits: Limits) -> Result<Self, Error> {
+    fn build(request: Request, limits: Limits, files_projection: bool) -> Result<Self, Error> {
         if limits.depth > MAX_DEPTH || limits.name_bytes > MAX_NAME {
             return Err(Error::InvalidLimits);
         }
@@ -248,7 +254,13 @@ impl PostRequest {
             if leaf.is_none() && !valid_upload_name(raw) {
                 return Err(Error::MalformedUploadName);
             }
-            let count = normalize(raw, &mut this.scratch, &mut this.segments, limits)?;
+            let count = normalize(
+                raw,
+                &mut this.scratch,
+                &mut this.segments,
+                limits,
+                files_projection || leaf.is_none(),
+            )?;
             if let Some(value) = leaf {
                 this.stats.fields += 1;
                 if count == 0 || this.is_protected()? {
@@ -658,6 +670,7 @@ fn normalize(
     scratch: &mut Vec<u8>,
     path: &mut [Segment; MAX_DEPTH + 1],
     limits: Limits,
+    upload_index: bool,
 ) -> Result<usize, Error> {
     if raw.len() > limits.name_bytes {
         return Err(Error::NameBytes);
@@ -687,6 +700,13 @@ fn normalize(
             return Err(Error::Depth);
         }
         cursor += 1;
+        // PHP's rfc1867 upload-name parser trims leading bracket whitespace;
+        // php_register_variable_ex for POST fields preserves it instead.
+        if upload_index {
+            while raw.get(cursor).is_some_and(|b| b" \r\n\t".contains(b)) {
+                cursor += 1;
+            }
+        }
         let index_start = cursor;
         let end = raw[cursor..]
             .iter()
@@ -697,7 +717,9 @@ fn normalize(
         // between brackets as append, but preserves whitespace in other keys.
         // Trimming every leading whitespace byte changes the key's identity.
         let append = end == index_start
-            || (end == index_start + 1 && b" \t\n\r\x0b\x0c".contains(&raw[index_start]));
+            || (!upload_index
+                && end == index_start + 1
+                && b" \t\n\r\x0b\x0c".contains(&raw[index_start]));
         scratch.push(b'[');
         let start = scratch.len();
         if !append {
