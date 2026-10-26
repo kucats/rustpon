@@ -105,6 +105,8 @@ Upload names protect their canonical and generated `tmp_name` keys from later
 fields. A single ASCII whitespace byte inside a bracket index (such as
 `a[ ]` or `a[\\t]`) is an append marker, matching PHP 8.4; two whitespace
 bytes or whitespace followed by another byte remain part of the literal key.
+The PHP upload-name path separately trims leading bracket whitespace when
+projecting `$_FILES` (for example, `f[ x]` becomes index `x`).
 A malformed upload name rejects the whole conversion rather than
 returning a partial tree.
 
