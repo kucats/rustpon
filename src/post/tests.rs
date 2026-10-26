@@ -95,7 +95,7 @@ fn bracket_index_whitespace_matches_php_84() {
     for &(raw, expected) in cases {
         let mut scratch = Vec::new();
         let mut path = [Segment::Append; MAX_DEPTH + 1];
-        let count = normalize(raw, &mut scratch, &mut path, Limits::default()).unwrap();
+        let count = normalize(raw, &mut scratch, &mut path, Limits::default(), false).unwrap();
         assert_eq!(count, 2, "name={raw:?}");
         match (path[1], expected) {
             (Segment::Append, None) => {}
