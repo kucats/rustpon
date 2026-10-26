@@ -1256,3 +1256,155 @@ fn php_post_streaming_quota_retains_strict_errors_until_exceeded() {
     drop(request);
     spool.empty();
 }
+
+
+#[test]
+fn php_content_length_preflight_skips_malformed_oversized_multipart() {
+    let spool = Spool::new();
+    let malformed = b"not even a multipart body";
+    for quota in [1, (malformed.len() - 1) as u64] {
+        let mut reader = Cursor::new(malformed);
+        let request = parse_reader_with_php_content_length(
+            &mut reader,
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            Some(quota),
+            malformed.len() as u64,
+        )
+        .unwrap();
+        assert_eq!(request.parts().len(), 0);
+        assert_eq!(request.stats().body_bytes, malformed.len() as u64);
+        assert_eq!(reader.position(), malformed.len() as u64);
+        drop(request);
+        spool.empty();
+    }
+
+    // Preflight is based on declared bytes, not on when a read chunk crosses
+    // the quota. An oversized upload is never opened, even if framing is bad.
+    let wire = body(&[(FILE, b"payload")]);
+    let mut reader = Cursor::new(&wire);
+    let request = parse_reader_with_php_content_length(
+        &mut reader,
+        b"AaB03x",
+        Limits::default(),
+        &spool.0,
+        Some(2),
+        Some(1),
+        wire.len() as u64,
+    )
+    .unwrap();
+    assert_eq!(request.parts().len(), 0);
+    drop(request);
+    spool.empty();
+}
+
+#[test]
+fn php_content_length_exact_boundary_and_transport_isolation() {
+    let spool = Spool::new();
+    let wire = body(&[(FILE, b"abc"), (FIELD, b"ok")]);
+    for php_limit in [None, Some(0), Some(wire.len() as u64)] {
+        let mut concatenated = wire.clone();
+        concatenated.extend_from_slice(b"NEXT-HTTP-REQUEST");
+        let mut reader = Cursor::new(&concatenated);
+        let request = parse_reader_with_php_content_length(
+            &mut reader,
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            php_limit,
+            wire.len() as u64,
+        )
+        .unwrap();
+        assert_eq!(request.parts().len(), 2);
+        assert_eq!(reader.position(), wire.len() as u64);
+        drop(request);
+        spool.empty();
+    }
+
+    // The declared body must arrive in full, even when PHP will discard it.
+    for php_limit in [Some(1), None] {
+        let truncated = &wire[..wire.len() - 1];
+        assert_eq!(
+            parse_reader_with_php_content_length(
+                &mut Cursor::new(truncated),
+                b"AaB03x",
+                Limits::default(),
+                &spool.0,
+                None,
+                php_limit,
+                wire.len() as u64,
+            )
+            .unwrap_err(),
+            Error::Truncated
+        );
+        spool.empty();
+    }
+
+    // A smaller Content-Length must not consume the next message.
+    let mut reader = Cursor::new(&wire);
+    assert_eq!(
+        parse_reader_with_php_content_length(
+            &mut reader,
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            None,
+            (wire.len() - 1) as u64,
+        )
+        .unwrap_err(),
+        Error::Truncated
+    );
+    assert_eq!(reader.position(), (wire.len() - 1) as u64);
+    spool.empty();
+
+    // The independent hard limit is enforced before any read or staging.
+    let mut reader = Cursor::new(&wire);
+    let hard = Limits {
+        body_bytes: wire.len() as u64 - 1,
+        ..Limits::default()
+    };
+    assert_eq!(
+        parse_reader_with_php_content_length(
+            &mut reader,
+            b"AaB03x",
+            hard,
+            &spool.0,
+            None,
+            Some(1),
+            wire.len() as u64,
+        )
+        .unwrap_err(),
+        Error::Limit(Limit::BodyBytes)
+    );
+    assert_eq!(reader.position(), 0);
+    spool.empty();
+}
+
+#[test]
+fn php_content_length_preflight_read_errors_fail_closed() {
+    struct Broken;
+    impl Read for Broken {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::ConnectionReset.into())
+        }
+    }
+    let spool = Spool::new();
+    assert_eq!(
+        parse_reader_with_php_content_length(
+            &mut Broken,
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            Some(1),
+            100,
+        )
+        .unwrap_err(),
+        Error::Io(io::ErrorKind::ConnectionReset)
+    );
+    spool.empty();
+}
