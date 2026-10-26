@@ -98,6 +98,19 @@ spool directory trusted and stable for the request lifetime.
 
 ## PHP-style adapter scope
 
+An opt-in field-count compatibility slice is available through
+`Request::into_post_with_max_input_vars(limits, max_input_vars)` and
+`urlencoded --php-max-input-vars N`. It retains the first N ordinary
+form fields and skips later fields while continuing to process uploads.
+`max_input_vars=0` drops all ordinary fields. PHP 8.4 `parse_str()`
+is used as the oracle for six exact boundary/collision cases in CI.
+The ordinary `into_post` entry point remains fail-closed and does not
+apply this PHP limit. This is **not yet a full PHP limit policy**:
+the wire parser may reject requests before projection (including empty
+names or too many parts), and nesting, append exhaustion, allocation and
+upload quota errors still use strict rejection. See issue #4.
+
+
 The adapter preserves ordered fields, applies PHP-style root/bracket
 normalization, expands bracket paths, handles numeric string keys and
 append-after-negative-index behavior, and models scalar/array replacement.
