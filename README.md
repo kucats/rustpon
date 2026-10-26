@@ -133,6 +133,22 @@ separator sets, encoded separators, empty settings and `=` precedence
 against the installed PHP CLI `parse_str()` oracle. This is a request
 parsing prototype, not a PHP SAPI integration.
 
+## PHP 8.4 percent-decoded NUL names (opt-in)
+
+The strict URL-encoded parser rejects decoded NUL bytes in variable names.
+PHP 8.4 `parse_str()` instead truncates a decoded name at its first NUL,
+ignoring the field when the resulting name is empty. Use
+`FormParser::with_php_nul_name_truncation()` or
+`urlencoded::parse_reader_with_php_nul_name_truncation(reader, limits, separators)`
+to enable this behavior, or pass `--php-nul-name-truncation` to the
+`urlencoded` CLI. This option composes with custom raw separators and
+the existing PHP field-count/nesting projections. Value bytes, including
+decoded NULs, remain intact. The raw input name/body and retention
+budgets are enforced *before* truncation, so an attacker cannot evade
+resource limits by placing a NUL near the beginning of a long name.
+The PHP CLI differential suite checks the decoded-NUL cases against
+PHP 8.4 `parse_str()`. This does not claim raw-NUL HTTP SAPI equivalence.
+
 ## PHP-style adapter scope
 
 An opt-in `admission::admit_with_php_post_max_size` adapter models PHP
