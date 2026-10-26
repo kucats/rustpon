@@ -2042,7 +2042,10 @@ fn canonical_spool_path_survives_parent_symlink_retarget() {
     // The final spool component is a real directory; only its ancestor
     // is a symlink. Resolve it once and retain the original target.
     let mut parser = Parser::new(b"AaB03x", Limits::default(), &alias.join("uploads")).unwrap();
-    assert_eq!(parser.spool_path, fs::canonicalize(&original_uploads).unwrap());
+    assert_eq!(
+        parser.spool_path,
+        fs::canonicalize(&original_uploads).unwrap()
+    );
 
     fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&replacement.0, &alias).unwrap();
