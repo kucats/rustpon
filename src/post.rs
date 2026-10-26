@@ -697,7 +697,7 @@ fn normalize(
         // between brackets as append, but preserves whitespace in other keys.
         // Trimming every leading whitespace byte changes the key's identity.
         let append = end == index_start
-            || (end == index_start + 1 && raw[index_start].is_ascii_whitespace());
+            || (end == index_start + 1 && b" \t\n\r\x0b\x0c".contains(&raw[index_start]));
         scratch.push(b'[');
         let start = scratch.len();
         if !append {
