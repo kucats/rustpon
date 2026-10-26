@@ -763,10 +763,10 @@ impl Parser {
             let opened = if self.fail_no_tmp_dir {
                 Err(Error::Io(io::ErrorKind::NotFound))
             } else {
-                anonymous_upload(&mut self.spool_path)
+                anonymous_upload(&mut self.spool_path, self.spool_device, self.spool_inode)
             };
             #[cfg(not(test))]
-            let opened = anonymous_upload(&mut self.spool_path);
+            let opened = anonymous_upload(&mut self.spool_path, self.spool_device, self.spool_inode);
             // PHP reports error=6 when the temporary directory disappears.
             // Other create/unlink errors remain fatal rather than misreported.
             let (file, no_tmp_dir) = match opened {
@@ -1195,7 +1195,18 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
 /// Filename creation is independent of client metadata. create_new prevents
 /// following an existing path; unlink happens before any payload is written.
 /// NEXT_UPLOAD is a name counter only, never a pointer to request state.
-fn anonymous_upload(path: &mut PathBuf) -> Result<File, Error> {
+fn anonymous_upload(path: &mut PathBuf, device: u64, inode: u64) -> Result<File, Error> {
+    anonymous_upload_with_hook(path, device, inode, || {})
+}
+
+// The hook is a no-op outside tests. It makes a path replacement immediately
+// after create_new deterministic instead of relying on a timing-sensitive race.
+fn anonymous_upload_with_hook(
+    path: &mut PathBuf,
+    device: u64,
+    inode: u64,
+    mut after_create: impl FnMut(),
+) -> Result<File, Error> {
     use std::fmt::Write as _;
     struct Name {
         bytes: [u8; 80],
@@ -1233,12 +1244,40 @@ fn anonymous_upload(path: &mut PathBuf) -> Result<File, Error> {
             .mode(0o600)
             .open(&*path);
         let result = match opened {
-            Ok(file) => match fs::remove_file(&*path) {
-                Ok(()) => Ok(file),
-                Err(error) => {
-                    drop(file);
-                    let _ = fs::remove_file(&*path);
-                    Err(Error::from(error))
+            Ok(file) => {
+                after_create();
+                // The directory may have changed between Parser's preflight
+                // and create_new. Before unlinking or writing any client data,
+                // verify both the parent identity and the created file inode.
+                // A mismatch fails closed; never unlink a different file.
+                let parent = path.parent().ok_or(Error::InvalidSpoolDirectory)?;
+                let directory = fs::symlink_metadata(parent);
+                let entry = fs::symlink_metadata(&*path);
+                let opened = file.metadata();
+                let valid_directory = matches!(
+                    directory,
+                    Ok(ref metadata)
+                        if metadata.is_dir()
+                            && metadata.permissions().mode() & 0o077 == 0
+                            && metadata.dev() == device
+                            && metadata.ino() == inode
+                );
+                let valid_entry = matches!(
+                    (entry, opened),
+                    (Ok(entry), Ok(opened))
+                        if entry.is_file()
+                            && entry.dev() == opened.dev()
+                            && entry.ino() == opened.ino()
+                );
+                if !valid_directory || !valid_entry {
+                    // A concurrent rename may leave an empty named file in
+                    // the original directory. It contains no request bytes.
+                    Err(Error::InvalidSpoolDirectory)
+                } else {
+                    // Do not retry an unlink error: the pathname may now
+                    // refer to a different file after an adversarial swap.
+                    fs::remove_file(&*path).map_err(Error::from)?;
+                    Ok(file)
                 }
             },
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
