@@ -16,6 +16,7 @@ const UPLOAD_ERR_INI_SIZE: u8 = 1;
 const UPLOAD_ERR_FORM_SIZE: u8 = 2;
 const UPLOAD_ERR_PARTIAL: u8 = 3;
 const UPLOAD_ERR_NO_FILE: u8 = 4;
+const UPLOAD_ERR_NO_TMP_DIR: u8 = 6;
 const UPLOAD_ERR_CANT_WRITE: u8 = 7;
 
 const ATTRIBUTES: [&[u8]; 6] = [
@@ -161,9 +162,11 @@ fn project_impl(
         parts_count = parts_count
             .checked_add(ATTRIBUTES.len())
             .ok_or(Error::InvalidLimits)?;
-        let (partial, write_failed) = match &request.parts[index].payload {
-            crate::Payload::File(upload) => (upload.partial, upload.write_failed),
-            crate::Payload::Field(_) => (false, false),
+        let (partial, write_failed, no_tmp_dir) = match &request.parts[index].payload {
+            crate::Payload::File(upload) => {
+                (upload.partial, upload.write_failed, upload.no_tmp_dir)
+            }
+            crate::Payload::Field(_) => (false, false, false),
         };
         let upload_error = upload_error(
             &part,
@@ -172,6 +175,13 @@ fn project_impl(
             partial,
             write_failed,
         );
+        // Only override an otherwise successful upload. Empty filenames,
+        // PHP byte quotas and partial bodies retain their established errors.
+        let upload_error = if no_tmp_dir && upload_error == UPLOAD_ERR_OK {
+            UPLOAD_ERR_NO_TMP_DIR
+        } else {
+            upload_error
+        };
         for &attr in &ATTRIBUTES {
             let value = projected_value(&part, attr, upload_error, index, tag_uploads);
             // root + "[" + attr + "]" + original bracket suffix + value
@@ -238,9 +248,11 @@ fn project_impl(
         ) else {
             continue;
         };
-        let (partial, write_failed) = match &request.parts[index].payload {
-            crate::Payload::File(upload) => (upload.partial, upload.write_failed),
-            crate::Payload::Field(_) => (false, false),
+        let (partial, write_failed, no_tmp_dir) = match &request.parts[index].payload {
+            crate::Payload::File(upload) => {
+                (upload.partial, upload.write_failed, upload.no_tmp_dir)
+            }
+            crate::Payload::Field(_) => (false, false, false),
         };
         let upload_error = upload_error(
             &part,
@@ -249,6 +261,13 @@ fn project_impl(
             partial,
             write_failed,
         );
+        // Only override an otherwise successful upload. Empty filenames,
+        // PHP byte quotas and partial bodies retain their established errors.
+        let upload_error = if no_tmp_dir && upload_error == UPLOAD_ERR_OK {
+            UPLOAD_ERR_NO_TMP_DIR
+        } else {
+            upload_error
+        };
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
             let start = arena.len();
