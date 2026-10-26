@@ -9,7 +9,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::ops::Range;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -297,6 +297,9 @@ pub struct Parser {
     output_len: usize,
     part_bytes: u64,
     spool_path: PathBuf,
+    // Detect spool directory replacement between construction and each upload.
+    spool_device: u64,
+    spool_inode: u64,
     php_upload_max_bytes: Option<u64>,
     php_recover_write_errors: bool,
     #[cfg(test)]
@@ -407,6 +410,8 @@ impl Parser {
             output_len: 0,
             part_bytes: 0,
             spool_path,
+            spool_device: metadata.dev(),
+            spool_inode: metadata.ino(),
             php_upload_max_bytes: None,
             php_recover_write_errors: false,
             #[cfg(test)]
@@ -434,6 +439,26 @@ impl Parser {
     pub fn with_php_upload_write_recovery(mut self) -> Self {
         self.php_recover_write_errors = true;
         self
+    }
+
+    // Recheck before each upload. A missing directory is handled by the
+    // existing PHP error=6 policy; a replaced or newly public directory must
+    // never receive staged bytes. This reduces, but cannot eliminate, the
+    // check/open TOCTOU window without a directory-relative descriptor API.
+    fn validate_spool_directory(&self) -> Result<(), Error> {
+        match fs::symlink_metadata(&self.spool_path) {
+            Ok(metadata)
+                if metadata.is_dir()
+                    && metadata.permissions().mode() & 0o077 == 0
+                    && metadata.dev() == self.spool_device
+                    && metadata.ino() == self.spool_inode =>
+            {
+                Ok(())
+            }
+            Ok(_) => Err(Error::InvalidSpoolDirectory),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+        }
     }
 
     fn request(&mut self) -> &mut Request {
@@ -715,6 +740,7 @@ impl Parser {
                 Limit::Files,
             )?;
             self.request().stats.files = files;
+            self.validate_spool_directory()?;
             #[cfg(test)]
             if self.fail_create {
                 return Err(Error::Io(io::ErrorKind::PermissionDenied));
