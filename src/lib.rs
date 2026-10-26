@@ -1054,21 +1054,76 @@ pub fn parse_reader_with_php_upload_max_bytes(
     spool_dir: &Path,
     php_max_upload_bytes: Option<u64>,
 ) -> Result<Request, Error> {
-    let mut parser =
-        Parser::new(boundary, limits, spool_dir)?.with_php_upload_max_bytes(php_max_upload_bytes);
+    parse_reader_with_php_limits(
+        reader,
+        boundary,
+        limits,
+        spool_dir,
+        php_max_upload_bytes,
+        None,
+    )
+}
+
+/// Opt-in streaming post_max_size fallback for callers without a trusted
+/// Content-Length preflight. Once the body exceeds the nonzero PHP quota,
+/// discard all staged uploads and drain the remaining input without parsing
+/// or writing it to disk. Return an empty wire request with the actual byte
+/// count, so admission can publish empty PHP POST/FILES metadata.
+///
+/// The independent hard body limit and Read errors still fail closed, even
+/// after the PHP quota is exceeded. Unlike an SAPI Content-Length preflight,
+/// malformed framing encountered *before* the threshold still fails closed.
+/// This function does not handle HTTP framing or replace an SAPI handler.
+pub fn parse_reader_with_php_limits(
+    reader: &mut impl Read,
+    boundary: &[u8],
+    limits: Limits,
+    spool_dir: &Path,
+    php_max_upload_bytes: Option<u64>,
+    php_max_post_bytes: Option<u64>,
+) -> Result<Request, Error> {
+    let mut parser = Some(
+        Parser::new(boundary, limits, spool_dir)?
+            .with_php_upload_max_bytes(php_max_upload_bytes),
+    );
+    let mut body_bytes = 0u64;
     let mut buffer = [0; BLOCK];
     let mut consecutive_interrupts = 0usize;
     loop {
         match reader.read(&mut buffer) {
-            Ok(0) => return parser.finish(),
-            // Never index beyond the buffer if a custom Read violates its
-            // contract. Dropping parser also closes all staged upload FDs.
+            Ok(0) => {
+                return match parser {
+                    Some(parser) => parser.finish(),
+                    None => Ok(Request {
+                        arena: Vec::new(),
+                        parts: Vec::new(),
+                        stats: Stats {
+                            body_bytes,
+                            ..Stats::default()
+                        },
+                    }),
+                };
+            }
+            // A broken Read implementation must not cause an out-of-bounds
+            // slice or bypass the hard quota after PHP has stopped parsing.
             Ok(count) if count > buffer.len() => {
                 return Err(Error::Io(io::ErrorKind::InvalidData));
             }
             Ok(count) => {
                 consecutive_interrupts = 0;
-                parser.feed(&buffer[..count])?;
+                body_bytes = add_u64(
+                    body_bytes,
+                    count as u64,
+                    limits.body_bytes,
+                    Limit::BodyBytes,
+                )?;
+                if php_max_post_bytes.is_some_and(|max| max != 0 && body_bytes > max) {
+                    // Dropping the parser closes completed and active upload
+                    // descriptors immediately; the rest is read-only draining.
+                    parser = None;
+                } else if let Some(parser) = parser.as_mut() {
+                    parser.feed(&buffer[..count])?;
+                }
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 consecutive_interrupts += 1;

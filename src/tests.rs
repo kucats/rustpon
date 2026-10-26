@@ -1139,3 +1139,120 @@ fn php_upload_quota_drains_oversized_parts_without_retaining_staged_bytes() {
         }
     }
 }
+
+#[test]
+fn php_post_streaming_quota_drains_and_releases_staged_uploads() {
+    struct Chunked<'a> {
+        bytes: &'a [u8],
+        offset: usize,
+        chunk: usize,
+    }
+    impl Read for Chunked<'_> {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            let remaining = &self.bytes[self.offset..];
+            let count = remaining.len().min(self.chunk).min(output.len());
+            output[..count].copy_from_slice(&remaining[..count]);
+            self.offset += count;
+            Ok(count)
+        }
+    }
+
+    let spool = Spool::new();
+    let large = vec![b'X'; BLOCK * 2 + 5];
+    let wire = body(&[(FILE, &large), (FIELD, b"after")]);
+    let threshold = (wire.len() / 2) as u64;
+    for chunk in [1, 17, BLOCK, wire.len()] {
+        let mut input = Chunked {
+            bytes: &wire,
+            offset: 0,
+            chunk,
+        };
+        let request = parse_reader_with_php_limits(
+            &mut input,
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            Some(threshold),
+        )
+        .unwrap();
+        assert_eq!(input.offset, wire.len());
+        assert_eq!(request.parts().len(), 0);
+        assert_eq!(request.stats().body_bytes, wire.len() as u64);
+        drop(request);
+        spool.empty();
+    }
+
+    // Exact size, unlimited zero, and absent PHP quotas all preserve data.
+    for quota in [None, Some(0), Some(wire.len() as u64)] {
+        let request = parse_reader_with_php_limits(
+            &mut Cursor::new(&wire),
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            quota,
+        )
+        .unwrap();
+        assert_eq!(request.parts().len(), 2);
+        drop(request);
+        spool.empty();
+    }
+
+    // PHP compatibility must never override the server's independent cap.
+    let hard = Limits {
+        body_bytes: wire.len() as u64 - 1,
+        ..Limits::default()
+    };
+    assert_eq!(
+        parse_reader_with_php_limits(
+            &mut Cursor::new(&wire),
+            b"AaB03x",
+            hard,
+            &spool.0,
+            None,
+            Some(1),
+        )
+        .unwrap_err(),
+        Error::Limit(Limit::BodyBytes)
+    );
+    spool.empty();
+}
+
+#[test]
+fn php_post_streaming_quota_retains_strict_errors_until_exceeded() {
+    let spool = Spool::new();
+    let wire = body(&[(FILE, b"abc")]);
+    let truncated = &wire[..wire.len() - 6];
+    assert_eq!(
+        parse_reader_with_php_limits(
+            &mut Cursor::new(truncated),
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            Some(wire.len() as u64),
+        )
+        .unwrap_err(),
+        Error::Truncated
+    );
+    spool.empty();
+
+    // Once the PHP quota is crossed, malformed trailing bytes are drained
+    // rather than interpreted as multipart framing.
+    let mut malformed = wire.clone();
+    malformed.extend_from_slice(b"not-valid-epilogue");
+    let request = parse_reader_with_php_limits(
+        &mut Cursor::new(&malformed),
+        b"AaB03x",
+        Limits::default(),
+        &spool.0,
+        None,
+        Some(wire.len() as u64),
+    )
+    .unwrap();
+    assert_eq!(request.parts().len(), 0);
+    assert_eq!(request.stats().body_bytes, malformed.len() as u64);
+    drop(request);
+    spool.empty();
+}

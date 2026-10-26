@@ -17,6 +17,9 @@ CASES = [
                (b"g", b"x", b"b.bin")]),
     ("nested-files", [(b"f[]", b"abc", b"a.bin"),
                       (b"f[]", b"def", b"b.bin")]),
+    ("large-file", [(b"f", b"X" * (8192 * 2 + 17), b"large.bin")]),
+    ("large-mixed", [(b"f", b"Y" * (8192 + 3), b"large.bin"),
+                     (b"note", b"after", None)]),
 ]
 
 

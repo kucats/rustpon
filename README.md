@@ -103,10 +103,16 @@ An opt-in `admission::admit_with_php_post_max_size` adapter models PHP
 complete body exceeds a nonzero limit, it publishes an empty `$_FILES`
 projection and immediately releases every staged upload; a zero PHP limit
 is unlimited. The CLI oracle is `multipart --admit --php-post-max-size BYTES`.
-This does **not** prevent parsing/staging the oversized body first and does
-not produce a Zend `$_POST` value. Independent hard server quotas and the
-wire parser limits still fail closed. The Linux differential compares exact,
-one-byte-over, one-byte-under and zero-limit cases against PHP's HTTP SAPI.
+The CLI now uses `parse_reader_with_php_limits` to enforce this quota
+during ingress. Once the body exceeds the nonzero PHP threshold, the parser
+and any staged uploads are dropped immediately; the remaining body is drained
+without parsing or disk writes. The returned empty wire request retains the
+actual byte count for admission and independent hard-quota enforcement.
+Zero disables the PHP quota. Malformed framing encountered *before* the
+threshold still fails closed, unlike an HTTP SAPI that can preflight a trusted
+Content-Length; this is not a Zend `$_POST` implementation or SAPI handler.
+The Linux differential checks exact, one-byte-over, one-byte-under, zero,
+and multi-buffer upload cases against PHP 8.4's HTTP SAPI.
 
 An additional opt-in PHP 8.4 nesting slice is exposed by
 `Request::into_post_with_php_limits(limits, max_input_vars,
