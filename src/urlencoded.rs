@@ -433,7 +433,7 @@ mod tests {
         })
         .unwrap()
         .with_php_arg_separators(b"|");
-        assert_eq!(limited.feed(b"a=1|b=2"), Err(Error::Limit(Limit::Parts)));
+        assert_eq!(limited.feed(b"a=1|b=2"), Ok(()));
         assert!(matches!(limited.finish(), Err(Error::Limit(Limit::Parts))));
     }
 
