@@ -149,18 +149,36 @@ impl Request {
     /// Consumes this request on both success and failure. On adapter failure,
     /// all field storage and upload descriptors are released before returning.
     pub fn into_post(self, limits: Limits) -> Result<PostRequest, Error> {
-        PostRequest::build(self, limits, false)
+        PostRequest::build(self, limits, false, None)
+    }
+
+    /// PHP-style field-count handling for form bodies. Once the first
+    /// `max_input_vars` ordinary fields have been seen, subsequent fields
+    /// are discarded while processing continues (including file controls).
+    /// This is an opt-in compatibility slice: the wire parser's own limits
+    /// and the adapter's other fail-closed limits still apply.
+    pub fn into_post_with_max_input_vars(
+        self,
+        limits: Limits,
+        max_input_vars: usize,
+    ) -> Result<PostRequest, Error> {
+        PostRequest::build(self, limits, false, Some(max_input_vars))
     }
 
     /// Synthetic $_FILES metadata uses PHP's upload-index normalization,
     /// which trims leading bracket whitespace unlike ordinary $_POST.
     pub(crate) fn into_files_post(self, limits: Limits) -> Result<PostRequest, Error> {
-        PostRequest::build(self, limits, true)
+        PostRequest::build(self, limits, true, None)
     }
 }
 
 impl PostRequest {
-    fn build(request: Request, limits: Limits, files_projection: bool) -> Result<Self, Error> {
+    fn build(
+        request: Request,
+        limits: Limits,
+        files_projection: bool,
+        max_input_vars: Option<usize>,
+    ) -> Result<Self, Error> {
         if limits.depth > MAX_DEPTH || limits.name_bytes > MAX_NAME {
             return Err(Error::InvalidLimits);
         }
@@ -238,6 +256,7 @@ impl PostRequest {
         // PHP's rfc1867 handler stops registering further uploads after a
         // malformed file control, but continues processing ordinary fields.
         let mut uploads_stopped = false;
+        let mut seen_fields = 0usize;
         for index in 0..this.request.parts.len() {
             let part = &this.request.parts[index];
             let name = Span {
@@ -251,6 +270,16 @@ impl PostRequest {
                 }),
                 Payload::File(_) => None,
             };
+            // PHP's max_input_vars counts submitted ordinary fields, not
+            // uploads. Check before name normalization and adapter work so
+            // a discarded field cannot trigger a later adapter quota error.
+            if leaf.is_some() && max_input_vars.is_some() {
+                if seen_fields >= max_input_vars.unwrap() {
+                    this.stats.skipped_fields += 1;
+                    continue;
+                }
+                seen_fields += 1;
+            }
             let raw = name.bytes(&this.request.arena);
             this.charge(raw.len() as u64)?;
             let raw = name.bytes(&this.request.arena);
