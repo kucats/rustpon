@@ -142,6 +142,8 @@ pub struct Upload {
     discarded: bool,
     // Opt-in PHP EOF recovery only; partial uploads must never be copied.
     partial: bool,
+    // A recoverable PHP-mode staging write failure; never copy this upload.
+    write_failed: bool,
 }
 
 impl Upload {
@@ -292,6 +294,7 @@ pub struct Parser {
     part_bytes: u64,
     spool_path: PathBuf,
     php_upload_max_bytes: Option<u64>,
+    php_recover_write_errors: bool,
     #[cfg(test)]
     fail_create: bool,
     #[cfg(test)]
@@ -399,6 +402,7 @@ impl Parser {
             part_bytes: 0,
             spool_path,
             php_upload_max_bytes: None,
+            php_recover_write_errors: false,
             #[cfg(test)]
             fail_create: false,
             #[cfg(test)]
@@ -412,6 +416,15 @@ impl Parser {
     /// disable this quota. Independent wire limits remain fail-closed.
     pub fn with_php_upload_max_bytes(mut self, max: Option<u64>) -> Self {
         self.php_upload_max_bytes = max.filter(|value| *value != 0);
+        self
+    }
+
+    /// Opt-in PHP upload error=7 recovery. On a staging write failure, the
+    /// affected file is truncated and marked uncopiable, while later parts
+    /// continue. Strict Parser::new callers remain fail-closed. A failure to
+    /// truncate the anonymous staging file still aborts the whole request.
+    pub fn with_php_upload_write_recovery(mut self) -> Self {
+        self.php_recover_write_errors = true;
         self
     }
 
@@ -701,6 +714,7 @@ impl Parser {
                 length: 0,
                 discarded: false,
                 partial: false,
+                write_failed: false,
             })
         } else {
             let fields = add_usize(
@@ -855,12 +869,26 @@ impl Parser {
                 range.end = arena.len();
             }
             Payload::File(upload) => {
-                #[cfg(test)]
-                if self.fail_write {
-                    return Err(Error::Io(io::ErrorKind::StorageFull));
-                }
                 if !upload.discarded {
-                    write_chunk(&mut upload.file, &self.output[..self.output_len])?;
+                    #[cfg(test)]
+                    let write_result = if self.fail_write {
+                        Err(io::Error::from(io::ErrorKind::StorageFull))
+                    } else {
+                        write_chunk(&mut upload.file, &self.output[..self.output_len])
+                    };
+                    #[cfg(not(test))]
+                    let write_result = write_chunk(&mut upload.file, &self.output[..self.output_len]);
+                    if let Err(error) = write_result {
+                        if !self.php_recover_write_errors {
+                            return Err(error.into());
+                        }
+                        // Never publish a prefix from a failed write. Keep
+                        // consuming the current part and subsequent parts.
+                        // If cleanup itself fails, fail closed as before.
+                        upload.file.set_len(0)?;
+                        upload.discarded = true;
+                        upload.write_failed = true;
+                    }
                 }
             }
         }
@@ -1222,7 +1250,9 @@ fn parse_reader_with_php_limits_impl(
     php_partial_upload: bool,
 ) -> Result<Request, Error> {
     let mut parser = Some(
-        Parser::new(boundary, limits, spool_dir)?.with_php_upload_max_bytes(php_max_upload_bytes),
+        Parser::new(boundary, limits, spool_dir)?
+            .with_php_upload_max_bytes(php_max_upload_bytes)
+            .with_php_upload_write_recovery(),
     );
     let mut body_bytes = 0u64;
     let mut buffer = [0; BLOCK];
