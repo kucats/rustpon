@@ -1480,9 +1480,16 @@ fn php_partial_eof_publishes_unfinished_fields_with_bounded_lookahead() {
 #[test]
 fn php_partial_eof_field_header_preserves_completed_file() {
     let spool = Spool::new();
-    let full = body(&[(FILE, b"binary"), (b"Content-Disposition: form-data; name=tail", b"ignored")]);
+    let full = body(&[
+        (FILE, b"binary"),
+        (b"Content-Disposition: form-data; name=tail", b"ignored"),
+    ]);
     let marker = b"Content-Disposition: form-data; name=tail\r\n";
-    let end = full.windows(marker.len()).position(|w| w == marker).unwrap() + marker.len();
+    let end = full
+        .windows(marker.len())
+        .position(|w| w == marker)
+        .unwrap()
+        + marker.len();
     let wire = &full[..end];
     assert_eq!(
         parse(wire, Limits::default(), &spool).unwrap_err(),
