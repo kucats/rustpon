@@ -1171,7 +1171,13 @@ pub fn parse_reader(
 ) -> Result<Request, Error> {
     // The generic reader retains strict transactional I/O semantics.
     parse_reader_with_php_limits_impl(
-        reader, boundary, limits, spool_dir, None, None, false, false,
+        reader,
+        boundary,
+        limits,
+        spool_dir,
+        None,
+        None,
+        ReaderMode::Strict,
     )
 }
 
@@ -1219,8 +1225,7 @@ pub fn parse_reader_with_php_limits(
         spool_dir,
         php_max_upload_bytes,
         php_max_post_bytes,
-        false,
-        true,
+        ReaderMode::Php,
     )
 }
 
@@ -1241,9 +1246,15 @@ pub fn parse_reader_with_php_partial(
         spool_dir,
         php_max_upload_bytes,
         php_max_post_bytes,
-        true,
-        true,
+        ReaderMode::PhpPartial,
     )
+}
+
+#[derive(Clone, Copy)]
+enum ReaderMode {
+    Strict,
+    Php,
+    PhpPartial,
 }
 
 fn parse_reader_with_php_limits_impl(
@@ -1253,12 +1264,11 @@ fn parse_reader_with_php_limits_impl(
     spool_dir: &Path,
     php_max_upload_bytes: Option<u64>,
     php_max_post_bytes: Option<u64>,
-    php_partial_upload: bool,
-    php_recover_write_errors: bool,
+    mode: ReaderMode,
 ) -> Result<Request, Error> {
     let mut configured =
         Parser::new(boundary, limits, spool_dir)?.with_php_upload_max_bytes(php_max_upload_bytes);
-    if php_recover_write_errors {
+    if !matches!(mode, ReaderMode::Strict) {
         configured = configured.with_php_upload_write_recovery();
     }
     let mut parser = Some(configured);
@@ -1269,7 +1279,9 @@ fn parse_reader_with_php_limits_impl(
         match reader.read(&mut buffer) {
             Ok(0) => {
                 return match parser {
-                    Some(parser) if php_partial_upload => parser.finish_with_php_partial(),
+                    Some(parser) if matches!(mode, ReaderMode::PhpPartial) => {
+                        parser.finish_with_php_partial()
+                    },
                     Some(parser) => parser.finish(),
                     None => Ok(Request {
                         arena: Vec::new(),
