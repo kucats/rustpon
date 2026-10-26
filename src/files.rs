@@ -208,7 +208,7 @@ fn project_impl(
             ..Stats::default()
         },
     }
-    .into_post(limits.post)
+    .into_files_post(limits.post)
     .map_err(Error::Post)
 }
 
