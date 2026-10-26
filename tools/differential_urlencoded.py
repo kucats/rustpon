@@ -197,6 +197,30 @@ def main():
     except (KeyError, ValueError) as exc:
         failures += 1
         print(f"FAIL semicolon/max_input_vars: {exc}", file=sys.stderr)
+    # PHP arg_separator.input is a byte set, not necessarily '&' or '&;'.
+    # Compare the projected tree against the installed PHP CLI oracle.
+    custom_separator_cases = [
+        ("pipe-only", "|", b"a=1|b=2&c=3;d=4"),
+        ("equals-only", "=", b"a=1=b=2"),
+        ("plus-only", "+", b"a=1%2B2+b=3"),
+        ("empty-fallback", "", b"a=1&b=2"),
+        ("pipe-and-ampersand", "&|", b"a=1|b=2&c=3"),
+        ("percent-raw", "%", b"a=1%2B2"),
+        ("colon-only", ":", b"a=1:b=2"),
+    ]
+    for label, separators, data in custom_separator_cases:
+        expected = run([args.php_bin, "-d", f"arg_separator.input={separators}", oracle], data)
+        actual = run([str(args.rust_bin), "--php-arg-separators", separators], data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL {label} body={data!r}: {exc}", file=sys.stderr)
     # Explicit strict deviations: no partial JSON publication.
     for label, data in [
         ("NUL-in-name", b"a%00b=1"),
@@ -207,7 +231,7 @@ def main():
         if result.returncode == 0 or result.stdout:
             failures += 1
             print(f"FAIL {label}: expected nonzero exit without stdout", file=sys.stderr)
-    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, 3 strict, {failures} failures")
+    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, {len(custom_separator_cases)} custom separators, 3 strict, {failures} failures")
     return int(failures != 0)
 if __name__ == "__main__":
     sys.exit(main())
