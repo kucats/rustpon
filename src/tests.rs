@@ -1542,3 +1542,65 @@ fn php_partial_eof_obeys_upload_quota_and_independent_hard_limit() {
     drop(raw);
     spool.empty();
 }
+
+#[test]
+fn php_partial_eof_after_complete_file_header_registers_error_three() {
+    let spool = Spool::new();
+    let full = body(&[(FIELD, b"kept"), (FILE, b"unreceived")]);
+    let marker = b"\r\nContent-Type: application/octet-stream";
+    let header_end = full.windows(marker.len()).position(|w| w == marker).unwrap();
+    // A complete Content-Disposition line, but no Content-Type or blank line.
+    let partial = &full[..header_end + 2];
+    assert_eq!(
+        parse(partial, Limits::default(), &spool).unwrap_err(),
+        Error::Truncated
+    );
+    for split in 0..=partial.len() {
+        let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+        parser.feed(&partial[..split]).unwrap();
+        parser.feed(&partial[split..]).unwrap();
+        let mut raw = parser.finish_with_php_partial().unwrap();
+        assert_eq!(raw.parts().len(), 2);
+        assert_eq!(raw.parts().next().unwrap().value, Some(b"kept".as_slice()));
+        let projection = files::project(&raw, files::Limits::default()).unwrap();
+        for (name, value) in [
+            (b"file[error]".as_slice(), b"3".as_slice()),
+            (b"file[size]", b"0"),
+            (b"file[type]", b""),
+            (b"file[tmp_name]", b""),
+        ] {
+            assert!(projection
+                .wire()
+                .parts()
+                .any(|p| p.name == name && p.value == Some(value)));
+        }
+        assert_eq!(
+            raw.upload_mut(1)
+                .unwrap()
+                .copy_to(&mut Vec::new())
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        drop(projection);
+        let admitted = admission::admit(raw, admission::Policy::default()).unwrap();
+        assert_eq!(admitted.accepted_indices().count(), 0);
+        drop(admitted);
+        spool.empty();
+    }
+    // An unfinished disposition line is not a validated upload header.
+    let without_crlf = &partial[..partial.len() - 2];
+    assert_eq!(
+        parse_reader_with_php_partial(
+            &mut Cursor::new(without_crlf),
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            None,
+        )
+        .unwrap_err(),
+        Error::Truncated
+    );
+    spool.empty();
+}
