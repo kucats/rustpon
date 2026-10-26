@@ -1428,6 +1428,99 @@ fn php_content_length_preflight_read_errors_fail_closed() {
 }
 
 #[test]
+fn php_partial_eof_publishes_unfinished_fields_with_bounded_lookahead() {
+    let spool = Spool::new();
+    let prefix = b"--AaB03x\r\nContent-Disposition: form-data; name=tail\r\n\r\n";
+    for (tail, expected) in [
+        (b"unfinished".as_slice(), b"unfinished".as_slice()),
+        (b"unfinished\r", b"unfinished\r"),
+        (b"unfinished\r\n", b"unfinished"),
+        (b"unfinished\r\n--AaB03x", b"unfinished"),
+        (b"unfinished\r\nother", b"unfinished\r\nother"),
+        (b"".as_slice(), b"".as_slice()),
+    ] {
+        let mut wire = prefix.to_vec();
+        wire.extend_from_slice(tail);
+        assert_eq!(
+            parse(&wire, Limits::default(), &spool).unwrap_err(),
+            Error::Truncated
+        );
+        for split in 0..=wire.len() {
+            let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+            parser.feed(&wire[..split]).unwrap();
+            parser.feed(&wire[split..]).unwrap();
+            let request = parser.finish_with_php_partial().unwrap();
+            let fields: Vec<_> = request.parts().collect();
+            assert_eq!(fields.len(), 1, "split {split}");
+            assert_eq!(fields[0].name, b"tail");
+            assert_eq!(fields[0].value, Some(expected), "split {split}");
+            drop(request);
+            spool.empty();
+        }
+    }
+    let wire = [prefix.as_slice(), b"abcdef"].concat();
+    assert_eq!(
+        parse_reader_with_php_partial(
+            &mut Cursor::new(&wire),
+            b"AaB03x",
+            Limits {
+                field_bytes: 2,
+                ..Limits::default()
+            },
+            &spool.0,
+            None,
+            None,
+        )
+        .unwrap_err(),
+        Error::Limit(Limit::FieldBytes)
+    );
+    spool.empty();
+}
+
+#[test]
+fn php_partial_eof_field_header_preserves_completed_file() {
+    let spool = Spool::new();
+    let full = body(&[(FILE, b"binary"), (b"Content-Disposition: form-data; name=tail", b"ignored")]);
+    let marker = b"Content-Disposition: form-data; name=tail\r\n";
+    let end = full.windows(marker.len()).position(|w| w == marker).unwrap() + marker.len();
+    let wire = &full[..end];
+    assert_eq!(
+        parse(wire, Limits::default(), &spool).unwrap_err(),
+        Error::Truncated
+    );
+    for split in 0..=wire.len() {
+        let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+        parser.feed(&wire[..split]).unwrap();
+        parser.feed(&wire[split..]).unwrap();
+        let mut request = parser.finish_with_php_partial().unwrap();
+        let parts: Vec<_> = request.parts().collect();
+        assert_eq!(parts.len(), 2, "split {split}");
+        assert_eq!(parts[0].file_bytes, Some(6));
+        assert_eq!(parts[1].name, b"tail");
+        assert_eq!(parts[1].value, Some(b"".as_slice()));
+        let mut copied = Vec::new();
+        request.upload_mut(0).unwrap().copy_to(&mut copied).unwrap();
+        assert_eq!(copied, b"binary");
+        drop(request);
+        spool.empty();
+    }
+    // A truncated disposition line has not established a field name.
+    assert_eq!(
+        parse_reader_with_php_partial(
+            &mut Cursor::new(&wire[..wire.len() - 2]),
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            None,
+        )
+        .unwrap_err(),
+        Error::Truncated
+    );
+    spool.empty();
+}
+
+#[test]
 fn php_partial_eof_registers_error_three_and_erases_staged_upload() {
     let spool = Spool::new();
     let full = body(&[(FIELD, b"kept"), (FILE, b"unfinished-file-payload")]);
