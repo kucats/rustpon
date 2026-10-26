@@ -521,6 +521,18 @@ impl Parser {
                 self.request().parts.push(part);
                 Ok(self.request.take().expect("live partial request"))
             }
+            // PHP 8.4 registers a partial upload once a complete
+            // Content-Disposition line with a filename has been received,
+            // even if the blank line terminating the headers never arrives.
+            // Do not interpret an unterminated header line as complete.
+            State::Headers
+                if self.line_len == 0
+                    && self.headers.name.is_some()
+                    && self.headers.filename.is_some() =>
+            {
+                self.start_body()?;
+                self.finish_with_php_partial()
+            }
             State::Failed(error) => Err(error),
             _ => Err(Error::Truncated),
         }
