@@ -94,7 +94,13 @@ partial JSON response.
 These capacity counters are accounting limits, not RSS or complete system-OOM
 guarantees. Allocator metadata, kernel buffers, caller memory, output buffering,
 and process-wide concurrency are outside the model. The caller must keep the
-spool directory trusted and stable for the request lifetime.
+spool directory trusted and stable for the request lifetime. Before each upload,
+the parser now rechecks the directory's original device/inode identity and
+private permissions; a symlink swap, a recreated directory, or a permission
+relaxation fails closed. A missing directory still follows the opt-in PHP
+`UPLOAD_ERR_NO_TMP_DIR=6` policy. This pathname recheck does **not** close
+the check/open race; descriptor-relative creation with an independently audited
+OS interface is required before treating a mutable spool path as safe.
 
 ## PHP-style adapter scope
 
