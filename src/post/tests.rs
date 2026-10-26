@@ -420,8 +420,7 @@ fn adapter_failure_releases_owned_uploads_in_subprocess() {
 #[test]
 fn php_max_input_vars_skips_excess_fields_but_keeps_uploads() {
     let spool = Spool::new();
-    let fields: &[(&[u8], &[u8])] =
-        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")];
+    let fields: &[(&[u8], &[u8])] = &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")];
     let expected = [
         r#"["a",[]]"#,
         r#"["a",[[["s","61"],["s","31"]]]]"#,
