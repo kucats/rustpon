@@ -56,7 +56,7 @@ fn ordered_tree_normalizes_keys_preserves_binary_and_replaces_in_place() {
     let post = request(
         &spool,
         &[
-            (b" a.b[ \tx.y ]", b"\0\xff"),
+            (b" a.b[x.y ]", b"\0\xff"),
             (b"other", b"a"),
             (b"a_b[x.y ]", b"last"),
         ],
@@ -73,6 +73,49 @@ fn ordered_tree_normalizes_keys_preserves_binary_and_replaces_in_place() {
     assert_eq!(
         post.wire().parts().next().unwrap().value,
         Some(b"\0\xff".as_slice())
+    );
+}
+
+#[test]
+fn bracket_index_whitespace_matches_php_84() {
+    let cases: &[(&[u8], Option<&[u8]>)] = &[
+        (b"a[ x]", Some(b" x")),
+        (b"a[\\tx]", Some(b"\\tx")),
+        (b"a[\\nx]", Some(b"\\nx")),
+        (b"a[  ]", Some(b"  ")),
+        (b"a[ \\t]", Some(b" \\t")),
+        (b"a[]", None),
+        (b"a[ ]", None),
+        (b"a[\\t]", None),
+        (b"a[\\n]", None),
+        (b"a[\\r]", None),
+        (b"a[\\x0b]", None),
+        (b"a[\\x0c]", None),
+    ];
+    for &(raw, expected) in cases {
+        let mut scratch = Vec::new();
+        let mut path = [Segment::Append; MAX_DEPTH + 1];
+        let count = normalize(raw, &mut scratch, &mut path, Limits::default()).unwrap();
+        assert_eq!(count, 2, "name={raw:?}");
+        match (path[1], expected) {
+            (Segment::Append, None) => {}
+            (Segment::Key(span), Some(key)) => assert_eq!(span.bytes(&scratch), key),
+            _ => panic!("incorrect PHP index for {raw:?}"),
+        }
+    }
+
+    // Check the complete ordered tagged tree, not just the index lexer.
+    let spool = Spool::new();
+    let post = request(
+        &spool,
+        &[(b"a[ x]", b"v"), (b"a[  ]", b"w"), (b"a[ ]", b"z")],
+        false,
+    )
+    .into_post(Limits::default())
+    .unwrap();
+    assert_eq!(
+        json(&post),
+        r#"["a",[[["s","61"],["a",[[["s","2078"],["s","76"]],[["s","2020"],["s","77"]],[["i","0"],["s","7a"]]]]]]]"#
     );
 }
 
