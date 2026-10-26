@@ -1,6 +1,9 @@
 //! Local stdin harness. No listener or network access.
 use rustpon::post;
-use rustpon::{Limits, parse_reader_with_php_content_length, parse_reader_with_php_limits};
+use rustpon::{
+    Limits, parse_reader_with_php_content_length, parse_reader_with_php_limits,
+    parse_reader_with_php_partial,
+};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -34,6 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut max_upload_bytes = None;
     let mut max_post_bytes = None;
     let mut content_length = None;
+    let mut php_partial_upload = false;
     // The two independent PHP quotas may be specified together, in either
     // order. Reject duplicates rather than silently overriding server policy.
     if files_mode || admit_mode {
@@ -72,6 +76,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     content_length = Some(value.parse::<u64>()?);
                     first += 2;
                 }
+                "--php-partial-upload" if admit_mode => {
+                    if php_partial_upload {
+                        return Err("duplicate --php-partial-upload".into());
+                    }
+                    php_partial_upload = true;
+                    first += 1;
+                }
                 "--php-upload-max-filesize" => {
                     if max_upload_bytes.is_some() {
                         return Err("duplicate --php-upload-max-filesize".into());
@@ -89,9 +100,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.len() != first + 2 {
         eprintln!(
-            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] [--php-post-max-size BYTES (admit only)] [--content-length BYTES (admit only)] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] [--php-post-max-size BYTES (admit only)] [--content-length BYTES (admit only)] [--php-partial-upload (admit only)] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
         );
         std::process::exit(2);
+    }
+    if php_partial_upload && content_length.is_some() {
+        return Err("--php-partial-upload cannot be used with --content-length".into());
     }
     let boundary = args[first].to_str().ok_or("boundary must be ASCII")?;
     let mut stdin = io::stdin().lock();
@@ -104,6 +118,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_upload_bytes,
             max_post_bytes,
             declared,
+        )
+    } else if php_partial_upload {
+        parse_reader_with_php_partial(
+            &mut stdin,
+            boundary.as_bytes(),
+            Limits::default(),
+            Path::new(&args[first + 1]),
+            max_upload_bytes,
+            max_post_bytes,
         )
     } else {
         parse_reader_with_php_limits(

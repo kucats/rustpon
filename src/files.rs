@@ -14,6 +14,7 @@ use std::ops::Range;
 const UPLOAD_ERR_OK: u8 = 0;
 const UPLOAD_ERR_INI_SIZE: u8 = 1;
 const UPLOAD_ERR_FORM_SIZE: u8 = 2;
+const UPLOAD_ERR_PARTIAL: u8 = 3;
 const UPLOAD_ERR_NO_FILE: u8 = 4;
 
 const ATTRIBUTES: [&[u8]; 6] = [
@@ -159,7 +160,11 @@ fn project_impl(
         parts_count = parts_count
             .checked_add(ATTRIBUTES.len())
             .ok_or(Error::InvalidLimits)?;
-        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes);
+        let partial = matches!(
+            &request.parts[index].payload,
+            crate::Payload::File(upload) if upload.partial
+        );
+        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes, partial);
         for &attr in &ATTRIBUTES {
             let value = projected_value(&part, attr, upload_error, index, tag_uploads);
             // root + "[" + attr + "]" + original bracket suffix + value
@@ -226,7 +231,11 @@ fn project_impl(
         ) else {
             continue;
         };
-        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes);
+        let partial = matches!(
+            &request.parts[index].payload,
+            crate::Payload::File(upload) if upload.partial
+        );
+        let upload_error = upload_error(&part, form_max, limits.max_upload_bytes, partial);
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
             let start = arena.len();
@@ -321,7 +330,12 @@ pub(crate) fn parse_form_max(bytes: &[u8]) -> i64 {
     }
 }
 
-fn upload_error(part: &crate::PartView<'_>, form_max: i64, max_upload_bytes: Option<u64>) -> u8 {
+fn upload_error(
+    part: &crate::PartView<'_>,
+    form_max: i64,
+    max_upload_bytes: Option<u64>,
+    partial: bool,
+) -> u8 {
     if part.filename.expect("file parts only").is_empty() {
         return UPLOAD_ERR_NO_FILE;
     }
@@ -332,6 +346,9 @@ fn upload_error(part: &crate::PartView<'_>, form_max: i64, max_upload_bytes: Opt
     }
     if form_max != 0 && (form_max < 0 || part.file_bytes.unwrap_or(0) > form_max as u64) {
         return UPLOAD_ERR_FORM_SIZE;
+    }
+    if partial {
+        return UPLOAD_ERR_PARTIAL;
     }
     UPLOAD_ERR_OK
 }

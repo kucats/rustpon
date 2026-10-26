@@ -1426,3 +1426,104 @@ fn php_content_length_preflight_read_errors_fail_closed() {
     );
     spool.empty();
 }
+
+#[test]
+fn php_partial_eof_registers_error_three_and_erases_staged_upload() {
+    let spool = Spool::new();
+    let full = body(&[(FIELD, b"kept"), (FILE, b"unfinished-file-payload")]);
+    let suffix = b"\r\n--AaB03x--\r\n";
+    assert!(full.ends_with(suffix));
+    let partial = &full[..full.len() - suffix.len()];
+    assert_eq!(parse(partial, Limits::default(), &spool).unwrap_err(), Error::Truncated);
+    spool.empty();
+    for split in [0, 1, partial.len() / 2, partial.len()] {
+        let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+        parser.feed(&partial[..split]).unwrap();
+        parser.feed(&partial[split..]).unwrap();
+        let mut raw = parser.finish_with_php_partial().unwrap();
+        assert_eq!(raw.parts().len(), 2);
+        assert_eq!(raw.parts().next().unwrap().value, Some(b"kept".as_slice()));
+        let projected = files::project(&raw, files::Limits::default()).unwrap();
+        for (name, value) in [
+            (b"file[error]".as_slice(), b"3".as_slice()),
+            (b"file[size]", b"0"),
+            (b"file[type]", b""),
+            (b"file[tmp_name]", b""),
+        ] {
+            assert!(projected.wire().parts().any(|p| p.name == name && p.value == Some(value)));
+        }
+        let mut output = Vec::new();
+        assert_eq!(
+            raw.upload_mut(1).unwrap().copy_to(&mut output).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(output.is_empty());
+        drop(projected);
+        let admitted = admission::admit(raw, admission::Policy::default()).unwrap();
+        assert_eq!(admitted.accepted_indices().count(), 0);
+        drop(admitted);
+        spool.empty();
+    }
+}
+
+#[test]
+fn php_partial_eof_obeys_upload_quota_and_independent_hard_limit() {
+    let spool = Spool::new();
+    let full = body(&[(FILE, b"abcdef")]);
+    let suffix = b"\r\n--AaB03x--\r\n";
+    let partial = &full[..full.len() - suffix.len()];
+    for (quota, expected) in [(None, b"3".as_slice()), (Some(2), b"1".as_slice())] {
+        let raw = parse_reader_with_php_partial(
+            &mut Cursor::new(partial),
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            quota,
+            None,
+        )
+        .unwrap();
+        let metadata = files::project(
+            &raw,
+            files::Limits {
+                max_upload_bytes: quota,
+                ..files::Limits::default()
+            },
+        )
+        .unwrap();
+        assert!(metadata.wire().parts().any(|p| {
+            p.name == b"file[error]" && p.value == Some(expected)
+        }));
+        drop(metadata);
+        drop(raw);
+        spool.empty();
+    }
+    let hard = Limits {
+        file_bytes: 2,
+        ..Limits::default()
+    };
+    assert_eq!(
+        parse_reader_with_php_partial(
+            &mut Cursor::new(partial),
+            b"AaB03x",
+            hard,
+            &spool.0,
+            None,
+            None,
+        )
+        .unwrap_err(),
+        Error::Limit(Limit::FileBytes)
+    );
+    spool.empty();
+    let raw = parse_reader_with_php_partial(
+        &mut Cursor::new(&full),
+        b"AaB03x",
+        Limits::default(),
+        &spool.0,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(raw.parts().len(), 1);
+    drop(raw);
+    spool.empty();
+}

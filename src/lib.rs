@@ -140,6 +140,8 @@ pub struct Upload {
     file: File,
     length: u64,
     discarded: bool,
+    // Opt-in PHP EOF recovery only; partial uploads must never be copied.
+    partial: bool,
 }
 
 impl Upload {
@@ -484,6 +486,46 @@ impl Parser {
         }
     }
 
+    /// Opt-in PHP 8.4 EOF recovery for an already-open file body. Completed
+    /// parts survive, while the unfinished upload receives error=3 and loses
+    /// all staged bytes. Other truncated states remain fail-closed.
+    pub fn finish_with_php_partial(mut self) -> Result<Request, Error> {
+        match self.state {
+            State::End(0 | 2) => Ok(self.request.take().expect("live completed request")),
+            State::Body
+                if matches!(
+                    self.active.as_ref().map(|part| &part.payload),
+                    Some(Payload::File(_))
+                ) =>
+            {
+                // Pending delimiter-lookahead bytes are still body bytes at
+                // EOF. Account for hard quotas without staging more data.
+                if let Some(Part {
+                    payload: Payload::File(upload),
+                    ..
+                }) = self.active.as_mut()
+                {
+                    upload.file.set_len(0)?;
+                    upload.discarded = true;
+                    upload.partial = true;
+                }
+                self.output_len = 0;
+                while self.window_len > 0 {
+                    let byte = self.window[self.window_start];
+                    self.window_start = (self.window_start + 1) % WINDOW;
+                    self.window_len -= 1;
+                    self.emit(byte)?;
+                }
+                self.output_len = 0;
+                let part = self.active.take().expect("active partial file");
+                self.request().parts.push(part);
+                Ok(self.request.take().expect("live partial request"))
+            }
+            State::Failed(error) => Err(error),
+            _ => Err(Error::Truncated),
+        }
+    }
+
     fn start_headers(&mut self) -> Result<(), Error> {
         let count = add_usize(
             self.request().stats.parts,
@@ -603,6 +645,7 @@ impl Parser {
                 file: anonymous_upload(&mut self.spool_path)?,
                 length: 0,
                 discarded: false,
+                partial: false,
             })
         } else {
             let fields = add_usize(
@@ -1082,6 +1125,35 @@ pub fn parse_reader_with_php_limits(
     php_max_upload_bytes: Option<u64>,
     php_max_post_bytes: Option<u64>,
 ) -> Result<Request, Error> {
+    parse_reader_with_php_limits_impl(
+        reader, boundary, limits, spool_dir, php_max_upload_bytes, php_max_post_bytes, false,
+    )
+}
+
+/// Opt-in PHP EOF compatibility for a complete HTTP body with an incomplete
+/// multipart file. A short read against trusted Content-Length is not eligible.
+pub fn parse_reader_with_php_partial(
+    reader: &mut impl Read,
+    boundary: &[u8],
+    limits: Limits,
+    spool_dir: &Path,
+    php_max_upload_bytes: Option<u64>,
+    php_max_post_bytes: Option<u64>,
+) -> Result<Request, Error> {
+    parse_reader_with_php_limits_impl(
+        reader, boundary, limits, spool_dir, php_max_upload_bytes, php_max_post_bytes, true,
+    )
+}
+
+fn parse_reader_with_php_limits_impl(
+    reader: &mut impl Read,
+    boundary: &[u8],
+    limits: Limits,
+    spool_dir: &Path,
+    php_max_upload_bytes: Option<u64>,
+    php_max_post_bytes: Option<u64>,
+    php_partial_upload: bool,
+) -> Result<Request, Error> {
     let mut parser = Some(
         Parser::new(boundary, limits, spool_dir)?.with_php_upload_max_bytes(php_max_upload_bytes),
     );
@@ -1092,6 +1164,7 @@ pub fn parse_reader_with_php_limits(
         match reader.read(&mut buffer) {
             Ok(0) => {
                 return match parser {
+                    Some(parser) if php_partial_upload => parser.finish_with_php_partial(),
                     Some(parser) => parser.finish(),
                     None => Ok(Request {
                         arena: Vec::new(),
