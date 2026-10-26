@@ -1083,8 +1083,7 @@ pub fn parse_reader_with_php_limits(
     php_max_post_bytes: Option<u64>,
 ) -> Result<Request, Error> {
     let mut parser = Some(
-        Parser::new(boundary, limits, spool_dir)?
-            .with_php_upload_max_bytes(php_max_upload_bytes),
+        Parser::new(boundary, limits, spool_dir)?.with_php_upload_max_bytes(php_max_upload_bytes),
     );
     let mut body_bytes = 0u64;
     let mut buffer = [0; BLOCK];
