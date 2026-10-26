@@ -63,9 +63,11 @@ values only.
   `filename` is supported. Header and parameter names ignore ASCII case;
   quoted pairs are unescaped. Raw names, filenames, binary values, duplicates,
   and part order are retained.
-- Optional content type is restricted to `token/token`; parameters and nested
-  multipart types are unsupported. Invalid/duplicate essential headers,
-  folding, control bytes, transfer encodings, and unknown disposition
+- Optional upload content type accepts a `token/token` media type followed
+  by semicolon parameters; only bytes before the first semicolon are retained,
+  matching PHP 8.4 `$_FILES[*]["type"]` (including pre-semicolon spaces).
+  Nested multipart types remain unsupported. Invalid/duplicate essential
+  headers, folding, control bytes, transfer encodings, and unknown disposition
   parameters are rejected.
 - Preambles, epilogues, delimiter padding, and bare LF are rejected. A closing
   delimiter commits the parse; only EOF or one trailing CRLF followed by EOF is
@@ -726,3 +728,19 @@ corpus** and remains a documented behavioral difference. Do not substitute
 the parser for PHP's production SAPI without an explicit ingress policy and
 review of this discrepancy. A separate near-match with an incorrect boundary
 byte (`rustpon-difx`) remains in the live PHP SAPI differential suite.
+
+## PHP 8.4 upload Content-Type parameters (research)
+
+The multipart wire parser now accepts parameterized part Content-Type headers
+such as `text/plain; charset=UTF-8`. PHP 8.4's SAPI registers only the
+media-type bytes preceding the first semicolon as the upload `type` field,
+including whitespace immediately before that semicolon. The Rust wire IR
+preserves those bytes; the existing FILES projection and admission gate
+inherit the same value. It does not decode charset parameters or trust the
+client's claimed MIME type. Invalid media types and nested multipart remain
+unsupported.
+
+The Linux PHP 8.4 SAPI differential suite now checks four additional
+parameterized/mixed-case upload types; a Rust unit test also checks the
+binary payload length, metadata and nested-multipart rejection. The oracle
+checks upload metadata, not MIME sniffing or native Zend integration.
