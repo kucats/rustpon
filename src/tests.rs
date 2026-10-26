@@ -1899,3 +1899,48 @@ fn php_missing_temp_directory_on_disk_recovers_without_staging() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn php_missing_temp_directory_precedes_upload_max_filesize() {
+    let spool = Spool::new();
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+        .unwrap()
+        .with_php_upload_max_bytes(Some(1))
+        .with_php_upload_write_recovery();
+    parser.fail_no_tmp_dir = true;
+    parser.feed(&body(&[(FILE, b"abc")])).unwrap();
+    let request = parser.finish().unwrap();
+    let metadata = crate::files::project(
+        &request,
+        crate::files::Limits {
+            max_upload_bytes: Some(1),
+            ..crate::files::Limits::default()
+        },
+    )
+    .unwrap();
+    assert!(metadata.wire().parts().any(|part| {
+        part.name == b"file[error]" && part.value == Some(b"6".as_slice())
+    }));
+    drop(metadata);
+    let admitted =
+        crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
+    assert_eq!(admitted.accepted_indices().count(), 0);
+    drop(admitted);
+    spool.empty();
+
+    // Even with no writable temp directory, an empty filename is error=4.
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+        .unwrap()
+        .with_php_upload_write_recovery();
+    parser.fail_no_tmp_dir = true;
+    let empty_name = b"Content-Disposition: form-data; name=file; filename=\"\"";
+    parser.feed(&body(&[(empty_name, b"")])).unwrap();
+    let request = parser.finish().unwrap();
+    let metadata = crate::files::project(&request, crate::files::Limits::default()).unwrap();
+    assert!(metadata.wire().parts().any(|part| {
+        part.name == b"file[error]" && part.value == Some(b"4".as_slice())
+    }));
+    drop(metadata);
+    drop(request);
+    spool.empty();
+}
