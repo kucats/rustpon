@@ -24,6 +24,8 @@ pub struct FormParser {
     // A fixed-size set of raw separator bytes (PHP arg_separator.input).
     // Four words cover all 256 byte values without per-request allocation.
     separators: [u64; 4],
+    // Opt-in PHP parse_str() behavior: decoded NUL terminates the name.
+    php_nul_name_truncation: bool,
 }
 
 impl FormParser {
@@ -74,6 +76,7 @@ impl FormParser {
             raw_value: 0,
             raw_values_total: 0,
             separators: [1u64 << (b'&' as usize % 64), 0, 0, 0],
+            php_nul_name_truncation: false,
         })
     }
 
@@ -96,6 +99,14 @@ impl FormParser {
     /// Compatibility shorthand for PHP arg_separator.input='&;'.
     pub fn with_php_semicolon_separator(self) -> Self {
         self.with_php_arg_separators(b"&;")
+    }
+
+    /// PHP 8.4 parse_str() truncates a percent-decoded variable name at its
+    /// first NUL byte. This is opt-in: the strict parser rejects such names.
+    /// Raw input limits are still enforced before any decoding or truncation.
+    pub fn with_php_nul_name_truncation(mut self) -> Self {
+        self.php_nul_name_truncation = true;
+        self
     }
 
     fn is_separator(&self, byte: u8) -> bool {
@@ -184,23 +195,19 @@ impl FormParser {
             let discard_from = self.field_start;
             self.request().arena.truncate(discard_from);
         } else {
-            let part_count = add_usize(
-                self.request().stats.parts,
-                1,
-                self.limits.parts,
-                Limit::Parts,
-            )?;
-            let field_count = add_usize(
-                self.request().stats.fields,
-                1,
-                self.limits.fields,
-                Limit::Fields,
-            )?;
             let field_start = self.field_start;
             let (name_end, value_end) = {
                 let arena = &mut self.request().arena;
                 let decoded_name = url_decode(&mut arena[field_start..value_start]);
-                let name_end = field_start + decoded_name;
+                let name_len = if self.php_nul_name_truncation {
+                    arena[field_start..field_start + decoded_name]
+                        .iter()
+                        .position(|&byte| byte == 0)
+                        .unwrap_or(decoded_name)
+                } else {
+                    decoded_name
+                };
+                let name_end = field_start + name_len;
                 let raw_value_len = end - value_start;
                 arena.copy_within(value_start..end, name_end);
                 let moved_end = name_end + raw_value_len;
@@ -213,26 +220,43 @@ impl FormParser {
             if self.request().arena[field_start..name_end].contains(&0) {
                 return Err(Error::Malformed);
             }
-            let value_len = value_end - name_end;
-            let total = add_usize(
-                self.request().stats.field_bytes,
-                value_len,
-                self.limits.field_bytes_total,
-                Limit::FieldBytesTotal,
-            )?;
-            self.request().parts.push(Part {
-                name: Range {
-                    start: field_start,
-                    end: name_end,
-                },
-                filename: None,
-                content_type: None,
-                payload: Payload::Field(name_end..value_end),
-            });
-            let stats = &mut self.request().stats;
-            stats.parts = part_count;
-            stats.fields = field_count;
-            stats.field_bytes = total;
+            if name_end == field_start {
+                // PHP ignores names that become empty after NUL truncation.
+                self.request().arena.truncate(field_start);
+            } else {
+                let part_count = add_usize(
+                    self.request().stats.parts,
+                    1,
+                    self.limits.parts,
+                    Limit::Parts,
+                )?;
+                let field_count = add_usize(
+                    self.request().stats.fields,
+                    1,
+                    self.limits.fields,
+                    Limit::Fields,
+                )?;
+                let value_len = value_end - name_end;
+                let total = add_usize(
+                    self.request().stats.field_bytes,
+                    value_len,
+                    self.limits.field_bytes_total,
+                    Limit::FieldBytesTotal,
+                )?;
+                self.request().parts.push(Part {
+                    name: Range {
+                        start: field_start,
+                        end: name_end,
+                    },
+                    filename: None,
+                    content_type: None,
+                    payload: Payload::Field(name_end..value_end),
+                });
+                let stats = &mut self.request().stats;
+                stats.parts = part_count;
+                stats.fields = field_count;
+                stats.field_bytes = total;
+            }
         }
         self.field_start = self.request().arena.len();
         self.value_start = None;
@@ -288,7 +312,7 @@ fn url_decode(bytes: &mut [u8]) -> usize {
 
 /// Standalone blocking-Read adapter with no HTTP transport assumptions.
 pub fn parse_reader(reader: &mut impl Read, limits: Limits) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, b"&")
+    parse_reader_impl(reader, limits, b"&", false)
 }
 
 /// Opt-in PHP 8.4 `arg_separator.input='&;'` parsing for trusted SAPI settings.
@@ -297,7 +321,7 @@ pub fn parse_reader_with_php_semicolon_separator(
     reader: &mut impl Read,
     limits: Limits,
 ) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, b"&;")
+    parse_reader_impl(reader, limits, b"&;", false)
 }
 
 /// Parse using PHP's configured arg_separator.input byte set. The empty
@@ -307,15 +331,30 @@ pub fn parse_reader_with_php_arg_separators(
     limits: Limits,
     separators: &[u8],
 ) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, separators)
+    parse_reader_impl(reader, limits, separators, false)
+}
+
+/// Opt-in PHP 8.4 parse_str() handling of percent-decoded NULs in field
+/// names, with the same configurable raw separator set. The strict default
+/// rejects decoded NULs rather than silently shortening a variable name.
+pub fn parse_reader_with_php_nul_name_truncation(
+    reader: &mut impl Read,
+    limits: Limits,
+    separators: &[u8],
+) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, separators, true)
 }
 
 fn parse_reader_impl(
     reader: &mut impl Read,
     limits: Limits,
     separators: &[u8],
+    php_nul_name_truncation: bool,
 ) -> Result<Request, Error> {
     let mut parser = FormParser::new(limits)?.with_php_arg_separators(separators);
+    if php_nul_name_truncation {
+        parser = parser.with_php_nul_name_truncation();
+    }
     let mut buffer = [0u8; 8192];
     let mut consecutive_interrupts = 0usize;
     loop {
@@ -356,6 +395,72 @@ mod tests {
             .parts()
             .map(|p| (p.name.to_vec(), p.value.unwrap().to_vec()))
             .collect()
+    }
+
+    #[test]
+    fn php_decoded_nul_names_are_opt_in_and_chunk_independent() {
+        let body = b"a%00suffix=one&%00empty=ignored&a%5Bx%00y%5D=two&z=hi%00there";
+        assert_eq!(parse(body, Limits::default()).unwrap_err(), Error::Malformed);
+        let expected = vec![
+            (b"a".to_vec(), b"one".to_vec()),
+            (b"a[x".to_vec(), b"two".to_vec()),
+            (b"z".to_vec(), b"hi\0there".to_vec()),
+        ];
+        let parsed = parse_reader_with_php_nul_name_truncation(
+            &mut Cursor::new(body),
+            Limits::default(),
+            b"&",
+        )
+        .unwrap();
+        assert_eq!(fields(&parsed), expected);
+        assert_eq!(parsed.stats().fields, 3);
+        for split in 0..=body.len() {
+            let mut parser = FormParser::new(Limits::default())
+                .unwrap()
+                .with_php_nul_name_truncation();
+            parser.feed(&body[..split]).unwrap();
+            parser.feed(&body[split..]).unwrap();
+            assert_eq!(fields(&parser.finish().unwrap()), expected, "split {split}");
+        }
+        let pipe = parse_reader_with_php_nul_name_truncation(
+            &mut Cursor::new(b"a%00b=1|b=2"),
+            Limits::default(),
+            b"|",
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&pipe),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+            ]
+        );
+        // Truncation must never bypass raw-name or body resource budgets.
+        let limits = Limits {
+            name_bytes: 4,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_reader_with_php_nul_name_truncation(
+                &mut Cursor::new(b"a%00long=1"),
+                limits,
+                b"&",
+            )
+            .unwrap_err(),
+            Error::Limit(Limit::NameBytes)
+        );
+        let limits = Limits {
+            parts: 1,
+            fields: 1,
+            ..Limits::default()
+        };
+        let parsed = parse_reader_with_php_nul_name_truncation(
+            &mut Cursor::new(b"%00drop=1&a=2"),
+            limits,
+            b"&",
+        )
+        .unwrap();
+        assert_eq!(fields(&parsed), vec![(b"a".to_vec(), b"2".to_vec())]);
     }
 
     #[test]
