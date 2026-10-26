@@ -1160,6 +1160,15 @@ pub fn parse_reader_with_php_content_length(
     if content_length > limits.body_bytes {
         return Err(Error::Limit(Limit::BodyBytes));
     }
+    // A declared empty body has no multipart framing to validate. Like PHP
+    // SAPI, publish empty POST/FILES without opening any upload descriptor.
+    if content_length == 0 {
+        return Ok(Request {
+            arena: Vec::new(),
+            parts: Vec::new(),
+            stats: Stats::default(),
+        });
+    }
     let mut bounded = reader.take(content_length);
     if php_max_post_bytes.is_some_and(|max| max != 0 && content_length > max) {
         // Preflight before parsing even the first byte: malformed multipart
