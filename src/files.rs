@@ -529,10 +529,8 @@ mod tests {
 
     #[test]
     fn malformed_upload_name_stops_later_files_without_losing_fields() {
-        let path = std::env::temp_dir().join(format!(
-            "rustpon-invalid-upload-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rustpon-invalid-upload-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let cases: &[(&[&[u8]], &[usize])] = &[
             (&[b"bad[x", b"later"], &[]),
