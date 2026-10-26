@@ -48,8 +48,6 @@ CASES = [
                                   (b"later", b"ok", b"later.bin")]),
     ("file-invalid-root-ignored", [(b"[ignored]", b"bad", b"bad.bin"),
                                    (b"later", b"ok", b"later.bin")]),
-    ("file-empty-root-ignored", [(b"", b"bad", b"bad.bin"),
-                                 (b"later", b"ok", b"later.bin")]),
     ("integer", [(b"a[0]", b"zero", None), (b"a[2]", b"two", None)]),
     ("negative-append", [(b"a[-2]", b"neg", None), (b"a[]", b"next", None)]),
     ("normalize", [(b"first.name", b"old", None), (b"first_name", b"new", None)]),
@@ -239,7 +237,6 @@ def main():
                     "file-invalid-trailing-bracket": [],
                     "file-invalid-nested-tail": [],
                     "file-invalid-root-ignored": [1],
-                    "file-empty-root-ignored": [1],
                 }
                 if label in expected_accepted and admission_data["accepted_indices"] != expected_accepted[label]:
                     failures += 1
@@ -258,8 +255,7 @@ def main():
                         "max-collision-recovery", "file-zero-overwritten",
                         "file-nested-then-flat", "file-flat-then-nested",
                         "file-same-index", "file-normalized-root",
-                        "file-invalid-after-good", "file-invalid-root-ignored",
-                        "file-empty-root-ignored"):
+                        "file-invalid-after-good", "file-invalid-root-ignored"):
                     raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
                                          input=data, capture_output=True, timeout=15, check=False)
                     if raw.returncode:

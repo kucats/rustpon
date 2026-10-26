@@ -114,8 +114,9 @@ is ignored (`a[x][y` becomes `a[x]`). This matches PHP 8.4
 corpora. For file controls, malformed bracket syntax (such as `f[x` or
 `f[x][`) stops registration of subsequent uploads, matching PHP 8.4
 rfc1867 behavior; earlier valid files and later ordinary form fields remain
-visible. Empty or bracket-only upload roots are ignored without stopping
-later files. The admission gate closes descriptors for every discarded file.
+visible. Bracket-only upload roots are ignored without stopping later
+files; an empty name is still rejected by the strict wire parser. The
+admission gate closes descriptors for every discarded file.
 This is distinct from strict resource-limit failures, which still reject the
 whole request.
 

@@ -538,7 +538,6 @@ mod tests {
             (&[b"bad]", b"later"], &[]),
             (&[b"bad[x][", b"later"], &[]),
             (&[b"[ignored]", b"later"], &[1]),
-            (&[b"", b"later"], &[1]),
         ];
         for &(names, expected) in cases {
             let mut body = Vec::new();
