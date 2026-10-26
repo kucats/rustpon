@@ -204,9 +204,10 @@ def main():
                     # Session API must not reparse between size query and copy.
                     eligible = OVERRIDES.get(
                         label,
-                        [i for i, (_, _, filename) in enumerate(parts) if filename is not None],
+                        [i for i, part in enumerate(parts) if part[2] is not None],
                     )
-                    for index, (_, data, filename) in enumerate(parts):
+                    for index, part in enumerate(parts):
+                        _, data, filename = part[:3]
                         if filename is None:
                             continue
                         code, payload = copy(session_upload, (handle.value, index))
@@ -232,9 +233,10 @@ def main():
 
                 eligible = OVERRIDES.get(
                     label,
-                    [i for i, (_, _, filename) in enumerate(parts) if filename is not None],
+                    [i for i, part in enumerate(parts) if part[2] is not None],
                 )
-                for index, (_, data, filename) in enumerate(parts):
+                for index, part in enumerate(parts):
+                    _, data, filename = part[:3]
                     if filename is None:
                         continue
                     code, payload = copy(upload, fixed + (index,))
