@@ -2078,15 +2078,10 @@ fn post_create_spool_retarget_fails_before_upload_bytes_are_written() {
 
     // Swap the parent after create_new has opened an empty file but before
     // anonymous_upload unlinks it. A pathname-only preflight misses this.
-    let result = anonymous_upload_with_hook(
-        &mut path,
-        original.dev(),
-        original.ino(),
-        || {
-            fs::rename(&spool.0, &saved).unwrap();
-            std::os::unix::fs::symlink(&other.0, &spool.0).unwrap();
-        },
-    );
+    let result = anonymous_upload_with_hook(&mut path, original.dev(), original.ino(), || {
+        fs::rename(&spool.0, &saved).unwrap();
+        std::os::unix::fs::symlink(&other.0, &spool.0).unwrap();
+    });
     assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
     assert_eq!(path, spool.0);
     other.empty();
@@ -2115,27 +2110,22 @@ fn post_create_filename_swap_never_unlinks_a_different_inode() {
     let mut temporary_path = None;
     let mut path = spool.0.clone();
 
-    let result = anonymous_upload_with_hook(
-        &mut path,
-        original.dev(),
-        original.ino(),
-        || {
-            let created = fs::read_dir(&spool.0)
-                .unwrap()
-                .map(|entry| entry.unwrap().path())
-                .find(|entry| {
-                    entry
-                        .file_name()
-                        .unwrap()
-                        .to_string_lossy()
-                        .starts_with("php-request-")
-                })
-                .unwrap();
-            fs::rename(&created, &parked).unwrap();
-            std::os::unix::fs::symlink(&sentinel, &created).unwrap();
-            temporary_path = Some(created);
-        },
-    );
+    let result = anonymous_upload_with_hook(&mut path, original.dev(), original.ino(), || {
+        let created = fs::read_dir(&spool.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("php-request-")
+            })
+            .unwrap();
+        fs::rename(&created, &parked).unwrap();
+        std::os::unix::fs::symlink(&sentinel, &created).unwrap();
+        temporary_path = Some(created);
+    });
     assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
     assert_eq!(fs::read(&sentinel).unwrap(), b"must-survive");
     assert_eq!(fs::metadata(&parked).unwrap().len(), 0);
