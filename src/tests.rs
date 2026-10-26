@@ -1257,7 +1257,6 @@ fn php_post_streaming_quota_retains_strict_errors_until_exceeded() {
     spool.empty();
 }
 
-
 #[test]
 fn php_content_length_preflight_skips_malformed_oversized_multipart() {
     let spool = Spool::new();
