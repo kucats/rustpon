@@ -346,11 +346,13 @@ mod tests {
         assert_eq!(strict.stats().fields, 2);
         assert_eq!(fields(&strict)[0].1, b"one;b[c]=two");
         assert_eq!(
-            fields(&parse_reader_with_php_semicolon_separator(
-                &mut Cursor::new(body),
-                Limits::default(),
-            )
-            .unwrap()),
+            fields(
+                &parse_reader_with_php_semicolon_separator(
+                    &mut Cursor::new(body),
+                    Limits::default(),
+                )
+                .unwrap()
+            ),
             expected
         );
         for split in 0..=body.len() {

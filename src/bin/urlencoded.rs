@@ -8,8 +8,7 @@ fn run() -> Result<(), String> {
     let mut max_input_vars = None;
     let mut max_input_nesting_level = None;
     let mut php_semicolon_separator = false;
-    let usage =
-        "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator] < body.bin";
+    let usage = "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator] < body.bin";
     while let Some(flag) = args.next() {
         if flag == "--php-semicolon-separator" && !php_semicolon_separator {
             php_semicolon_separator = true;
