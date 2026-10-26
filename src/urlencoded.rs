@@ -370,8 +370,9 @@ mod tests {
         })
         .unwrap()
         .with_php_semicolon_separator();
-        assert_eq!(parser.feed(body), Err(Error::Limit(Limit::Parts)));
-        assert!(matches!(parser.finish(), Err(Error::Limit(Limit::Parts))));
+        // The final field is committed at EOF, not during feed().
+        assert_eq!(parser.feed(body), Ok(()));
+        assert_eq!(parser.finish().unwrap_err(), Error::Limit(Limit::Parts));
     }
 
     #[test]
