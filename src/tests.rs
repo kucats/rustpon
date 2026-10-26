@@ -1951,4 +1951,16 @@ fn php_missing_temp_directory_precedes_upload_max_filesize() {
     drop(metadata);
     drop(request);
     spool.empty();
+
+    // Permission-denied create failures are not evidence of a missing
+    // directory; PHP-mode recovery must not mask these I/O failures.
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+        .unwrap()
+        .with_php_upload_write_recovery();
+    parser.fail_create = true;
+    assert_eq!(
+        parser.feed(&body(&[(FILE, b"abc")])),
+        Err(Error::Io(io::ErrorKind::PermissionDenied))
+    );
+    spool.empty();
 }
