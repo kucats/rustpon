@@ -146,8 +146,10 @@ fn php_nesting_limit_skips_overdeep_fields_and_counts_them_toward_input_vars() {
     assert_eq!(zero.stats().skipped_fields, 1);
 
     // Strict callers still reject over-depth names atomically.
-    let mut strict = Limits::default();
-    strict.depth = 1;
+    let strict = Limits {
+        depth: 1,
+        ..Limits::default()
+    };
     assert_eq!(
         request(&spool, fields, false)
             .into_post(strict)
