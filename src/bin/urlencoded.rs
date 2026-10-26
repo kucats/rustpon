@@ -8,14 +8,21 @@ fn run() -> Result<(), String> {
     let mut max_input_vars = None;
     let mut max_input_nesting_level = None;
     let mut php_semicolon_separator = false;
-    let usage = "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator] < body.bin";
+    let mut php_arg_separators: Option<String> = None;
+    let usage = "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator | --php-arg-separators BYTES] < body.bin";
     while let Some(flag) = args.next() {
-        if flag == "--php-semicolon-separator" && !php_semicolon_separator {
+        if flag == "--php-semicolon-separator"
+            && !php_semicolon_separator
+            && php_arg_separators.is_none()
+        {
             php_semicolon_separator = true;
             continue;
         }
         let value = args.next().ok_or(usage)?;
         match flag.as_str() {
+            "--php-arg-separators" if php_arg_separators.is_none() && !php_semicolon_separator => {
+                php_arg_separators = Some(value);
+            }
             "--php-max-input-vars" if max_input_vars.is_none() => {
                 max_input_vars = Some(
                     value
@@ -33,7 +40,13 @@ fn run() -> Result<(), String> {
             _ => return Err(usage.to_owned()),
         }
     }
-    let request = if php_semicolon_separator {
+    let request = if let Some(separators) = php_arg_separators {
+        urlencoded::parse_reader_with_php_arg_separators(
+            &mut io::stdin().lock(),
+            Limits::default(),
+            separators.as_bytes(),
+        )
+    } else if php_semicolon_separator {
         urlencoded::parse_reader_with_php_semicolon_separator(
             &mut io::stdin().lock(),
             Limits::default(),
