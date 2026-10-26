@@ -2017,3 +2017,50 @@ fn upload_spool_replacement_and_permission_changes_fail_closed() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn canonical_spool_path_survives_parent_symlink_retarget() {
+    let original = Spool::new();
+    let replacement = Spool::new();
+    let original_uploads = original.0.join("uploads");
+    let replacement_uploads = replacement.0.join("uploads");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&original_uploads)
+        .unwrap();
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&replacement_uploads)
+        .unwrap();
+    let alias = std::env::temp_dir().join(format!(
+        "rustpon-spool-parent-{}-{}",
+        std::process::id(),
+        NEXT_UPLOAD.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::os::unix::fs::symlink(&original.0, &alias).unwrap();
+
+    // The final spool component is a real directory; only its ancestor
+    // is a symlink. Resolve it once and retain the original target.
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &alias.join("uploads")).unwrap();
+    assert_eq!(parser.spool_path, fs::canonicalize(&original_uploads).unwrap());
+
+    fs::remove_file(&alias).unwrap();
+    std::os::unix::fs::symlink(&replacement.0, &alias).unwrap();
+    parser.feed(&body(&[(FILE, b"original-target")])).unwrap();
+    let mut request = parser.finish().unwrap();
+    let mut copied = Vec::new();
+    assert_eq!(
+        request.upload_mut(0).unwrap().copy_to(&mut copied).unwrap(),
+        15
+    );
+    assert_eq!(copied, b"original-target");
+    drop(request);
+
+    assert_eq!(fs::read_dir(&original_uploads).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(&replacement_uploads).unwrap().count(), 0);
+    fs::remove_file(&alias).unwrap();
+    fs::remove_dir(&original_uploads).unwrap();
+    fs::remove_dir(&replacement_uploads).unwrap();
+    original.empty();
+    replacement.empty();
+}

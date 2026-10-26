@@ -342,7 +342,21 @@ impl Parser {
         if !metadata.is_dir() || metadata.permissions().mode() & 0o077 != 0 {
             return Err(Error::InvalidSpoolDirectory);
         }
-        let path_size = spool_dir
+        // Pin an absolute, resolved path before accepting request bytes.
+        // Otherwise a relative path can move with cwd, or a symlink in an
+        // ancestor can be retargeted between parser creation and upload.
+        // Preserve the final-component symlink rejection above, and detect
+        // replacements racing with canonicalization by comparing identities.
+        let canonical_spool = fs::canonicalize(spool_dir)?;
+        let resolved = fs::symlink_metadata(&canonical_spool)?;
+        if !resolved.is_dir()
+            || resolved.permissions().mode() & 0o077 != 0
+            || resolved.dev() != metadata.dev()
+            || resolved.ino() != metadata.ino()
+        {
+            return Err(Error::InvalidSpoolDirectory);
+        }
+        let path_size = canonical_spool
             .as_os_str()
             .len()
             .checked_add(80)
@@ -369,7 +383,7 @@ impl Parser {
         spool_path
             .try_reserve_exact(path_size)
             .map_err(|_| Error::Allocation)?;
-        spool_path.push(spool_dir);
+        spool_path.push(&canonical_spool);
         let actual = size_of::<Self>()
             .checked_add(arena.capacity())
             .and_then(|n| {

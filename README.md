@@ -94,8 +94,12 @@ partial JSON response.
 These capacity counters are accounting limits, not RSS or complete system-OOM
 guarantees. Allocator metadata, kernel buffers, caller memory, output buffering,
 and process-wide concurrency are outside the model. The caller must keep the
-spool directory trusted and stable for the request lifetime. Before each upload,
-the parser now rechecks the directory's original device/inode identity and
+spool directory trusted and stable for the request lifetime. At construction,
+the parser resolves the directory to an absolute canonical path, preventing
+later working-directory changes or ancestor symlink retargeting from redirecting
+uploads. It rejects a symlink at the final directory component and detects
+identity changes during canonicalization. Before each upload, the parser
+rechecks the resolved directory's original device/inode identity and
 private permissions; a symlink swap, a recreated directory, or a permission
 relaxation fails closed. A missing directory still follows the opt-in PHP
 `UPLOAD_ERR_NO_TMP_DIR=6` policy. This pathname recheck does **not** close
