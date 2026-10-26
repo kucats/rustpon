@@ -687,17 +687,22 @@ fn normalize(
             return Err(Error::Depth);
         }
         cursor += 1;
-        while raw.get(cursor).is_some_and(|b| b" \r\n\t".contains(b)) {
-            cursor += 1;
-        }
+        let index_start = cursor;
         let end = raw[cursor..]
             .iter()
             .position(|b| *b == b']')
             .map(|n| n + cursor)
             .ok_or(Error::MalformedName)?;
+        // php_register_variable_ex treats exactly one ASCII whitespace byte
+        // between brackets as append, but preserves whitespace in other keys.
+        // Trimming every leading whitespace byte changes the key's identity.
+        let append = end == index_start
+            || (end == index_start + 1 && raw[index_start].is_ascii_whitespace());
         scratch.push(b'[');
         let start = scratch.len();
-        scratch.extend_from_slice(&raw[cursor..end]);
+        if !append {
+            scratch.extend_from_slice(&raw[index_start..end]);
+        }
         path[count] = if start == scratch.len() {
             Segment::Append
         } else {
