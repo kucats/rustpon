@@ -107,8 +107,12 @@ fields. A single ASCII whitespace byte inside a bracket index (such as
 bytes or whitespace followed by another byte remain part of the literal key.
 The PHP upload-name path separately trims leading bracket whitespace when
 projecting `$_FILES` (for example, `f[ x]` becomes index `x`).
-A malformed upload name rejects the whole conversion rather than
-returning a partial tree.
+For ordinary fields, a missing first closing bracket flattens the name
+(`a[x` becomes `a_x`); after a completed bracket, an unfinished tail
+is ignored (`a[x][y` becomes `a[x]`). This matches PHP 8.4
+`php_register_variable_ex` and is checked by the CLI/SAPI differential
+corpora. Malformed upload names remain a documented strict-mode rejection
+rather than a partial `$_FILES` projection.
 
 The behavior is a bounded compatibility experiment for 64-bit PHP 8.4-style
 semantics; it is not a substitute for differential validation against every

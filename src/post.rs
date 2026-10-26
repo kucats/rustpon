@@ -708,11 +708,28 @@ fn normalize(
             }
         }
         let index_start = cursor;
-        let end = raw[cursor..]
+        // PHP flattens the name when the first bracket never closes, but
+        // retains the last completed path when a later bracket is unfinished.
+        let Some(end) = raw[cursor..]
             .iter()
             .position(|b| *b == b']')
             .map(|n| n + cursor)
-            .ok_or(Error::MalformedName)?;
+        else {
+            if count == 1 {
+                for &byte in &raw[base..] {
+                    scratch.push(if b" .[".contains(&byte) {
+                        b'_'
+                    } else {
+                        byte
+                    });
+                }
+                path[0] = Segment::Key(Span {
+                    start: 0,
+                    end: scratch.len(),
+                });
+            }
+            break;
+        };
         // php_register_variable_ex treats exactly one ASCII whitespace byte
         // between brackets as append, but preserves whitespace in other keys.
         // Trimming every leading whitespace byte changes the key's identity.

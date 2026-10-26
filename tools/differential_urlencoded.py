@@ -42,6 +42,13 @@ CASES = [
     ("bracket-single-tab-append", b"a%5B%09%5D=1"),
     ("bracket-single-vtab-append", b"a%5B%0B%5D=1"),
     ("bracket-single-formfeed-append", b"a%5B%0C%5D=1"),
+    ("unterminated-first-bracket", b"a%5Bx=1"),
+    ("unterminated-empty-bracket", b"a%5B=1"),
+    ("unterminated-first-space", b"a%5B+x=1"),
+    ("unterminated-first-dots", b"a%5Bfoo.bar%5B=1"),
+    ("unterminated-nested-bracket", b"a%5Bx%5D%5B=1"),
+    ("unterminated-nested-key", b"a%5Bx%5D%5By=1"),
+    ("unterminated-third-bracket", b"a%5Bx%5D%5By%5D%5B=1"),
 ]
 
 def run(command, body):

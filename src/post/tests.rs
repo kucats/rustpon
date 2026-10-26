@@ -222,16 +222,41 @@ fn exact_and_plus_one_adapter_budgets() {
 }
 
 #[test]
-fn malformed_depth_append_and_configuration_failures_are_explicit() {
+fn unterminated_brackets_follow_php_84_field_registration() {
+    // These are byte-for-byte tagged trees from PHP 8.4 parse_str().
+    // A missing first closing bracket produces a flat key; a missing
+    // later closing bracket keeps the last complete nested path.
     let spool = Spool::new();
-    for (name, error) in [
-        (b"a[".as_slice(), Error::MalformedName),
-        (b"a[x][".as_slice(), Error::MalformedName),
-    ] {
-        assert!(
-            matches!(request(&spool, &[(name, b"v")], false).into_post(Limits::default()), Err(found) if found == error)
-        );
+    let cases: &[(&[u8], &str)] = &[
+        (b"a[", r#"["a",[[["s","615f"],["s","76"]]]]"#),
+        (b"a[x", r#"["a",[[["s","615f78"],["s","76"]]]]"#),
+        (b"a[ x", r#"["a",[[["s","615f5f78"],["s","76"]]]]"#),
+        (
+            b"a[foo.bar[",
+            r#"["a",[[["s","615f666f6f5f6261725f"],["s","76"]]]]"#,
+        ),
+        (
+            b"a[foo[[",
+            r#"["a",[[["s","615f666f6f5f5f"],["s","76"]]]]"#,
+        ),
+        (b"a[x][", r#"["a",[[["s","61"],["a",[[["s","78"],["s","76"]]]]]]]"#),
+        (b"a[x][y", r#"["a",[[["s","61"],["a",[[["s","78"],["s","76"]]]]]]]"#),
+        (
+            b"a[x][y][",
+            r#"["a",[[["s","61"],["a",[[["s","78"],["a",[[["s","79"],["s","76"]]]]]]]]]]"#,
+        ),
+    ];
+    for &(name, expected) in cases {
+        let post = request(&spool, &[(name, b"v")], false)
+            .into_post(Limits::default())
+            .unwrap();
+        assert_eq!(json(&post), expected, "name={name:?}");
     }
+}
+
+#[test]
+fn depth_append_and_configuration_failures_are_explicit() {
+    let spool = Spool::new();
     let fields: &[(&[u8], &[u8])] = &[(b"a[9223372036854775807]", b"x"), (b"a[]", b"y")];
     assert!(matches!(
         request(&spool, fields, false).into_post(Limits::default()),
@@ -375,10 +400,10 @@ fn adapter_failure_releases_owned_uploads_in_subprocess() {
             assert_eq!(count(), baseline);
         }
         let wire = request(&spool, &[(b"g[", b"v")], true);
-        assert!(matches!(
-            wire.into_post(Limits::default()),
-            Err(Error::MalformedName)
-        ));
+        let post = wire.into_post(Limits::default()).unwrap();
+        assert_eq!(count(), baseline + 1);
+        assert_eq!(json(&post), r#"["a",[[["s","675f"],["s","76"]]]]"#);
+        drop(post);
         assert_eq!(count(), baseline);
         let post = request(&spool, &[], true)
             .into_post(Limits::default())
