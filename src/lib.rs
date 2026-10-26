@@ -838,22 +838,26 @@ fn parse_header(line: &[u8]) -> Result<Header<'_>, Error> {
         return Err(Error::Unsupported);
     }
     if key.eq_ignore_ascii_case(b"content-type") {
-        // Parameters/charset conversion are deliberately outside this subset.
-        let slash = value
+        // PHP 8.4 exposes the media type before the first semicolon in
+        // `$_FILES["..."]["type"]`, including spaces preceding that
+        // semicolon. Parameters are client-controlled and not interpreted.
+        let media = value.split(|b| *b == b';').next().unwrap_or(value);
+        let validated = trim(media);
+        let slash = validated
             .iter()
             .position(|b| *b == b'/')
             .ok_or(Error::Malformed)?;
         if slash == 0
-            || slash + 1 == value.len()
-            || !value[..slash].iter().copied().all(token)
-            || !value[slash + 1..].iter().copied().all(token)
+            || slash + 1 == validated.len()
+            || !validated[..slash].iter().copied().all(token)
+            || !validated[slash + 1..].iter().copied().all(token)
         {
             return Err(Error::Unsupported);
         }
-        if value[..slash].eq_ignore_ascii_case(b"multipart") {
+        if validated[..slash].eq_ignore_ascii_case(b"multipart") {
             return Err(Error::Unsupported);
         }
-        return Ok(Header::ContentType(value));
+        return Ok(Header::ContentType(media));
     }
     Ok(Header::Other)
 }
