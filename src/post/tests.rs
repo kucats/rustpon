@@ -416,3 +416,51 @@ fn adapter_failure_releases_owned_uploads_in_subprocess() {
         assert_eq!(count(), baseline);
     }
 }
+
+#[test]
+fn php_max_input_vars_skips_excess_fields_but_keeps_uploads() {
+    let spool = Spool::new();
+    let fields: &[(&[u8], &[u8])] =
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")];
+    let expected = [
+        r#"["a",[]]"#,
+        r#"["a",[[["s","61"],["s","31"]]]]"#,
+        r#"["a",[[["s","61"],["s","31"]],[["s","62"],["s","32"]]]]"#,
+        r#"["a",[[["s","61"],["s","31"]],[["s","62"],["s","32"]],[["s","63"],["s","33"]]]]"#,
+    ];
+    for max in 0..=4 {
+        let mut post = request(&spool, fields, true)
+            .into_post_with_max_input_vars(Limits::default(), max)
+            .unwrap();
+        assert_eq!(json(&post), expected[max.min(3)], "max_input_vars={max}");
+        assert_eq!(post.stats().fields, max.min(3));
+        assert_eq!(post.stats().skipped_fields, 3 - max.min(3));
+        let mut upload = Vec::new();
+        assert_eq!(post.upload_mut(0).unwrap().copy_to(&mut upload).unwrap(), 4);
+        assert_eq!(upload, b"file");
+    }
+    // Strict mode is unchanged and does not silently discard variables.
+    let post = request(&spool, fields, false)
+        .into_post(Limits::default())
+        .unwrap();
+    assert_eq!(json(&post), expected[3]);
+}
+
+#[test]
+fn php_max_input_vars_discards_overflow_before_adapter_depth_checks() {
+    let spool = Spool::new();
+    let fields: &[(&[u8], &[u8])] = &[(b"ok", b"1"), (b"deep[x][y]", b"2")];
+    let limits = Limits {
+        depth: 1,
+        ..Limits::default()
+    };
+    assert!(matches!(
+        request(&spool, fields, false).into_post(limits),
+        Err(Error::Depth)
+    ));
+    let post = request(&spool, fields, false)
+        .into_post_with_max_input_vars(limits, 1)
+        .unwrap();
+    assert_eq!(json(&post), r#"["a",[[["s","6f6b"],["s","31"]]]]"#);
+    assert_eq!(post.stats().skipped_fields, 1);
+}
