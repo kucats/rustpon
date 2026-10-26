@@ -158,6 +158,45 @@ def main():
         except (KeyError, ValueError) as exc:
             failures += 1
             print(f"FAIL vars={count} nesting={depth} body={data!r}: {exc}", file=sys.stderr)
+    # PHP's arg_separator.input is a set of raw separator bytes, not a
+    # percent-decoded delimiter. Default rustpon remains '&'-only.
+    semicolon_cases = [
+        ("semicolon-basic", b"a=1;b=2&c=3"),
+        ("semicolon-leading-trailing", b";;a=1;;;b=2;"),
+        ("semicolon-percent-value", b"a=1%3B2;b=3"),
+        ("semicolon-percent-key", b"a%3Bb=1;c=2"),
+        ("semicolon-duplicates", b"a=1;a=2&b=3"),
+        ("semicolon-arrays", b"arr%5B%5D=x;arr%5B%5D=y"),
+        ("semicolon-empty-value", b"empty=;x=1"),
+        ("semicolon-invalid-escape", b"z=1;bad=%GG"),
+    ]
+    for label, data in semicolon_cases:
+        expected = run([args.php_bin, "-d", "arg_separator.input=&;", oracle], data)
+        actual = run([str(args.rust_bin), "--php-semicolon-separator"], data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL {label} body={data!r}: {exc}", file=sys.stderr)
+    # Check the configured separator alongside PHP max_input_vars.
+    combined_sep = b"a=1;b=2;c=3"
+    expected = run([args.php_bin, "-d", "arg_separator.input=&;",
+                    "-d", "max_input_vars=2", oracle], combined_sep)
+    actual = run([str(args.rust_bin), "--php-semicolon-separator",
+                  "--php-max-input-vars", "2"], combined_sep)
+    try:
+        if expected.returncode or actual.returncode:
+            raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+        if json.loads(expected.stdout) != json.loads(actual.stdout)["post_tree"]:
+            raise ValueError("PHP/rustpon projection mismatch")
+    except (KeyError, ValueError) as exc:
+        failures += 1
+        print(f"FAIL semicolon/max_input_vars: {exc}", file=sys.stderr)
     # Explicit strict deviations: no partial JSON publication.
     for label, data in [
         ("NUL-in-name", b"a%00b=1"),
@@ -168,7 +207,7 @@ def main():
         if result.returncode == 0 or result.stdout:
             failures += 1
             print(f"FAIL {label}: expected nonzero exit without stdout", file=sys.stderr)
-    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, 3 strict, {failures} failures")
+    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, 3 strict, {failures} failures")
     return int(failures != 0)
 if __name__ == "__main__":
     sys.exit(main())

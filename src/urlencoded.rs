@@ -21,6 +21,8 @@ pub struct FormParser {
     raw_name: usize,
     raw_value: usize,
     raw_values_total: usize,
+    // Opt-in PHP arg_separator.input='&;' behavior; default remains '&'.
+    php_semicolon_separator: bool,
 }
 
 impl FormParser {
@@ -70,7 +72,15 @@ impl FormParser {
             raw_name: 0,
             raw_value: 0,
             raw_values_total: 0,
+            php_semicolon_separator: false,
         })
+    }
+
+    /// Enable ';' as an additional raw field separator, as in PHP 8.4
+    /// arg_separator.input='&;'. Percent-encoded %3B stays within a field.
+    pub fn with_php_semicolon_separator(mut self) -> Self {
+        self.php_semicolon_separator = true;
+        self
     }
 
     fn request(&mut self) -> &mut Request {
@@ -111,6 +121,7 @@ impl FormParser {
         for &byte in bytes {
             match byte {
                 b'&' => self.complete_field()?,
+                b';' if self.php_semicolon_separator => self.complete_field()?,
                 b'=' if self.value_start.is_none() => {
                     self.value_start = Some(self.request().arena.len());
                 }
@@ -259,7 +270,27 @@ fn url_decode(bytes: &mut [u8]) -> usize {
 
 /// Standalone blocking-Read adapter with no HTTP transport assumptions.
 pub fn parse_reader(reader: &mut impl Read, limits: Limits) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, false)
+}
+
+/// Opt-in PHP 8.4 `arg_separator.input='&;'` parsing for trusted SAPI settings.
+/// The strict default entry point continues to use only '&'.
+pub fn parse_reader_with_php_semicolon_separator(
+    reader: &mut impl Read,
+    limits: Limits,
+) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, true)
+}
+
+fn parse_reader_impl(
+    reader: &mut impl Read,
+    limits: Limits,
+    php_semicolon_separator: bool,
+) -> Result<Request, Error> {
     let mut parser = FormParser::new(limits)?;
+    if php_semicolon_separator {
+        parser = parser.with_php_semicolon_separator();
+    }
     let mut buffer = [0u8; 8192];
     let mut consecutive_interrupts = 0usize;
     loop {
@@ -300,6 +331,45 @@ mod tests {
             .parts()
             .map(|p| (p.name.to_vec(), p.value.unwrap().to_vec()))
             .collect()
+    }
+
+    #[test]
+    fn php_semicolon_separator_is_opt_in_and_chunk_independent() {
+        let body = b"a=one;b%5Bc%5D=two&x=1%3B2;;z=3";
+        let expected = vec![
+            (b"a".to_vec(), b"one".to_vec()),
+            (b"b[c]".to_vec(), b"two".to_vec()),
+            (b"x".to_vec(), b"1;2".to_vec()),
+            (b"z".to_vec(), b"3".to_vec()),
+        ];
+        let strict = parse(body, Limits::default()).unwrap();
+        assert_eq!(strict.stats().fields, 2);
+        assert_eq!(fields(&strict)[0].1, b"one;b[c]=two");
+        assert_eq!(
+            fields(&parse_reader_with_php_semicolon_separator(
+                &mut Cursor::new(body),
+                Limits::default(),
+            )
+            .unwrap()),
+            expected
+        );
+        for split in 0..=body.len() {
+            let mut parser = FormParser::new(Limits::default())
+                .unwrap()
+                .with_php_semicolon_separator();
+            parser.feed(&body[..split]).unwrap();
+            parser.feed(&body[split..]).unwrap();
+            assert_eq!(fields(&parser.finish().unwrap()), expected, "split {split}");
+        }
+        let mut parser = FormParser::new(Limits {
+            parts: 3,
+            fields: 3,
+            ..Limits::default()
+        })
+        .unwrap()
+        .with_php_semicolon_separator();
+        assert_eq!(parser.feed(body), Err(Error::Limit(Limit::Parts)));
+        assert!(matches!(parser.finish(), Err(Error::Limit(Limit::Parts))));
     }
 
     #[test]

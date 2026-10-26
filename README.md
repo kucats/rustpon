@@ -113,6 +113,19 @@ These pathname checks do **not** close the final check/unlink race:
 descriptor-relative creation and unlinking with an independently audited
 OS interface are required before treating a mutable spool path as safe.
 
+## PHP 8.4 URL-encoded separator option
+
+The default URL-encoded decoder splits fields only at raw `&`. PHP's
+`arg_separator.input` can be configured to accept semicolons too. Opt in
+with `FormParser::with_php_semicolon_separator()`,
+`urlencoded::parse_reader_with_php_semicolon_separator()`, or the CLI
+`urlencoded --php-semicolon-separator`. This models
+`arg_separator.input='&;'` only, not arbitrary separator sets. Raw `;`
+separates fields even across feed boundaries; percent-encoded `%3B` stays
+within the field. The option composes with the existing PHP input-variable
+and nesting limits. Nine CLI comparisons against PHP 8.4 `parse_str()`
+exercise the configured separator and combined variable quota.
+
 ## PHP-style adapter scope
 
 An opt-in `admission::admit_with_php_post_max_size` adapter models PHP

@@ -7,9 +7,14 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let mut max_input_vars = None;
     let mut max_input_nesting_level = None;
+    let mut php_semicolon_separator = false;
     let usage =
-        "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] < body.bin";
+        "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator] < body.bin";
     while let Some(flag) = args.next() {
+        if flag == "--php-semicolon-separator" && !php_semicolon_separator {
+            php_semicolon_separator = true;
+            continue;
+        }
         let value = args.next().ok_or(usage)?;
         match flag.as_str() {
             "--php-max-input-vars" if max_input_vars.is_none() => {
@@ -29,8 +34,15 @@ fn run() -> Result<(), String> {
             _ => return Err(usage.to_owned()),
         }
     }
-    let request = urlencoded::parse_reader(&mut io::stdin().lock(), Limits::default())
-        .map_err(|error| format!("wire: {error:?}"))?;
+    let request = if php_semicolon_separator {
+        urlencoded::parse_reader_with_php_semicolon_separator(
+            &mut io::stdin().lock(),
+            Limits::default(),
+        )
+    } else {
+        urlencoded::parse_reader(&mut io::stdin().lock(), Limits::default())
+    }
+    .map_err(|error| format!("wire: {error:?}"))?;
     let post = match (max_input_vars, max_input_nesting_level) {
         (vars, Some(depth)) => request.into_post_with_php_limits(
             post::Limits::default(),
