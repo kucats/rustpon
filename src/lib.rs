@@ -486,9 +486,10 @@ impl Parser {
         }
     }
 
-    /// Opt-in PHP 8.4 EOF recovery for an already-open file body. Completed
-    /// parts survive, while the unfinished upload receives error=3 and loses
-    /// all staged bytes. Other truncated states remain fail-closed.
+    /// Opt-in PHP 8.4 EOF recovery for complete transport bodies with
+    /// incomplete multipart parts. Unfinished fields publish their received
+    /// bytes; unfinished uploads receive error=3 and lose staged bytes.
+    /// Strict finish() remains transactional.
     pub fn finish_with_php_partial(mut self) -> Result<Request, Error> {
         match self.state {
             State::End(0 | 2) => Ok(self.request.take().expect("live completed request")),
@@ -521,6 +522,38 @@ impl Parser {
                 self.request().parts.push(part);
                 Ok(self.request.take().expect("live partial request"))
             }
+            State::Body
+                if matches!(
+                    self.active.as_ref().map(|part| &part.payload),
+                    Some(Payload::Field(_))
+                ) =>
+            {
+                // The delimiter matcher keeps up to one marker and suffix
+                // byte in lookahead. At EOF, PHP publishes the unfinished
+                // field, excluding a trailing CRLF or partial delimiter.
+                // Preserve hard field quotas while draining this lookahead.
+                let mut pending = [0_u8; WINDOW];
+                for (index, slot) in pending.iter_mut().take(self.window_len).enumerate() {
+                    *slot = self.window[(self.window_start + index) % WINDOW];
+                }
+                let mut retained = self.window_len;
+                for start in 0..self.window_len {
+                    let suffix = &pending[start..self.window_len];
+                    let matched = suffix.len().min(self.marker_len);
+                    if matched >= 2 && suffix[..matched] == self.marker[..matched] {
+                        retained = start;
+                        break;
+                    }
+                }
+                self.window_len = 0;
+                for &byte in &pending[..retained] {
+                    self.emit(byte)?;
+                }
+                self.flush_output()?;
+                let part = self.active.take().expect("active partial field");
+                self.request().parts.push(part);
+                Ok(self.request.take().expect("live partial request"))
+            }
             // PHP 8.4 registers a partial upload once a complete
             // Content-Disposition line with a filename has been received,
             // even if the blank line terminating the headers never arrives.
@@ -530,6 +563,16 @@ impl Parser {
                     && self.headers.name.is_some()
                     && self.headers.filename.is_some() =>
             {
+                self.start_body()?;
+                self.finish_with_php_partial()
+            }
+            State::Headers
+                if self.line_len == 0
+                    && self.headers.name.is_some()
+                    && self.headers.filename.is_none() =>
+            {
+                // A complete field disposition can publish an empty value
+                // even when the terminating blank header line is missing.
                 self.start_body()?;
                 self.finish_with_php_partial()
             }
