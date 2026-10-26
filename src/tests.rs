@@ -1104,7 +1104,7 @@ fn php_upload_quota_drains_oversized_parts_without_retaining_staged_bytes() {
             assert_eq!(upload.len(), large.len() as u64);
             assert_eq!(upload.discarded, rejected);
             assert_eq!(
-                upload.file.metadata().unwrap().len(),
+                upload.file.as_ref().unwrap().metadata().unwrap().len(),
                 if rejected { 0 } else { large.len() as u64 }
             );
             let mut output = Vec::new();
