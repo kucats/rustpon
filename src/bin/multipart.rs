@@ -48,10 +48,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let post_mode = args.len() == 4 && args[1] == "--post";
-    let files_mode =
-        (args.len() == 4 && args[1] == "--files") || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--files");
-    let admit_mode =
-        (args.len() == 4 && args[1] == "--admit") || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--admit");
+    let files_mode = (args.len() == 4 && args[1] == "--files")
+        || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--files");
+    let admit_mode = (args.len() == 4 && args[1] == "--admit")
+        || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--admit");
     if args.len() != 3 && !post_mode && !files_mode && !admit_mode {
         eprintln!(
             "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N|--php-upload-max-filesize BYTES] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"

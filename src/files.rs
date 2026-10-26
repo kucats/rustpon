@@ -565,13 +565,10 @@ mod tests {
         fs::remove_dir(&path).unwrap();
     }
 
-
     #[test]
     fn php_upload_max_filesize_errors_are_per_file_and_release_rejected_fds() {
-        let path = std::env::temp_dir().join(format!(
-            "rustpon-ini-file-limit-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("rustpon-ini-file-limit-{}", std::process::id()));
         fs::DirBuilder::new().mode(0o700).create(&path).unwrap();
         let body = b"--b\r\nContent-Disposition: form-data; name=MAX_FILE_SIZE\r\n\r\n2\r\n--b\r\nContent-Disposition: form-data; name=f; filename=oversize.bin\r\n\r\nabcd\r\n--b\r\nContent-Disposition: form-data; name=g; filename=form.bin\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=h; filename=good.bin\r\n\r\nx\r\n--b\r\nContent-Disposition: form-data; name=empty; filename=\"\"\r\n\r\n\r\n--b--\r\n";
         let parse = || {
