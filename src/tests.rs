@@ -1777,3 +1777,125 @@ fn php_write_failure_preserves_later_fields_and_uploads_without_exposing_prefix(
     drop(admitted);
     spool.empty();
 }
+
+#[test]
+fn php_missing_temp_directory_recovers_and_keeps_later_uploads() {
+    let spool = Spool::new();
+    let good = b"Content-Disposition: form-data; name=good; filename=good.bin";
+    let missing = b"Content-Disposition: form-data; name=missing; filename=lost.bin";
+    let later = b"Content-Disposition: form-data; name=later; filename=later.bin";
+    let wire = body(&[
+        (good, b"first"),
+        (missing, b"unavailable"),
+        (FIELD, b"still-visible"),
+        (later, b"last"),
+    ]);
+    let missing_marker = b"--AaB03x\r\nContent-Disposition: form-data; name=missing";
+    let later_marker = b"--AaB03x\r\nContent-Disposition: form-data; name=later";
+    let missing_at = wire
+        .windows(missing_marker.len())
+        .position(|window| window == missing_marker)
+        .unwrap();
+    let later_at = wire
+        .windows(later_marker.len())
+        .position(|window| window == later_marker)
+        .unwrap();
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+        .unwrap()
+        .with_php_upload_write_recovery();
+    parser.feed(&wire[..missing_at]).unwrap();
+    parser.fail_no_tmp_dir = true;
+    parser.feed(&wire[missing_at..later_at]).unwrap();
+    parser.fail_no_tmp_dir = false;
+    for byte in &wire[later_at..] {
+        parser.feed(&[*byte]).unwrap();
+    }
+    let mut request = parser.finish().unwrap();
+    assert_eq!(request.parts().len(), 4);
+    assert_eq!(
+        request.parts().nth(2).unwrap().value,
+        Some(b"still-visible".as_slice())
+    );
+    let projection = crate::files::project(&request, crate::files::Limits::default()).unwrap();
+    for (name, value) in [
+        (b"missing[error]".as_slice(), b"6".as_slice()),
+        (b"missing[size]", b"0"),
+        (b"missing[type]", b""),
+        (b"missing[tmp_name]", b""),
+        (b"good[error]", b"0"),
+        (b"later[error]", b"0"),
+    ] {
+        assert!(
+            projection
+                .wire()
+                .parts()
+                .any(|part| part.name == name && part.value == Some(value)),
+            "{name:?}"
+        );
+    }
+    let mut typed = Vec::new();
+    projection.write_php_files_json(&mut typed).unwrap();
+    let typed = String::from_utf8(typed).unwrap();
+    assert!(
+        typed.contains("[[\"s\",\"6572726f72\"],[\"i\",\"6\"]]"),
+        "{typed}"
+    );
+    drop(projection);
+    let mut denied = Vec::new();
+    assert_eq!(
+        request
+            .upload_mut(1)
+            .unwrap()
+            .copy_to(&mut denied)
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(denied.is_empty());
+    let mut admitted =
+        crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
+    assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![0, 3]);
+    assert!(admitted.accepted_file(1).is_none());
+    assert_eq!(admitted.copy_accepted(1, &mut denied).unwrap(), None);
+    let mut copied = Vec::new();
+    assert_eq!(admitted.copy_accepted(0, &mut copied).unwrap(), Some(5));
+    assert_eq!(copied, b"first");
+    copied.clear();
+    assert_eq!(admitted.copy_accepted(3, &mut copied).unwrap(), Some(4));
+    assert_eq!(copied, b"last");
+    drop(admitted);
+    spool.empty();
+}
+
+#[test]
+fn php_missing_temp_directory_on_disk_recovers_without_staging() {
+    let spool = Spool::new();
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+        .unwrap()
+        .with_php_upload_write_recovery();
+    fs::remove_dir(&spool.0).unwrap();
+    let wire = body(&[(FILE, b"cannot-stage"), (FIELD, b"kept")]);
+    parser.feed(&wire).unwrap();
+    let mut request = parser.finish().unwrap();
+    fs::DirBuilder::new().mode(0o700).create(&spool.0).unwrap();
+    let projection = crate::files::project(&request, crate::files::Limits::default()).unwrap();
+    assert!(projection.wire().parts().any(|part| {
+        part.name == b"file[error]" && part.value == Some(b"6".as_slice())
+    }));
+    assert_eq!(
+        request.parts().nth(1).unwrap().value,
+        Some(b"kept".as_slice())
+    );
+    assert_eq!(
+        request
+            .upload_mut(0)
+            .unwrap()
+            .copy_to(&mut Vec::new())
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    drop(projection);
+    drop(request);
+    spool.empty();
+}
