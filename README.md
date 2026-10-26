@@ -114,6 +114,20 @@ Content-Length; this is not a Zend `$_POST` implementation or SAPI handler.
 The Linux differential checks exact, one-byte-over, one-byte-under, zero,
 and multi-buffer upload cases against PHP 8.4's HTTP SAPI.
 
+For transports that have **already validated** an unambiguous Content-Length,
+`parse_reader_with_php_content_length` consumes exactly that many bytes.
+When the declared length exceeds nonzero PHP `post_max_size`, it preflights
+before creating a multipart parser or staging any upload, drains only the
+declared body, and publishes empty POST/FILES metadata through admission.
+The server's independent hard body quota is checked before any read. A short
+body or read error fails closed; bytes beyond Content-Length remain unread for
+the transport to handle. The local `multipart --admit --content-length BYTES`
+harness exposes this behavior for differential testing. It does **not** parse
+HTTP headers, resolve conflicting Content-Length/Transfer-Encoding, or serve
+requests, and must never be fed untrusted framing metadata directly.
+The HTTP SAPI differential suite exercises both the streaming fallback and
+trusted-length preflight against the same PHP 8.4 responses.
+
 An additional opt-in PHP 8.4 nesting slice is exposed by
 `Request::into_post_with_php_limits(limits, max_input_vars,
 max_input_nesting_level)` and the `urlencoded` CLI flags
