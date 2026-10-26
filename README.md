@@ -851,8 +851,11 @@ checks upload metadata, not MIME sniffing or native Zend integration.
 
 The `parse_reader_with_php_partial` API and `multipart --admit --php-partial-upload`
 CLI mode preserve completed multipart parts if EOF occurs within a file body
-whose headers were already parsed. The unfinished file is registered with
-`UPLOAD_ERR_PARTIAL=3`, zero reported size, empty `type` and `tmp_name`.
+whose headers were already parsed. The opt-in mode also recognizes EOF
+immediately after a complete file Content-Disposition header line (before the
+blank line): PHP 8.4 registers that file as partial, while an unterminated
+header line remains a strict truncation error. The unfinished file is registered
+with `UPLOAD_ERR_PARTIAL=3`, zero reported size, empty `type` and `tmp_name`.
 Staged partial bytes are erased and cannot be copied through admission.
 PHP's file size errors (1/2) and empty-filename error (4) take precedence.
 The ordinary parser, trusted Content-Length path, and other incomplete
