@@ -1760,8 +1760,11 @@ fn php_write_failure_preserves_later_fields_and_uploads_without_exposing_prefix(
     let mut json = Vec::new();
     metadata.write_php_files_json(&mut json).unwrap();
     let json = String::from_utf8(json).unwrap();
-    // PHP 8.4 UPLOAD_ERR_CANT_WRITE=7, encoded as the tagged hex string "37".
-    assert!(json.contains("\"37\""), "{json}");
+    // The typed PHP-shaped projection carries a native integer error=7.
+    assert!(
+        json.contains("[[\"s\",\"6572726f72\"],[\"i\",\"7\"]]"),
+        "{json}"
+    );
     drop(metadata);
     let mut admitted =
         crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
