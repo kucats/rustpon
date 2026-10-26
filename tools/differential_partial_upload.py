@@ -17,6 +17,16 @@ CASES = [
     ("nested", [(b"f[x][]", b"payload", b"a.bin")], 0, []),
     ("buffer-boundary", [(b"f", b"Z" * 16387, b"big.bin")], 0, []),
     ("quota-precedes-partial", [(b"f", b"abc", b"a.bin")], 2, []),
+    # Fifth element: cut immediately after this complete header line, before
+    # the blank line. PHP 8.4 already registers the upload with error=3.
+    ("header-eof-single", [(b"f", b"abc", b"a.bin")], 0, [],
+     b'filename="a.bin"\r\n'),
+    ("header-eof-after-field", [(b"note", b"keep", None),
+                                (b"f", b"abc", b"a.bin")], 0, [],
+     b'filename="a.bin"\r\n'),
+    ("header-eof-after-file", [(b"first", b"ok", b"one.bin"),
+                               (b"f", b"abc", b"a.bin")], 0, [0],
+     b'filename="a.bin"\r\n'),
 ]
 
 def main():
@@ -31,11 +41,16 @@ def main():
     checked = 0
     with tempfile.TemporaryDirectory(prefix="rustpon-partial-") as tmp:
         spool = Path(tmp)
-        for label, parts, quota, expected_indices in CASES:
+        for case in CASES:
+            label, parts, quota, expected_indices = case[:4]
             wire = body_for(parts)
-            suffix = b"\r\n--" + BOUNDARY + b"--\r\n"
-            assert wire.endswith(suffix)
-            wire = wire[:-len(suffix)]
+            if len(case) == 5:
+                marker = case[4]
+                wire = wire[:wire.index(marker) + len(marker)]
+            else:
+                suffix = b"\r\n--" + BOUNDARY + b"--\r\n"
+                assert wire.endswith(suffix)
+                wire = wire[:-len(suffix)]
             server, port = start_server(args.php_bin, quota, router, post_limit=2 * 1024 * 1024)
             try:
                 php = php_post(port, wire)
