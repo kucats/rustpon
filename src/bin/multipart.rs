@@ -21,16 +21,33 @@ impl<W: Write> Write for HexWriter<W> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().collect();
+    let php_file_limit_mode = args.len() == 6
+        && (args[1] == "--files" || args[1] == "--admit")
+        && args[2] == "--php-max-file-uploads";
+    let max_file_uploads = if php_file_limit_mode {
+        Some(
+            args[3]
+                .to_str()
+                .ok_or("max_file_uploads must be decimal")?
+                .parse::<usize>()?,
+        )
+    } else {
+        None
+    };
     let post_mode = args.len() == 4 && args[1] == "--post";
-    let files_mode = args.len() == 4 && args[1] == "--files";
-    let admit_mode = args.len() == 4 && args[1] == "--admit";
+    let files_mode = (args.len() == 4 && args[1] == "--files")
+        || (php_file_limit_mode && args[1] == "--files");
+    let admit_mode = (args.len() == 4 && args[1] == "--admit")
+        || (php_file_limit_mode && args[1] == "--admit");
     if args.len() != 3 && !post_mode && !files_mode && !admit_mode {
         eprintln!(
-            "usage: multipart [--post|--files|--admit] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
         );
         std::process::exit(2);
     }
-    let first = if post_mode || files_mode || admit_mode {
+    let first = if php_file_limit_mode {
+        4
+    } else if post_mode || files_mode || admit_mode {
         2
     } else {
         1
@@ -48,8 +65,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(1);
         }
     };
+    let metadata = rustpon::files::Limits {
+        max_file_uploads,
+        ..rustpon::files::Limits::default()
+    };
     if admit_mode {
-        let admitted = rustpon::admission::admit(request, rustpon::admission::Policy::default())
+        let admitted = rustpon::admission::admit(
+            request,
+            rustpon::admission::Policy {
+                metadata,
+                ..rustpon::admission::Policy::default()
+            },
+        )
             .map_err(|error| format!("admission: {error:?}"))?;
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;
@@ -70,7 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     if files_mode {
-        let files = rustpon::files::project(&request, rustpon::files::Limits::default())
+        let files = rustpon::files::project(&request, metadata)
             .map_err(|error| format!("files: {error:?}"))?;
         let mut out = io::BufWriter::new(io::stdout().lock());
         write!(out, "{{\"files_tree\":")?;

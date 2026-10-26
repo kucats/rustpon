@@ -34,6 +34,9 @@ pub struct Limits {
     pub memory_capacity: usize,
     /// Applies the same bounded PHP array-key rules as the POST adapter.
     pub post: post::Limits,
+    /// Opt-in PHP 8.4 max_file_uploads quota. None retains the strict wire
+    /// quotas without applying a second file-count limit.
+    pub max_file_uploads: Option<usize>,
 }
 
 impl Default for Limits {
@@ -42,6 +45,7 @@ impl Default for Limits {
             metadata_bytes: 256 * 1024,
             memory_capacity: 512 * 1024,
             post: post::Limits::default(),
+            max_file_uploads: None,
         }
     }
 }
@@ -82,6 +86,41 @@ pub(crate) fn project_with_ids(
     project_impl(request, limits, true)
 }
 
+// Both metadata passes must select exactly the same uploads; otherwise the
+// public FILES tree and the private FD-survivor identity tree could diverge.
+fn registered_upload(
+    part: &crate::PartView<'_>,
+    uploads_stopped: &mut bool,
+    counted: &mut usize,
+    max_file_uploads: Option<usize>,
+) -> Option<usize> {
+    let filename = part.filename?;
+    if *uploads_stopped {
+        return None;
+    }
+    if !post::valid_upload_name(part.name) {
+        *uploads_stopped = true;
+        return None;
+    }
+    let root_len = part
+        .name
+        .iter()
+        .position(|&byte| byte == b'[')
+        .unwrap_or(part.name.len());
+    if root_len == 0 {
+        return None;
+    }
+    if max_file_uploads.is_some_and(|max| *counted >= max) {
+        return None;
+    }
+    // PHP counts nonempty filenames only. An empty upload control produces
+    // error=4 without consuming a slot until the quota is exhausted.
+    if !filename.is_empty() {
+        *counted = counted.saturating_add(1);
+    }
+    Some(root_len)
+}
+
 fn project_impl(
     request: &Request,
     limits: Limits,
@@ -94,6 +133,7 @@ fn project_impl(
     let mut needed = 0usize;
     let mut form_max = 0i64;
     let mut uploads_stopped = false;
+    let mut counted_uploads = 0usize;
     for (index, part) in request.parts().enumerate() {
         if part.filename.is_none() {
             if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
@@ -101,20 +141,14 @@ fn project_impl(
             }
             continue;
         }
-        if uploads_stopped {
-            continue;
-        }
-        if !post::valid_upload_name(part.name) {
-            uploads_stopped = true;
-            continue;
-        }
-        let prefix_len = part
-            .name
-            .iter()
-            .position(|c| *c == b'[')
-            .unwrap_or(part.name.len());
-        // Empty or bracket-only roots are ignored without stopping later files.
-        if prefix_len == 0 {
+        if registered_upload(
+            &part,
+            &mut uploads_stopped,
+            &mut counted_uploads,
+            limits.max_file_uploads,
+        )
+        .is_none()
+        {
             continue;
         }
         parts_count = parts_count
@@ -171,6 +205,7 @@ fn project_impl(
 
     form_max = 0;
     uploads_stopped = false;
+    counted_uploads = 0;
     for (index, part) in request.parts().enumerate() {
         if part.filename.is_none() {
             if part.name.eq_ignore_ascii_case(b"MAX_FILE_SIZE") {
@@ -178,21 +213,14 @@ fn project_impl(
             }
             continue;
         }
-        if uploads_stopped {
+        let Some(root_len) = registered_upload(
+            &part,
+            &mut uploads_stopped,
+            &mut counted_uploads,
+            limits.max_file_uploads,
+        ) else {
             continue;
-        }
-        if !post::valid_upload_name(part.name) {
-            uploads_stopped = true;
-            continue;
-        }
-        let root_len = part
-            .name
-            .iter()
-            .position(|c| *c == b'[')
-            .unwrap_or(part.name.len());
-        if root_len == 0 {
-            continue;
-        }
+        };
         let upload_error = upload_error(&part, form_max);
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {

@@ -83,6 +83,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python3 tools/differential_ffi.py --library ffi/target/debug/librustpon_ffi.so
+      - name: Compare PHP 8.4 max_file_uploads with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_file_limit.py --rust-bin target/debug/multipart
       - name: Compare multipart FFI with real PHP 8.4 SAPI (Linux)
         if: runner.os == 'Linux'
         run: |

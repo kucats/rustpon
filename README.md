@@ -105,7 +105,14 @@ form fields and skips later fields while continuing to process uploads.
 `max_input_vars=0` drops all ordinary fields. PHP 8.4 `parse_str()`
 is used as the oracle for six exact boundary/collision cases in CI.
 The ordinary `into_post` entry point remains fail-closed and does not
-apply this PHP limit. This is **not yet a full PHP limit policy**:
+apply this PHP limit. An additional opt-in `files::Limits::max_file_uploads`
+quota projects only the first N nonempty-filename uploads (while retaining
+empty-filename controls until the quota is reached), as observed with PHP
+8.4.24's HTTP SAPI. Use `multipart --files --php-max-file-uploads N` or
+`multipart --admit --php-max-file-uploads N` for the oracle harness. Uploads
+excluded by this quota are dropped at admission, including their staging FDs;
+raw wire parsing and its independent strict resource quotas are unchanged.
+This is **not yet a full PHP limit policy**:
 the wire parser may reject requests before projection (including empty
 names or too many parts), and nesting, append exhaustion, allocation and
 upload quota errors still use strict rejection. See issue #4.

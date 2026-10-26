@@ -489,6 +489,46 @@ mod tests {
     }
 
     #[test]
+    fn php_max_file_uploads_skips_suffix_and_closes_descriptors() {
+        let spool = Spool::new();
+        let body = b"--b\r\nContent-Disposition: form-data; name=empty; filename=\"\"\r\n\r\n\r\n--b\r\nContent-Disposition: form-data; name=f1; filename=one.bin\r\n\r\none\r\n--b\r\nContent-Disposition: form-data; name=f2; filename=two.bin\r\n\r\ntwo\r\n--b\r\nContent-Disposition: form-data; name=f3; filename=three.bin\r\n\r\nthree\r\n--b\r\nContent-Disposition: form-data; name=tail\r\n\r\nvisible\r\n--b--\r\n";
+        for (limit, expected) in [
+            (0, &[][..]),
+            (1, &[1][..]),
+            (2, &[1, 2][..]),
+            (3, &[1, 2, 3][..]),
+        ] {
+            let policy = Policy {
+                metadata: files::Limits {
+                    max_file_uploads: Some(limit),
+                    ..files::Limits::default()
+                },
+                ..Policy::default()
+            };
+            let mut admitted = admit(spool.parse(body), policy).unwrap();
+            let indices: Vec<_> = admitted.accepted_indices().collect();
+            assert_eq!(indices.as_slice(), expected, "limit={limit}");
+            for index in 0..4 {
+                let mut data = Vec::new();
+                let copied = admitted.copy_accepted(index, &mut data).unwrap();
+                assert_eq!(copied.is_some(), expected.contains(&index), "limit={limit}, index={index}");
+            }
+            let mut typed = Vec::new();
+            admitted.metadata().write_php_files_json(&mut typed).unwrap();
+            let typed = String::from_utf8(typed).unwrap();
+            assert_eq!(typed.contains("656d707479"), limit > 0); // empty control
+            assert_eq!(typed.contains("74687265652e62696e"), limit >= 3); // three.bin
+            drop(admitted);
+            spool.empty();
+        }
+        // The default strict metadata path has no PHP file-count quota.
+        let admitted = admit(spool.parse(body), Policy::default()).unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![1, 2, 3]);
+        drop(admitted);
+        spool.empty();
+    }
+
+    #[test]
     fn repeated_requests_do_not_retain_rejected_descriptors() {
         let spool = Spool::new();
         for _ in 0..32 {
