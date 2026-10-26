@@ -264,7 +264,13 @@ behavior and native integer zvals still require implementation and testing.
 The **optional** high-level `admission::admit(request, policy)` consumes the
 raw `Request`, verifies server-controlled body and per-file limits, and
 builds a bounded metadata projection transactionally. Server quota failure
-returns an error and drops *all* staging descriptors. For otherwise valid
+returns an error and drops *all* staging descriptors. `Policy::max_total_file_bytes`
+adds a server-controlled aggregate staged-upload budget alongside the
+per-upload limit. It counts every uploaded payload, including those later
+rejected by `MAX_FILE_SIZE` or overwritten by PHP-style key collisions.
+The exact limit is inclusive; a one-byte overage fails admission before
+metadata is exposed. This is an admission-time check, **not** a bound on
+parsing-time disk use: configure `Limits::file_bytes_total` at ingress too. For otherwise valid
 requests, upload parts rejected by the client-supplied `MAX_FILE_SIZE` or
 an empty filename are closed immediately. Only the accepted indices can be
 copied using `AdmittedRequest::copy_accepted(index, writer)`.
