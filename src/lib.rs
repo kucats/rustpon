@@ -766,7 +766,8 @@ impl Parser {
                 anonymous_upload(&mut self.spool_path, self.spool_device, self.spool_inode)
             };
             #[cfg(not(test))]
-            let opened = anonymous_upload(&mut self.spool_path, self.spool_device, self.spool_inode);
+            let opened =
+                anonymous_upload(&mut self.spool_path, self.spool_device, self.spool_inode);
             // PHP reports error=6 when the temporary directory disappears.
             // Other create/unlink errors remain fatal rather than misreported.
             let (file, no_tmp_dir) = match opened {
@@ -1279,7 +1280,7 @@ fn anonymous_upload_with_hook(
                     fs::remove_file(&*path).map_err(Error::from)?;
                     Ok(file)
                 }
-            },
+            }
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 path.pop();
                 continue;
