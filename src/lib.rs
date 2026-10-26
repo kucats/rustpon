@@ -1126,7 +1126,13 @@ pub fn parse_reader_with_php_limits(
     php_max_post_bytes: Option<u64>,
 ) -> Result<Request, Error> {
     parse_reader_with_php_limits_impl(
-        reader, boundary, limits, spool_dir, php_max_upload_bytes, php_max_post_bytes, false,
+        reader,
+        boundary,
+        limits,
+        spool_dir,
+        php_max_upload_bytes,
+        php_max_post_bytes,
+        false,
     )
 }
 
@@ -1141,7 +1147,13 @@ pub fn parse_reader_with_php_partial(
     php_max_post_bytes: Option<u64>,
 ) -> Result<Request, Error> {
     parse_reader_with_php_limits_impl(
-        reader, boundary, limits, spool_dir, php_max_upload_bytes, php_max_post_bytes, true,
+        reader,
+        boundary,
+        limits,
+        spool_dir,
+        php_max_upload_bytes,
+        php_max_post_bytes,
+        true,
     )
 }
 

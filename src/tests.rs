@@ -1434,7 +1434,10 @@ fn php_partial_eof_registers_error_three_and_erases_staged_upload() {
     let suffix = b"\r\n--AaB03x--\r\n";
     assert!(full.ends_with(suffix));
     let partial = &full[..full.len() - suffix.len()];
-    assert_eq!(parse(partial, Limits::default(), &spool).unwrap_err(), Error::Truncated);
+    assert_eq!(
+        parse(partial, Limits::default(), &spool).unwrap_err(),
+        Error::Truncated
+    );
     spool.empty();
     for split in [0, 1, partial.len() / 2, partial.len()] {
         let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
@@ -1450,11 +1453,20 @@ fn php_partial_eof_registers_error_three_and_erases_staged_upload() {
             (b"file[type]", b""),
             (b"file[tmp_name]", b""),
         ] {
-            assert!(projected.wire().parts().any(|p| p.name == name && p.value == Some(value)));
+            assert!(
+                projected
+                    .wire()
+                    .parts()
+                    .any(|p| p.name == name && p.value == Some(value))
+            );
         }
         let mut output = Vec::new();
         assert_eq!(
-            raw.upload_mut(1).unwrap().copy_to(&mut output).unwrap_err().kind(),
+            raw.upload_mut(1)
+                .unwrap()
+                .copy_to(&mut output)
+                .unwrap_err()
+                .kind(),
             io::ErrorKind::InvalidData
         );
         assert!(output.is_empty());
@@ -1490,9 +1502,12 @@ fn php_partial_eof_obeys_upload_quota_and_independent_hard_limit() {
             },
         )
         .unwrap();
-        assert!(metadata.wire().parts().any(|p| {
-            p.name == b"file[error]" && p.value == Some(expected)
-        }));
+        assert!(
+            metadata
+                .wire()
+                .parts()
+                .any(|p| { p.name == b"file[error]" && p.value == Some(expected) })
+        );
         drop(metadata);
         drop(raw);
         spool.empty();
