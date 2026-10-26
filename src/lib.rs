@@ -732,6 +732,18 @@ impl Parser {
             let (file, no_tmp_dir) = match opened {
                 Ok(file) => (Some(file), false),
                 Err(Error::Io(io::ErrorKind::NotFound)) if self.php_recover_write_errors => {
+                    // An unlink race can also return NotFound after creation.
+                    // Recover only if the spool directory itself is missing.
+                    #[cfg(test)]
+                    let injected = self.fail_no_tmp_dir;
+                    #[cfg(not(test))]
+                    let injected = false;
+                    if !injected
+                        && !fs::symlink_metadata(&self.spool_path)
+                            .is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+                    {
+                        return Err(Error::Io(io::ErrorKind::NotFound));
+                    }
                     (None, true)
                 }
                 Err(error) => return Err(error),
