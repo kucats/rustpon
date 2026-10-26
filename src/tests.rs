@@ -2135,3 +2135,32 @@ fn post_create_filename_swap_never_unlinks_a_different_inode() {
     fs::remove_file(sentinel).unwrap();
     spool.empty();
 }
+
+#[test]
+fn post_create_hardlink_is_rejected_before_any_upload_data() {
+    let spool = Spool::new();
+    let original = fs::symlink_metadata(&spool.0).unwrap();
+    let exposed = spool.0.join("exposed");
+    let mut path = spool.0.clone();
+
+    // An attacker with directory access links the just-created inode under
+    // another name. Unlinking the generated name alone is insufficient.
+    let result = anonymous_upload_with_hook(&mut path, original.dev(), original.ino(), || {
+        let created = fs::read_dir(&spool.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("php-request-")
+            })
+            .unwrap();
+        fs::hard_link(&created, &exposed).unwrap();
+    });
+    assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
+    assert_eq!(fs::metadata(&exposed).unwrap().len(), 0);
+    fs::remove_file(exposed).unwrap();
+    spool.empty();
+}
