@@ -25,7 +25,7 @@ CASES = [
                            (b"g", b"two", b"two.bin"), (b"h", b"three", b"three.bin")], [1, 2]),
     (2, "form-rejected-counts", [(b"MAX_FILE_SIZE", b"1", None),
                                  (b"f", b"oversize", b"one.bin"),
-                                 (b"g", b"ok", b"two.bin"),
+                                 (b"g", b"x", b"two.bin"),
                                  (b"h", b"late", b"three.bin")], [2]),
     (2, "duplicate-counts", [(b"f", b"first", b"one.bin"),
                              (b"f", b"second", b"two.bin"),
