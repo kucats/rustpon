@@ -1069,3 +1069,73 @@ fn interrupted_reader_has_finite_budget_and_releases_uploads() {
     );
     spool.empty();
 }
+
+#[test]
+fn php_upload_quota_drains_oversized_parts_without_retaining_staged_bytes() {
+    let spool = Spool::new();
+    let large = vec![b'X'; BLOCK * 2 + 5];
+    let input = body(&[
+        (FILE, &large),
+        (
+            b"Content-Disposition: form-data; name=next; filename=ok.bin",
+            b"ok",
+        ),
+    ]);
+    for quota in [
+        None,
+        Some(0),
+        Some(large.len() as u64),
+        Some(large.len() as u64 - 1),
+        Some(BLOCK as u64),
+    ] {
+        for split in [0, 1, BLOCK, input.len()] {
+            let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+                .unwrap()
+                .with_php_upload_max_bytes(quota);
+            parser.feed(&input[..split]).unwrap();
+            parser.feed(&input[split..]).unwrap();
+            let mut request = parser.finish().unwrap();
+            let rejected = quota.is_some_and(|max| max != 0 && large.len() as u64 > max);
+            assert_eq!(
+                request.parts().next().unwrap().file_bytes,
+                Some(large.len() as u64)
+            );
+            let upload = request.upload_mut(0).unwrap();
+            assert_eq!(upload.len(), large.len() as u64);
+            assert_eq!(upload.discarded, rejected);
+            assert_eq!(
+                upload.file.metadata().unwrap().len(),
+                if rejected { 0 } else { large.len() as u64 }
+            );
+            let mut output = Vec::new();
+            if rejected {
+                assert_eq!(
+                    upload.copy_to(&mut output).unwrap_err().kind(),
+                    io::ErrorKind::InvalidData
+                );
+                assert!(output.is_empty());
+            } else {
+                upload.copy_to(&mut output).unwrap();
+                assert_eq!(output, large);
+            }
+            let mut small = Vec::new();
+            request.upload_mut(1).unwrap().copy_to(&mut small).unwrap();
+            assert_eq!(small, b"ok");
+            let projected = crate::files::project(
+                &request,
+                crate::files::Limits {
+                    max_upload_bytes: quota,
+                    ..crate::files::Limits::default()
+                },
+            )
+            .unwrap();
+            let expected_error = if rejected { b"1" } else { b"0" };
+            assert!(projected.wire().parts().any(|part| {
+                part.name == b"file[error]" && part.value == Some(expected_error.as_slice())
+            }));
+            drop(projected);
+            drop(request);
+            spool.empty();
+        }
+    }
+}

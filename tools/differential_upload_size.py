@@ -28,6 +28,8 @@ CASES = [
                                       (b"f", b"x", b"b.bin")], [1]),
     (2, "nested", [(b"f[]", b"abc", b"a.bin"),
                    (b"f[]", b"x", b"b.bin")], [1]),
+    (2, "stream-drain-overlong-then-good",
+     [(b"f", b"X" * 512, b"large.bin"), (b"g", b"ok", b"small.bin")], [1]),
 ]
 
 # The upload-count quota is applied before the size error is assigned.

@@ -139,6 +139,7 @@ pub struct Stats {
 pub struct Upload {
     file: File,
     length: u64,
+    discarded: bool,
 }
 
 impl Upload {
@@ -156,6 +157,11 @@ impl Upload {
     /// destination. The descriptor stays owned by this request, so a retry
     /// can start at offset zero. No client path is exposed.
     pub fn copy_to(&mut self, output: &mut impl Write) -> io::Result<u64> {
+        // Preserve the received length for PHP error=1 metadata, but never
+        // expose a partial prefix from a discarded upload.
+        if self.discarded {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
         self.file.seek(SeekFrom::Start(0))?;
         let mut remaining = self.length;
         let mut buffer = [0_u8; BLOCK];
@@ -283,6 +289,7 @@ pub struct Parser {
     output_len: usize,
     part_bytes: u64,
     spool_path: PathBuf,
+    php_upload_max_bytes: Option<u64>,
     #[cfg(test)]
     fail_create: bool,
     #[cfg(test)]
@@ -389,11 +396,21 @@ impl Parser {
             output_len: 0,
             part_bytes: 0,
             spool_path,
+            php_upload_max_bytes: None,
             #[cfg(test)]
             fail_create: false,
             #[cfg(test)]
             fail_write: false,
         })
+    }
+
+    /// Opt-in PHP upload_max_filesize quota enforced while consuming bytes.
+    /// Oversized uploads are drained without further disk writes; any staged
+    /// prefix is truncated, and subsequent uploads continue. None and zero
+    /// disable this quota. Independent wire limits remain fail-closed.
+    pub fn with_php_upload_max_bytes(mut self, max: Option<u64>) -> Self {
+        self.php_upload_max_bytes = max.filter(|value| *value != 0);
+        self
     }
 
     fn request(&mut self) -> &mut Request {
@@ -585,6 +602,7 @@ impl Parser {
             Payload::File(Upload {
                 file: anonymous_upload(&mut self.spool_path)?,
                 length: 0,
+                discarded: false,
             })
         } else {
             let fields = add_usize(
@@ -694,6 +712,27 @@ impl Parser {
                 Limit::RetainedBytes,
             )?;
         }
+        if is_file {
+            // Logical byte accounting continues even after PHP rejects the
+            // upload, so error=1 and the independent wire quotas remain exact.
+            let over_php_quota = self
+                .php_upload_max_bytes
+                .is_some_and(|max| self.part_bytes > max);
+            let upload = match &mut self.active.as_mut().expect("active file").payload {
+                Payload::File(upload) => upload,
+                Payload::Field(_) => unreachable!("file branch"),
+            };
+            upload.length = self.part_bytes;
+            if over_php_quota {
+                if !upload.discarded {
+                    // Discard any buffered bytes and reclaim earlier chunks.
+                    upload.file.set_len(0)?;
+                    upload.discarded = true;
+                }
+                self.output_len = 0;
+                return Ok(());
+            }
+        }
         self.output[self.output_len] = byte;
         self.output_len += 1;
         if self.output_len == BLOCK {
@@ -722,8 +761,9 @@ impl Parser {
                 if self.fail_write {
                     return Err(Error::Io(io::ErrorKind::StorageFull));
                 }
-                write_chunk(&mut upload.file, &self.output[..self.output_len])?;
-                upload.length += self.output_len as u64;
+                if !upload.discarded {
+                    write_chunk(&mut upload.file, &self.output[..self.output_len])?;
+                }
             }
         }
         self.output_len = 0;
@@ -1002,7 +1042,20 @@ pub fn parse_reader(
     limits: Limits,
     spool_dir: &Path,
 ) -> Result<Request, Error> {
-    let mut parser = Parser::new(boundary, limits, spool_dir)?;
+    parse_reader_with_php_upload_max_bytes(reader, boundary, limits, spool_dir, None)
+}
+
+/// Standalone PHP upload_max_filesize policy applied during parsing.
+/// This does not register native PHP uploads or replace an SAPI handler.
+pub fn parse_reader_with_php_upload_max_bytes(
+    reader: &mut impl Read,
+    boundary: &[u8],
+    limits: Limits,
+    spool_dir: &Path,
+    php_max_upload_bytes: Option<u64>,
+) -> Result<Request, Error> {
+    let mut parser = Parser::new(boundary, limits, spool_dir)?
+        .with_php_upload_max_bytes(php_max_upload_bytes);
     let mut buffer = [0; BLOCK];
     let mut consecutive_interrupts = 0usize;
     loop {

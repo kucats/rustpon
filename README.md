@@ -139,9 +139,16 @@ this PHP quota; positive limits accept the exact byte count and produce
 `UPLOAD_ERR_INI_SIZE=1` for oversized files. This error takes precedence
 over form-supplied `MAX_FILE_SIZE` (error 2), and rejected uploads lose
 their staged descriptors without preventing later files from succeeding.
-The CLI exposes `--files/--admit --php-upload-max-filesize BYTES`; ten
-real PHP 8.4 HTTP SAPI comparisons and Rust FD cleanup tests guard this
-behavior. The parser's independent strict wire limits remain in force.
+The CLI exposes `--files/--admit --php-upload-max-filesize BYTES`.
+It now passes this quota to `parse_reader_with_php_upload_max_bytes`,
+which enforces it while streaming: when an upload exceeds the nonzero
+limit, any staged prefix is truncated and subsequent bytes are drained
+without disk writes. Later uploads continue. The logical received size
+is retained for PHP error=1 metadata; copying a discarded upload fails.
+Zero disables the PHP quota. The core `Parser::new` and FFI retain
+strict-only behavior unless explicitly configured. Independent wire
+limits remain in force. HTTP SAPI differential tests check metadata,
+while Rust split-point tests verify staging and descriptor cleanup.
 Both CLI quota flags may now be combined in either order for
 `--files` and `--admit`; the count limit includes oversized
 uploads and overwritten filenames. Seven combined-limit cases

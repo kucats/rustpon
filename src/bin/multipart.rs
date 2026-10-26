@@ -1,6 +1,6 @@
 //! Local stdin harness. No listener or network access.
 use rustpon::post;
-use rustpon::{Limits, parse_reader};
+use rustpon::{Limits, parse_reader_with_php_upload_max_bytes};
 use std::io::{self, Write};
 use std::path::Path;
 
@@ -82,11 +82,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(2);
     }
     let boundary = args[first].to_str().ok_or("boundary must be ASCII")?;
-    let mut request = match parse_reader(
+    let mut request = match parse_reader_with_php_upload_max_bytes(
         &mut io::stdin().lock(),
         boundary.as_bytes(),
         Limits::default(),
         Path::new(&args[first + 1]),
+        max_upload_bytes,
     ) {
         Ok(request) => request,
         Err(error) => {
