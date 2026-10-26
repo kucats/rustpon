@@ -375,6 +375,44 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
 }
 
 #[test]
+fn php_84_upload_content_type_parameters_and_whitespace() {
+    let spool = Spool::new();
+    let cases: &[(&[u8], &[u8])] = &[
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: text/plain; charset=UTF-8",
+            b"text/plain",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: text/plain ; charset=\"utf-8\"",
+            b"text/plain ",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: TEXT/PLAIN; invalid",
+            b"TEXT/PLAIN",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: application/octet-stream",
+            b"application/octet-stream",
+        ),
+    ];
+    for &(header, expected) in cases {
+        let request = parse(&body(&[(header, b"\0\xff")]), Limits::default(), &spool).unwrap();
+        let view = request.parts().next().unwrap();
+        assert_eq!(view.content_type, Some(expected));
+        assert_eq!(view.file_bytes, Some(2));
+        drop(request);
+        spool.empty();
+    }
+    // Nested multipart remains unsupported, regardless of MIME parameters.
+    let nested = b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: multipart/mixed; boundary=x";
+    assert_eq!(
+        parse(&body(&[(nested, b"x")]), Limits::default(), &spool).unwrap_err(),
+        Error::Unsupported
+    );
+    spool.empty();
+}
+
+#[test]
 fn boundary_and_configuration_validation() {
     let spool = Spool::new();
     for boundary in [b"".as_slice(), b"a b", b"a\r\nb", &[b'a'; 71]] {
