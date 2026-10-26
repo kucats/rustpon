@@ -149,7 +149,9 @@ fn php_nesting_limit_skips_overdeep_fields_and_counts_them_toward_input_vars() {
     let mut strict = Limits::default();
     strict.depth = 1;
     assert_eq!(
-        request(&spool, fields, false).into_post(strict).unwrap_err(),
+        request(&spool, fields, false)
+            .into_post(strict)
+            .unwrap_err(),
         Error::Depth
     );
 }
