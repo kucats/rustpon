@@ -120,9 +120,12 @@ over form-supplied `MAX_FILE_SIZE` (error 2), and rejected uploads lose
 their staged descriptors without preventing later files from succeeding.
 The CLI exposes `--files/--admit --php-upload-max-filesize BYTES`; ten
 real PHP 8.4 HTTP SAPI comparisons and Rust FD cleanup tests guard this
-behavior. The parser's independent strict wire limits remain in force,
-and the two opt-in CLI quota flags cannot yet be combined.
-This is **not yet a full PHP limit policy**:
+behavior. The parser's independent strict wire limits remain in force.
+Both CLI quota flags may now be combined in either order for
+`--files` and `--admit`; the count limit includes oversized
+uploads and overwritten filenames. Seven combined-limit cases
+are compared against PHP 8.4 HTTP SAPI in both modes and both
+option orders. This is **not yet a full PHP limit policy**:
 the wire parser may reject requests before projection (including empty
 names or too many parts), and nesting, append exhaustion, allocation and
 upload quota errors still use strict rejection. See issue #4.

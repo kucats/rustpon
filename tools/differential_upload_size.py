@@ -30,14 +30,37 @@ CASES = [
                    (b"f[]", b"x", b"b.bin")], [1]),
 ]
 
+# The upload-count quota is applied before the size error is assigned.
+# An oversized file consumes a slot, even if a later duplicate replaces it.
+COMBINED_CASES = [
+    (1, 2, "oversized-counts", [(b"f", b"abc", b"a.bin"),
+                               (b"g", b"x", b"b.bin"), (b"tail", b"yes", None)], []),
+    (2, 2, "oversized-then-good-then-skip", [(b"f", b"abc", b"a.bin"),
+                                            (b"g", b"x", b"b.bin"),
+                                            (b"h", b"y", b"c.bin")], [1]),
+    (1, 2, "empty-then-oversized", [(b"empty", b"", b""),
+                                    (b"f", b"abc", b"a.bin"),
+                                    (b"g", b"x", b"b.bin")], []),
+    (2, 2, "ini-precedes-form-with-count", [(b"MAX_FILE_SIZE", b"1", None),
+                                           (b"f", b"abc", b"a.bin"),
+                                           (b"g", b"xy", b"b.bin"),
+                                           (b"h", b"x", b"c.bin")], []),
+    (2, 2, "duplicate-counts-before-overwrite", [(b"f", b"abc", b"a.bin"),
+                                                 (b"f", b"x", b"b.bin"),
+                                                 (b"g", b"y", b"c.bin")], [1]),
+    (1, 0, "zero-size-unlimited-count-still-applies", [(b"f", b"abc", b"a.bin"),
+                                                      (b"g", b"x", b"b.bin")], [0]),
+    (0, 2, "zero-upload-count", [(b"f", b"x", b"a.bin")], []),
+]
 
-def start_server(php_bin, limit, router):
+
+def start_server(php_bin, limit, router, file_limit=20):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     server = subprocess.Popen(
         [php_bin, "-d", f"upload_max_filesize={limit}", "-d", "post_max_size=1024",
-         "-d", "max_file_uploads=20", "-S", f"127.0.0.1:{port}", str(router)],
+         "-d", f"max_file_uploads={file_limit}", "-S", f"127.0.0.1:{port}", str(router)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     try:
@@ -56,18 +79,22 @@ def start_server(php_bin, limit, router):
         raise
 
 
-def run_rust(binary, mode, limit, spool, body):
+def run_rust(binary, mode, limit, spool, body, file_limit=None, reverse=False):
+    command = [str(binary), mode]
+    if file_limit is not None and reverse:
+        command.extend(["--php-max-file-uploads", str(file_limit)])
+    command.extend(["--php-upload-max-filesize", str(limit)])
+    if file_limit is not None and not reverse:
+        command.extend(["--php-max-file-uploads", str(file_limit)])
+    command.extend([BOUNDARY.decode(), str(spool)])
     proc = subprocess.run(
-        [str(binary), mode, "--php-upload-max-filesize", str(limit),
-         BOUNDARY.decode(), str(spool)],
-        input=body, capture_output=True, timeout=15, check=False,
+        command, input=body, capture_output=True, timeout=15, check=False,
     )
     if proc.returncode:
         raise RuntimeError(f"{mode} failed ({proc.returncode}): {proc.stderr[:500]!r}")
     if list(spool.iterdir()):
         raise AssertionError(f"{mode} left staging paths in {spool}")
     return json.loads(proc.stdout)
-
 
 def main():
     parser = argparse.ArgumentParser()
@@ -113,9 +140,39 @@ def main():
             finally:
                 server.terminate()
                 server.wait(timeout=10)
+        # Compare both option orders, both metadata and consuming admission.
+        for file_limit, size_limit, label, parts, accepted in COMBINED_CASES:
+            server, port = start_server(args.php_bin, size_limit, router, file_limit)
+            try:
+                body = body_for(parts)
+                php = php_post(port, body)
+                for reverse in (False, True):
+                    for mode in ("--files", "--admit"):
+                        try:
+                            result = run_rust(args.rust_bin, mode, size_limit, spool,
+                                              body, file_limit, reverse)
+                            for key in ("files_tree", "files_tree_typed"):
+                                if result[key] != php[key]:
+                                    raise AssertionError(
+                                        f"{key}: PHP={php[key]!r} Rust={result[key]!r}"
+                                    )
+                            if mode == "--admit" and result["accepted_indices"] != accepted:
+                                raise AssertionError(
+                                    f"indices {result['accepted_indices']} != {accepted}"
+                                )
+                        except (AssertionError, RuntimeError) as error:
+                            failures += 1
+                            print(f"FAIL {label} (max_file_uploads={file_limit}, "
+                                  f"upload_max_filesize={size_limit}, {mode}, "
+                                  f"reverse={reverse}): {error}", file=sys.stderr)
+            finally:
+                server.terminate()
+                server.wait(timeout=10)
     if failures:
-        raise SystemExit(f"{failures} upload_max_filesize differential case(s) failed")
+        raise SystemExit(f"{failures} upload quota differential case(s) failed")
     print(f"PHP {patch} upload_max_filesize SAPI differential: {len(CASES)} cases matched")
+    print(f"PHP {patch} combined upload quota SAPI differential: "
+          f"{len(COMBINED_CASES)} cases x 2 modes x 2 flag orders matched")
 
 
 if __name__ == "__main__":

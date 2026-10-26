@@ -539,6 +539,60 @@ mod tests {
     }
 
     #[test]
+    fn combined_php_upload_quotas_count_rejected_files_and_release_fds() {
+        let spool = Spool::new();
+        let body = b"--b\r\nContent-Disposition: form-data; name=f; filename=a.bin\r\n\r\nabc\r\n--b\r\nContent-Disposition: form-data; name=g; filename=b.bin\r\n\r\nx\r\n--b\r\nContent-Disposition: form-data; name=h; filename=c.bin\r\n\r\ny\r\n--b--\r\n";
+        let metadata_limits = files::Limits {
+            max_file_uploads: Some(2),
+            max_upload_bytes: Some(2),
+            ..files::Limits::default()
+        };
+        let mut admitted = admit(
+            spool.parse(body),
+            Policy {
+                metadata: metadata_limits,
+                ..Policy::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![1]);
+        let pairs: Vec<_> = admitted
+            .metadata()
+            .wire()
+            .parts()
+            .map(|part| (part.name.to_vec(), part.value.unwrap().to_vec()))
+            .collect();
+        assert!(pairs.iter().any(|(name, value)| name == b"f[error]" && value == b"1"));
+        assert!(pairs.iter().any(|(name, value)| name == b"g[error]" && value == b"0"));
+        assert!(!pairs.iter().any(|(name, _)| name.starts_with(b"h[")));
+        assert!(admitted.accepted_file(0).is_none());
+        assert!(admitted.accepted_file(2).is_none());
+        let mut bytes = Vec::new();
+        assert_eq!(admitted.copy_accepted(0, &mut bytes).unwrap(), None);
+        assert!(bytes.is_empty());
+        assert_eq!(admitted.copy_accepted(1, &mut bytes).unwrap(), Some(1));
+        assert_eq!(bytes, b"x");
+        drop(admitted);
+        spool.empty();
+
+        // The oversized first upload consumes the only available file slot.
+        let admitted = admit(
+            spool.parse(body),
+            Policy {
+                metadata: files::Limits {
+                    max_file_uploads: Some(1),
+                    ..metadata_limits
+                },
+                ..Policy::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(admitted.accepted_indices().count(), 0);
+        drop(admitted);
+        spool.empty();
+    }
+
+    #[test]
     fn repeated_requests_do_not_retain_rejected_descriptors() {
         let spool = Spool::new();
         for _ in 0..32 {

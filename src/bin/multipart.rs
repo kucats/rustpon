@@ -21,50 +21,54 @@ impl<W: Write> Write for HexWriter<W> {
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().collect();
-    let php_file_limit_mode = args.len() == 6
-        && (args[1] == "--files" || args[1] == "--admit")
-        && args[2] == "--php-max-file-uploads";
-    let php_upload_size_mode = args.len() == 6
-        && (args[1] == "--files" || args[1] == "--admit")
-        && args[2] == "--php-upload-max-filesize";
-    let max_upload_bytes = if php_upload_size_mode {
-        Some(
-            args[3]
-                .to_str()
-                .ok_or("upload_max_filesize must be decimal bytes")?
-                .parse::<u64>()?,
-        )
-    } else {
-        None
-    };
-    let max_file_uploads = if php_file_limit_mode {
-        Some(
-            args[3]
-                .to_str()
-                .ok_or("max_file_uploads must be decimal")?
-                .parse::<usize>()?,
-        )
-    } else {
-        None
-    };
-    let post_mode = args.len() == 4 && args[1] == "--post";
-    let files_mode = (args.len() == 4 && args[1] == "--files")
-        || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--files");
-    let admit_mode = (args.len() == 4 && args[1] == "--admit")
-        || ((php_file_limit_mode || php_upload_size_mode) && args[1] == "--admit");
-    if args.len() != 3 && !post_mode && !files_mode && !admit_mode {
-        eprintln!(
-            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N|--php-upload-max-filesize BYTES] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
-        );
-        std::process::exit(2);
-    }
-    let first = if php_file_limit_mode || php_upload_size_mode {
-        4
-    } else if post_mode || files_mode || admit_mode {
+    let mode = args.get(1).and_then(|arg| arg.to_str());
+    let post_mode = mode == Some("--post");
+    let files_mode = mode == Some("--files");
+    let admit_mode = mode == Some("--admit");
+    let mut first = if post_mode || files_mode || admit_mode {
         2
     } else {
         1
     };
+    let mut max_file_uploads = None;
+    let mut max_upload_bytes = None;
+    // The two independent PHP quotas may be specified together, in either
+    // order. Reject duplicates rather than silently overriding server policy.
+    if files_mode || admit_mode {
+        while let Some(flag) = args.get(first).and_then(|arg| arg.to_str()) {
+            match flag {
+                "--php-max-file-uploads" => {
+                    if max_file_uploads.is_some() {
+                        return Err("duplicate --php-max-file-uploads".into());
+                    }
+                    let value = args
+                        .get(first + 1)
+                        .and_then(|arg| arg.to_str())
+                        .ok_or("missing max_file_uploads value")?;
+                    max_file_uploads = Some(value.parse::<usize>()?);
+                    first += 2;
+                }
+                "--php-upload-max-filesize" => {
+                    if max_upload_bytes.is_some() {
+                        return Err("duplicate --php-upload-max-filesize".into());
+                    }
+                    let value = args
+                        .get(first + 1)
+                        .and_then(|arg| arg.to_str())
+                        .ok_or("missing upload_max_filesize value")?;
+                    max_upload_bytes = Some(value.parse::<u64>()?);
+                    first += 2;
+                }
+                _ => break,
+            }
+        }
+    }
+    if args.len() != first + 2 {
+        eprintln!(
+            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+        );
+        std::process::exit(2);
+    }
     let boundary = args[first].to_str().ok_or("boundary must be ASCII")?;
     let mut request = match parse_reader(
         &mut io::stdin().lock(),
