@@ -40,10 +40,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut php_partial_upload = false;
     // The two independent PHP quotas may be specified together, in either
     // order. Reject duplicates rather than silently overriding server policy.
-    if files_mode || admit_mode {
+    if files_mode || admit_mode || post_mode {
         while let Some(flag) = args.get(first).and_then(|arg| arg.to_str()) {
             match flag {
-                "--php-max-file-uploads" => {
+                "--php-max-file-uploads" if files_mode || admit_mode => {
                     if max_file_uploads.is_some() {
                         return Err("duplicate --php-max-file-uploads".into());
                     }
@@ -76,14 +76,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     content_length = Some(value.parse::<u64>()?);
                     first += 2;
                 }
-                "--php-partial-upload" if admit_mode => {
+                "--php-partial-upload" if admit_mode || post_mode => {
                     if php_partial_upload {
                         return Err("duplicate --php-partial-upload".into());
                     }
                     php_partial_upload = true;
                     first += 1;
                 }
-                "--php-upload-max-filesize" => {
+                "--php-upload-max-filesize" if files_mode || admit_mode => {
                     if max_upload_bytes.is_some() {
                         return Err("duplicate --php-upload-max-filesize".into());
                     }
@@ -100,7 +100,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if args.len() != first + 2 {
         eprintln!(
-            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] [--php-post-max-size BYTES (admit only)] [--content-length BYTES (admit only)] [--php-partial-upload (admit only)] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
+            "usage: multipart [--post|--files|--admit] [--php-max-file-uploads N] [--php-upload-max-filesize BYTES] [--php-post-max-size BYTES (admit only)] [--content-length BYTES (admit only)] [--php-partial-upload (admit/post)] BOUNDARY PRIVATE_SPOOL_DIR < body.bin"
         );
         std::process::exit(2);
     }
