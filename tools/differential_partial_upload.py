@@ -75,9 +75,23 @@ def main():
                 if proc.returncode:
                     raise AssertionError(f"{label}: Rust exit {proc.returncode}: {proc.stderr[:500]!r}")
                 rust = json.loads(proc.stdout)
-                for key in ("post_tree", "files_tree", "files_tree_typed"):
+                for key in ("files_tree", "files_tree_typed"):
                     if php[key] != rust[key]:
                         raise AssertionError(f"{label}: {key}: PHP={php[key]!r} Rust={rust[key]!r}")
+                post_proc = subprocess.run(
+                    [str(args.rust_bin), "--post", "--php-partial-upload",
+                     BOUNDARY.decode(), str(spool)],
+                    input=wire, capture_output=True, timeout=15, check=False,
+                )
+                if post_proc.returncode:
+                    raise AssertionError(
+                        f"{label}: Rust POST exit {post_proc.returncode}: {post_proc.stderr[:500]!r}"
+                    )
+                rust_post = json.loads(post_proc.stdout)["post_tree"]
+                if php["post_tree"] != rust_post:
+                    raise AssertionError(
+                        f"{label}: post_tree: PHP={php['post_tree']!r} Rust={rust_post!r}"
+                    )
                 if rust["accepted_indices"] != expected_indices:
                     raise AssertionError(f"{label}: accepted {rust['accepted_indices']!r}")
                 if list(spool.iterdir()):
