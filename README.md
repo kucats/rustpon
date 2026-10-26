@@ -102,7 +102,10 @@ The adapter preserves ordered fields, applies PHP-style root/bracket
 normalization, expands bracket paths, handles numeric string keys and
 append-after-negative-index behavior, and models scalar/array replacement.
 Upload names protect their canonical and generated `tmp_name` keys from later
-fields. A malformed upload name rejects the whole conversion rather than
+fields. A single ASCII whitespace byte inside a bracket index (such as
+`a[ ]` or `a[\\t]`) is an append marker, matching PHP 8.4; two whitespace
+bytes or whitespace followed by another byte remain part of the literal key.
+A malformed upload name rejects the whole conversion rather than
 returning a partial tree.
 
 The behavior is a bounded compatibility experiment for 64-bit PHP 8.4-style
