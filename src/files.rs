@@ -168,19 +168,18 @@ fn project_impl(
             }
             crate::Payload::Field(_) => (false, false, false),
         };
-        let upload_error = upload_error(
-            &part,
-            form_max,
-            limits.max_upload_bytes,
-            partial,
-            write_failed,
-        );
-        // Only override an otherwise successful upload. Empty filenames,
-        // PHP byte quotas and partial bodies retain their established errors.
-        let upload_error = if no_tmp_dir && upload_error == UPLOAD_ERR_OK {
+        // PHP's missing-directory error is assigned before payload size
+        // checks. An empty filename still means no upload (error=4).
+        let upload_error = if no_tmp_dir && !part.filename.expect("file parts only").is_empty() {
             UPLOAD_ERR_NO_TMP_DIR
         } else {
-            upload_error
+            upload_error(
+                &part,
+                form_max,
+                limits.max_upload_bytes,
+                partial,
+                write_failed,
+            )
         };
         for &attr in &ATTRIBUTES {
             let value = projected_value(&part, attr, upload_error, index, tag_uploads);
@@ -254,19 +253,18 @@ fn project_impl(
             }
             crate::Payload::Field(_) => (false, false, false),
         };
-        let upload_error = upload_error(
-            &part,
-            form_max,
-            limits.max_upload_bytes,
-            partial,
-            write_failed,
-        );
-        // Only override an otherwise successful upload. Empty filenames,
-        // PHP byte quotas and partial bodies retain their established errors.
-        let upload_error = if no_tmp_dir && upload_error == UPLOAD_ERR_OK {
+        // PHP's missing-directory error is assigned before payload size
+        // checks. An empty filename still means no upload (error=4).
+        let upload_error = if no_tmp_dir && !part.filename.expect("file parts only").is_empty() {
             UPLOAD_ERR_NO_TMP_DIR
         } else {
-            upload_error
+            upload_error(
+                &part,
+                form_max,
+                limits.max_upload_bytes,
+                partial,
+                write_failed,
+            )
         };
         let tail = &part.name[root_len..];
         for &attr in &ATTRIBUTES {
