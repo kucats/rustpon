@@ -1135,5 +1135,79 @@ pub fn parse_reader_with_php_limits(
     }
 }
 
+
+/**
+ * Parse exactly one HTTP body with a trusted Content-Length supplied by the
+ * transport. This does not parse HTTP headers or implement an SAPI.
+ *
+ * If Content-Length exceeds a nonzero PHP post_max_size, do not instantiate
+ * the multipart parser or stage uploads. Drain exactly the declared bytes,
+ * returning an empty request for PHP-compatible POST/FILES publication.
+ * The independent hard body quota is checked before reading any bytes.
+ *
+ * An early EOF is always an error. Bytes after Content-Length belong to the
+ * next transport message and are left unread. Callers must reject ambiguous
+ * or untrusted HTTP framing before invoking this API.
+ */
+pub fn parse_reader_with_php_content_length(
+    reader: &mut impl Read,
+    boundary: &[u8],
+    limits: Limits,
+    spool_dir: &Path,
+    php_max_upload_bytes: Option<u64>,
+    php_max_post_bytes: Option<u64>,
+    content_length: u64,
+) -> Result<Request, Error> {
+    if content_length > limits.body_bytes {
+        return Err(Error::Limit(Limit::BodyBytes));
+    }
+    let mut bounded = reader.take(content_length);
+    if php_max_post_bytes.is_some_and(|max| max != 0 && content_length > max) {
+        // Preflight before parsing even the first byte: malformed multipart
+        // input cannot cause upload staging or a parser error in this branch.
+        let mut buffer = [0u8; BLOCK];
+        let mut consecutive_interrupts = 0usize;
+        loop {
+            match bounded.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(count) if count > buffer.len() => {
+                    return Err(Error::Io(io::ErrorKind::InvalidData));
+                }
+                Ok(_) => consecutive_interrupts = 0,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                    consecutive_interrupts += 1;
+                    if consecutive_interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
+                        return Err(Error::Io(io::ErrorKind::Interrupted));
+                    }
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        if bounded.limit() != 0 {
+            return Err(Error::Truncated);
+        }
+        return Ok(Request {
+            arena: Vec::new(),
+            parts: Vec::new(),
+            stats: Stats {
+                body_bytes: content_length,
+                ..Stats::default()
+            },
+        });
+    }
+    let request = parse_reader_with_php_limits(
+        &mut bounded,
+        boundary,
+        limits,
+        spool_dir,
+        php_max_upload_bytes,
+        php_max_post_bytes,
+    )?;
+    if bounded.limit() != 0 {
+        return Err(Error::Truncated);
+    }
+    Ok(request)
+}
+
 #[cfg(test)]
 mod tests;
