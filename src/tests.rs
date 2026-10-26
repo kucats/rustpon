@@ -1709,3 +1709,56 @@ fn php_partial_eof_after_complete_file_header_registers_error_three() {
     );
     spool.empty();
 }
+
+#[test]
+fn php_write_failure_preserves_later_fields_and_uploads_without_exposing_prefix() {
+    let spool = Spool::new();
+    let good_file = b"Content-Disposition: form-data; name=good; filename=good.bin";
+    // Force a write error at the 8192-byte flush, not just at a delimiter.
+    let bad = vec![b'X'; BLOCK + 19];
+    let wire = body(&[(FILE, &bad), (FIELD, b"still-visible"), (good_file, b"ok")]);
+    let next = b"Content-Disposition: form-data; name=field";
+    let split = wire.windows(next.len()).position(|w| w == next).unwrap();
+    let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0)
+        .unwrap()
+        .with_php_upload_write_recovery();
+    parser.fail_write = true;
+    parser.feed(&wire[..split]).unwrap();
+    assert!(matches!(
+        &parser.request.as_ref().unwrap().parts[0].payload,
+        Payload::File(upload) if upload.write_failed && upload.discarded
+    ));
+    parser.fail_write = false;
+    // Exercise the rest of the request with one-byte feeds after the failure.
+    for &byte in &wire[split..] {
+        parser.feed(&[byte]).unwrap();
+    }
+    let mut request = parser.finish().unwrap();
+    assert_eq!(request.parts().len(), 3);
+    assert_eq!(request.parts().nth(1).unwrap().value, Some(b"still-visible".as_slice()));
+    let mut denied = Vec::new();
+    assert_eq!(
+        request.upload_mut(0).unwrap().copy_to(&mut denied).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(denied.is_empty());
+    let mut copied = Vec::new();
+    assert_eq!(request.upload_mut(2).unwrap().copy_to(&mut copied).unwrap(), 2);
+    assert_eq!(copied, b"ok");
+    let metadata = crate::files::project(&request, crate::files::Limits::default()).unwrap();
+    let mut json = Vec::new();
+    metadata.write_php_files_json(&mut json).unwrap();
+    let json = String::from_utf8(json).unwrap();
+    // PHP 8.4 UPLOAD_ERR_CANT_WRITE=7, encoded as the tagged hex string "37".
+    assert!(json.contains("37"), "{json}");
+    drop(metadata);
+    let mut admitted = crate::admission::admit(request, crate::admission::Policy::default()).unwrap();
+    assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![2]);
+    assert!(admitted.accepted_file(0).is_none());
+    assert_eq!(admitted.copy_accepted(0, &mut denied).unwrap(), None);
+    copied.clear();
+    assert_eq!(admitted.copy_accepted(2, &mut copied).unwrap(), Some(2));
+    assert_eq!(copied, b"ok");
+    drop(admitted);
+    spool.empty();
+}
