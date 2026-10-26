@@ -1323,6 +1323,25 @@ fn php_content_length_exact_boundary_and_transport_isolation() {
         spool.empty();
     }
 
+    // A declared empty HTTP body is an empty POST/FILES publication. The
+    // following bytes are not consumed as part of this request.
+    let mut reader = Cursor::new(&wire);
+    let empty = parse_reader_with_php_content_length(
+        &mut reader,
+        b"AaB03x",
+        Limits::default(),
+        &spool.0,
+        None,
+        Some(1),
+        0,
+    )
+    .unwrap();
+    assert_eq!(empty.parts().len(), 0);
+    assert_eq!(empty.stats().body_bytes, 0);
+    assert_eq!(reader.position(), 0);
+    drop(empty);
+    spool.empty();
+
     // The declared body must arrive in full, even when PHP will discard it.
     for php_limit in [Some(1), None] {
         let truncated = &wire[..wire.len() - 1];
