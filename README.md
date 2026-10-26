@@ -864,14 +864,24 @@ Content-Length must never be treated as an eligible partial upload.
 The Linux differential suite compares this narrow behavior against PHP 8.4
 HTTP SAPI; this is not an HTTP framing implementation or PHP-FPM replacement.
 
-## PHP-mode staging write failures (experimental)
+## PHP-mode staging failures (experimental)
 
 The PHP-oriented reader functions enable recoverable upload **write** errors:
 if writing an anonymous staged file fails, the affected upload is truncated,
 marked non-copyable, and projected with PHP 8.4 `UPLOAD_ERR_CANT_WRITE` (7).
-Later fields and uploads remain parseable. The strict `Parser::new` mode still
-aborts and discards the whole request on I/O failure. Failure to truncate a
-failed staging file also aborts the request. PHP `UPLOAD_ERR_NO_TMP_DIR` (6)
-and temporary-file **creation** failures are not recovered yet. This is a
-Rust-only compatibility model, not native PHP SAPI integration; the write-error
-path is covered by deterministic fault injection, not a live SAPI fault oracle.
+They also recover a **missing temporary directory** (`NotFound` when opening
+an anonymous staging file) as `UPLOAD_ERR_NO_TMP_DIR` (6), without creating
+a placeholder descriptor. Its received payload is counted against hard quotas
+but never copied or admitted; later fields and uploads remain parseable.
+Empty filenames retain `UPLOAD_ERR_NO_FILE` (4). PHP 8.4 checks temporary-file
+creation before upload payload size, so error 6 takes precedence over
+`upload_max_filesize` error 1 when the directory is missing.
+
+The strict `Parser::new` mode still aborts and discards the whole request
+on I/O failure. Other file-creation failures, unlink failures, and failures
+to truncate a staged file remain fail-closed. Tests cover injected creation
+failures, a real removed directory, subsequent successful uploads, and
+descriptor isolation. A Linux HTTP SAPI oracle independently checks the
+PHP 8.4 error-6 metadata and its precedence; write-error 7 remains covered
+by deterministic fault injection rather than a live SAPI fault oracle.
+This is a Rust-only compatibility model, not native PHP SAPI integration.
