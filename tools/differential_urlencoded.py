@@ -221,6 +221,36 @@ def main():
         except (KeyError, ValueError) as exc:
             failures += 1
             print(f"FAIL {label} body={data!r}: {exc}", file=sys.stderr)
+    # PHP 8.4 truncates percent-decoded field names at NUL. Keep the
+    # compatibility behavior opt-in; the strict parser rejects these names.
+    nul_name_cases = [
+        ("nul-middle", b"a%00suffix=one&b=2", None),
+        ("nul-first", b"%00ignored=one&a=2", None),
+        ("nul-bracket", b"a%5Bx%00y%5D=two", None),
+        ("nul-before-bracket", b"a%00%5Bx%5D=one", None),
+        ("nul-collision", b"a%00suffix=one&a=two", None),
+        ("nul-in-value", b"a=one%00two", None),
+        ("nul-empty", b"%00=one", None),
+        ("nul-separator", b"a%00b=1|b=2", "|"),
+    ]
+    for label, data, separators in nul_name_cases:
+        php_command = [args.php_bin, "-d", "max_input_vars=10000"]
+        rust_command = [str(args.rust_bin), "--php-nul-name-truncation"]
+        if separators is not None:
+            php_command += ["-d", f"arg_separator.input={separators}"]
+            rust_command += ["--php-arg-separators", separators]
+        expected = run(php_command + [oracle], data)
+        actual = run(rust_command, data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL {label} body={data!r}: {exc}", file=sys.stderr)
     # Explicit strict deviations: no partial JSON publication.
     for label, data in [
         ("NUL-in-name", b"a%00b=1"),
@@ -231,7 +261,7 @@ def main():
         if result.returncode == 0 or result.stdout:
             failures += 1
             print(f"FAIL {label}: expected nonzero exit without stdout", file=sys.stderr)
-    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, {len(custom_separator_cases)} custom separators, 3 strict, {failures} failures")
+    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, {len(custom_separator_cases)} custom separators, {len(nul_name_cases)} opt-in NUL names, 3 strict, {failures} failures")
     return int(failures != 0)
 if __name__ == "__main__":
     sys.exit(main())
