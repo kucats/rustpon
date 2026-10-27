@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments (including +=/-=/*=) and unsets followed by one echo;
+//! Supported grammar: bounded scalar assignments (including +=/-=/*=/%=) and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -257,6 +257,9 @@ impl<'a> Parser<'a> {
         } else if self.source[self.offset..].starts_with(b"*=") {
             self.offset += 2;
             Some(b'*')
+        } else if self.source[self.offset..].starts_with(b"%=") {
+            self.offset += 2;
+            Some(b'%')
         } else if self.consume(b'=') && self.peek() != Some(b'=') {
             None
         } else {
@@ -280,6 +283,19 @@ impl<'a> Parser<'a> {
                 b'+' => previous.as_int().checked_add(value.as_int()),
                 b'-' => previous.as_int().checked_sub(value.as_int()),
                 b'*' => previous.as_int().checked_mul(value.as_int()),
+                b'%' => {
+                    let divisor = value.as_int();
+                    if divisor == 0 {
+                        return Err(EvalError::DivisionByZero);
+                    }
+                    // PHP_INT_MIN % -1 is zero in PHP 8.4. Rust's
+                    // checked_rem rejects this signed-overflow corner.
+                    if divisor == -1 {
+                        Some(0)
+                    } else {
+                        previous.as_int().checked_rem(divisor)
+                    }
+                }
                 _ => return Err(EvalError::Syntax),
             };
             Value::Int(result.ok_or(EvalError::Overflow)?)
@@ -1132,6 +1148,52 @@ mod tests {
                 "$x=0-9223372036854775807-1; $x*=-1; echo $x;",
                 EvalError::Overflow,
             ),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
+    }
+
+
+    #[test]
+    fn php84_compound_modulo_assignment_and_boundaries() {
+        for (program, expected) in [
+            ("$x=7; $x%=3; echo $x;", Value::Int(1)),
+            ("$x=-7; $x%=3; echo $x;", Value::Int(-1)),
+            ("$x=7; $x%=-3; echo $x;", Value::Int(1)),
+            ("$x=-7; $x%=-3; echo $x;", Value::Int(-1)),
+            ("$x=7; $x%=3+4; echo $x;", Value::Int(0)),
+            ("$x=7; $x%=true; echo $x;", Value::Int(0)),
+            ("$x=true; $x%=3; echo is_int($x);", Value::Bool(true)),
+            ("$x=false; $x%=3; echo $x;", Value::Int(0)),
+            ("$x=null; $x%=3; echo is_int($x);", Value::Bool(true)),
+            (
+                "$x=0-9223372036854775807-1; $x%=-1; echo $x;",
+                Value::Int(0),
+            ),
+            (
+                "$x=9223372036854775807; $x%=2; echo $x;",
+                Value::Int(1),
+            ),
+            ("$x=7; $x%=1<2; echo $x;", Value::Int(0)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("$x%=2; echo $x;", EvalError::UnknownVariable),
+            ("$x=2; $x%=; echo $x;", EvalError::Syntax),
+            ("$x=2; $x% =3; echo $x;", EvalError::Syntax),
+            ("$x=2; $x%=0; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x%=false; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x%=null; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x%=1/0; echo $x;", EvalError::DivisionByZero),
         ] {
             assert_eq!(
                 Parser::new(program.as_bytes()).evaluate(),

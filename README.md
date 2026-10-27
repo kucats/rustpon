@@ -671,13 +671,15 @@ interpreter has no file/network access and is not connected to the FFI layer.
 ### PHP 8.4 scalar compound assignments (research)
 
 The standalone `php_eval` interpreter accepts `$x += expression;`,
-`$x -= expression;`, and `$x *= expression;` for previously defined integer,
+`$x -= expression;`, `$x *= expression;`, and `$x %= expression;` for previously defined integer,
 boolean, or null variables. RHS expressions use the existing PHP precedence
-and checked signed-64-bit arithmetic. All three operators store an integer
-result, matching PHP 8.4 for representable values; the usual assignment-count,
-work and variable limits remain in force. The operator and `=` must be adjacent.
-Multiplication is checked before publication, including `PHP_INT_MIN * -1`;
-overflowing results that PHP promotes to float are rejected.
+and signed-64-bit arithmetic. All four operators store an integer result for
+the supported subset; the usual assignment-count, work and variable limits
+remain in force. The operator and `=` must be adjacent. Multiplication is
+checked before publication, including `PHP_INT_MIN * -1`; overflowing results
+that PHP promotes to float are rejected. Modulo follows PHP's signed remainder
+rules, including `PHP_INT_MIN % -1 == 0`, and rejects a zero divisor without
+publishing a partial result.
 
 ```sh
 printf '%s' '<?php $x=true; $x+=4; $x-=2; echo $x;' |
@@ -688,7 +690,7 @@ printf '%s' '<?php $x=true; $x+=4; $x-=2; echo $x;' |
 PHP's undefined-variable warning path and overflow promotion to floating
 point are deliberately unsupported and rejected without output. The PHP
 8.4 CLI differential suite covers deterministic, generated, boolean/null,
-boundary and malformed-assignment cases. This is not a general PHP
+boundary and malformed-assignment cases, including modulo-by-zero rejection. This is not a general PHP
 assignment engine or a Zend/SAPI integration.
 
 ### PHP 8.4 `unset()` local-variable lifecycle (research)

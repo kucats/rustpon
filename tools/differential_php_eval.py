@@ -268,6 +268,18 @@ COMPOUND_ASSIGNMENT_PROGRAMS = [
     "$x=9223372036854775807; $x*=1; echo $x;",
     "$x=0-9223372036854775807-1; $x*=1; echo $x;",
     "$x=0-9223372036854775807-1; $x*=0; echo $x;",
+    "$x=7; $x%=3; echo $x;",
+    "$x=-7; $x%=3; echo $x;",
+    "$x=7; $x%=-3; echo $x;",
+    "$x=-7; $x%=-3; echo $x;",
+    "$x=7; $x%=3+4; echo $x;",
+    "$x=7; $x%=true; echo $x;",
+    "$x=true; $x%=3; echo is_int($x);",
+    "$x=false; $x%=3; echo $x;",
+    "$x=null; $x%=3; echo is_int($x);",
+    "$x=0-9223372036854775807-1; $x%=-1; echo $x;",
+    "$x=9223372036854775807; $x%=2; echo $x;",
+    "$x=7; $x%=1<2; echo $x;",
 ]
 
 
@@ -340,7 +352,11 @@ def main():
         start = rng.randrange(-100000, 100001)
         delta = rng.randrange(-100000, 100001)
         extra = rng.randrange(-50, 51)
-        operator = rng.choice(["+=", "-=", "*="])
+        operator = rng.choice(["+=", "-=", "*=", "%="])
+        if operator == "%=":
+            start = rng.randrange(-1000, 1001)
+            delta = rng.choice([n for n in range(-20, 21) if n])
+            extra = 0
         if operator == "*=":
             # Keep products in signed i64 while exercising signs and zero.
             start = rng.randrange(-1000, 1001)
@@ -736,6 +752,13 @@ def main():
         b"<?php $x=2; $x*=; echo $x;",
         b"<?php $x=2; $x* =3; echo $x;",
         b"<?php $x=2; $x*=1/0; echo $x;",
+        b"<?php $x%=2; echo $x;",
+        b"<?php $x=2; $x%=; echo $x;",
+        b"<?php $x=2; $x% =3; echo $x;",
+        b"<?php $x=2; $x%=0; echo $x;",
+        b"<?php $x=2; $x%=false; echo $x;",
+        b"<?php $x=2; $x%=null; echo $x;",
+        b"<?php $x=2; $x%=1/0; echo $x;",
         # PHP promotes integer overflow to float; intentionally unsupported.
         b"<?php $x=9223372036854775807; $x+=1; echo $x;",
         b"<?php $x=0-9223372036854775807-1; $x-=1; echo $x;",
