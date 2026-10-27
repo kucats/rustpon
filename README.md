@@ -778,6 +778,17 @@ and work budgets. As in PHP 8.4, `!2**2` negates the power result, while
 malformed negations without publishing output. Short-circuit `&&` / `||`,
 bitwise `~`, and other PHP operators remain unsupported.
 
+### PHP 8.4 spaceship comparison
+
+The research `php_eval` binary supports `<=>` for its bounded integer and
+boolean values. It returns a **typed integer** `-1`, `0` or `1`, using
+PHP's boolean truthiness rules when either operand is boolean. The operator
+shares the existing comparison precedence; parenthesized results can be
+used in arithmetic or strict comparisons. Chained comparisons and unsupported
+types remain rejected. The PHP 8.4 CLI differential suite includes fixed
+boundary/type cases and deterministic generated comparisons. This adds no
+Zend runtime integration or general PHP expression support.
+
 ## Bounded Interrupted I/O retries and deterministic parser fault campaign
 
 Both blocking `parse_reader` adapters (multipart and URL-encoded) now
