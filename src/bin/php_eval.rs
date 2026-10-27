@@ -1012,7 +1012,10 @@ mod tests {
         for (program, expected) in [
             ("$x=1; unset($x); echo isset($x);", Value::Bool(false)),
             ("$x=1; unset($x); echo empty($x);", Value::Bool(true)),
-            ("$x=1; $y=2; unset($x,$y,); echo isset($x,$y);", Value::Bool(false)),
+            (
+                "$x=1; $y=2; unset($x,$y,); echo isset($x,$y);",
+                Value::Bool(false),
+            ),
             ("$x=1; unset($x); $x=3; echo $x;", Value::Int(3)),
             ("$x=1; unset($missing); echo $x;", Value::Int(1)),
             ("$x=1; UNSET($x); echo empty($x);", Value::Bool(true)),
