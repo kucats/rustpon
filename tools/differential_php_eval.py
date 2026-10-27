@@ -104,6 +104,23 @@ TYPE_PREDICATE_PROGRAMS = [
 ]
 
 
+VARIABLE_PROBE_PROGRAMS = [
+    "echo isset($missing);", "echo empty($missing);",
+    "echo ISSET($missing);", "echo EMPTY($missing);",
+    "$x=null; echo isset($x);", "$x=null; echo empty($x);",
+    "$x=false; echo isset($x);", "$x=false; echo empty($x);",
+    "$x=0; echo isset($x);", "$x=0; echo empty($x);",
+    "$x=-1; echo empty($x);", "$x=7; echo empty($x);",
+    "$x=7; $y=0; echo isset($x,$y,);",
+    "$x=7; $y=null; echo isset($x,$y);",
+    "$x=7; echo isset($x,$missing);",
+    "$x=7; echo !empty($x);",
+    "$x=null; echo is_bool(isset($x));",
+    "$x=0; echo empty($x)===true;",
+    "$x=7; echo isset($x)===true;",
+]
+
+
 NULL_PROGRAMS = [
     "echo null;", "echo NULL;", "echo NuLl;",
     "echo null===null;", "echo null===0;", "echo null==0;",
@@ -397,6 +414,15 @@ def main():
         right = rng.randrange(-100, 101)
         predicate = rng.choice(["is_int", "is_bool"])
         type_predicates.append(f"$x=({left}<{right}); echo {predicate}($x);")
+    variable_probes = list(VARIABLE_PROBE_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        other = rng.choice(["null", "true", "false", "0", "1"])
+        variable_probes.append(
+            f"$x={value}; $y={other}; echo isset($x,$y,);"
+        )
+        variable_probes.append(f"$x={value}; echo empty($x);")
+        variable_probes.append(f"$x={value}; echo isset($x,$missing);")
     null_programs = list(NULL_PROGRAMS)
     for _ in range(64):
         value = rng.randrange(-100000, 100001)
@@ -438,7 +464,7 @@ def main():
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
-        + scalar_conversions + null_programs
+        + scalar_conversions + null_programs + variable_probes
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -514,6 +540,20 @@ def main():
         b"<?php echo is_intx(1);",
         b"<?php echo is_boolean(true);",
         b"<?php echo is_int($missing);",
+        b"<?php echo isset();",
+        b"<?php echo empty();",
+        b"<?php echo isset(1);",
+        b"<?php echo empty(0);",
+        b"<?php echo isset($x,1);",
+        b"<?php echo empty($x,$y);",
+        b"<?php echo empty($x,);",
+        b"<?php echo isset($x,,);",
+        b"<?php echo isset($x;",
+        b"<?php echo empty($x;",
+        b"<?php echo issetx($x);",
+        b"<?php echo emptyx($x);",
+        b"<?php echo isset($x[0]);",
+        b"<?php echo empty($x->foo);",
         b"<?php echo nullx;",
         b"<?php echo null();",
         b"<?php echo is_null();",

@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins.
+//! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, and variable-only isset()/empty() probes.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -436,6 +436,52 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // PHP 8.4 isset()/empty() are language constructs, not ordinary
+    // functions: probing an undefined variable must not raise a notice or
+    // UnknownVariable. This intentionally supports only simple $ident
+    // operands; array offsets, properties, and empty(expressions) are not
+    // represented by the current bounded evaluator.
+    fn variable_probe(
+        &mut self,
+        depth: usize,
+        name: &[u8],
+        all_set: bool,
+    ) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += name.len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let mut result = all_set;
+        loop {
+            let variable = self.variable_name()?;
+            let value = self
+                .bindings
+                .iter()
+                .find(|(key, _)| *key == variable)
+                .map(|(_, value)| *value);
+            if all_set {
+                result &= value.is_some_and(|value| !matches!(value, Value::Null));
+            } else {
+                result = value.is_none_or(|value| !value.as_bool());
+            }
+            if self.consume(b')') {
+                return Ok(Value::Bool(result));
+            }
+            // isset($a, $b,) is valid in PHP 8.4. empty() accepts only
+            // one operand and does not accept a trailing comma.
+            if !all_set || !self.consume(b',') {
+                return Err(EvalError::Syntax);
+            }
+            if self.consume(b')') {
+                return Ok(Value::Bool(result));
+            }
+        }
+    }
+
     fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
@@ -456,6 +502,20 @@ impl<'a> Parser<'a> {
         } else {
             self.skip_space();
             let remaining = &self.source[self.offset..];
+            for (name, all_set) in [
+                (b"isset".as_slice(), true),
+                (b"empty".as_slice(), false),
+            ] {
+                if remaining
+                    .get(..name.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                    && !remaining
+                        .get(name.len())
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    return self.variable_probe(depth, name, all_set);
+                }
+            }
             if remaining
                 .get(..b"intdiv".len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"intdiv"))
@@ -875,6 +935,68 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_isset_empty_variable_probes_and_limits() {
+        for (program, expected) in [
+            ("echo isset($missing);", Value::Bool(false)),
+            ("echo empty($missing);", Value::Bool(true)),
+            ("echo ISSET($missing);", Value::Bool(false)),
+            ("echo EMPTY($missing);", Value::Bool(true)),
+            ("$x=null; echo isset($x);", Value::Bool(false)),
+            ("$x=null; echo empty($x);", Value::Bool(true)),
+            ("$x=false; echo isset($x);", Value::Bool(true)),
+            ("$x=false; echo empty($x);", Value::Bool(true)),
+            ("$x=0; echo isset($x);", Value::Bool(true)),
+            ("$x=0; echo empty($x);", Value::Bool(true)),
+            ("$x=-1; echo empty($x);", Value::Bool(false)),
+            ("$x=7; echo empty($x);", Value::Bool(false)),
+            ("$x=7; $y=0; echo isset($x,$y,);", Value::Bool(true)),
+            ("$x=7; $y=null; echo isset($x,$y);", Value::Bool(false)),
+            ("$x=7; echo isset($x,$missing);", Value::Bool(false)),
+            ("$x=7; echo !empty($x);", Value::Bool(true)),
+            ("$x=null; echo is_bool(isset($x));", Value::Bool(true)),
+            ("$x=0; echo empty($x)===true;", Value::Bool(true)),
+            ("$x=7; echo isset($x)===true;", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo isset();",
+            "echo empty();",
+            "echo isset(1);",
+            "echo empty(0);",
+            "echo isset($x,1);",
+            "echo empty($x,$y);",
+            "echo empty($x,);",
+            "echo isset($x,,);",
+            "echo isset($x;",
+            "echo empty($x;",
+            "echo issetx($x);",
+            "echo emptyx($x);",
+            "echo isset($x[0]);",
+            "echo empty($x->foo);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
+        let expensive = format!("echo isset({});", vec!["$x"; 260].join(","));
+        assert_eq!(
+            Parser::new(expensive.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
+        );
+        let deep = format!("echo {}isset($x){};", "(".repeat(33), ")".repeat(33));
+        assert_eq!(
+            Parser::new(deep.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
+        );
     }
 
     #[test]
