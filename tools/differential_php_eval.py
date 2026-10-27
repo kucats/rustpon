@@ -60,6 +60,16 @@ BITWISE_BINARY_PROGRAMS = [
 ]
 
 
+ABS_PROGRAMS = [
+    "echo abs(0);", "echo abs(7);", "echo abs(-7);",
+    "echo abs(true);", "echo abs(false);", "echo ABS(-9);",
+    "echo abs(1-10);", "echo abs(-7)+2;",
+    "echo abs(intdiv(-9,2));", "echo intdiv(abs(-9),2);",
+    "echo abs(abs(-3));", "echo abs(0-9223372036854775807);",
+    "$x=-8; echo abs($x);", "$x=true; echo abs($x);",
+]
+
+
 INTDIV_PROGRAMS = [
     "echo intdiv(7,3);", "echo intdiv(-7,3);",
     "echo intdiv(7,-3);", "echo intdiv(-7,-3);",
@@ -270,6 +280,11 @@ def main():
         numerator = rng.randrange(-100000, 100001)
         denominator = rng.choice([n for n in range(-100, 101) if n])
         intdiv_programs.append(f"echo intdiv({numerator},{denominator});")
+    abs_programs = list(ABS_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-1000, 1001)
+        abs_programs.append(f"$x={value}; echo abs($x+({delta}));")
     shifts = list(SHIFT_PROGRAMS)
     for _ in range(128):
         value = rng.randrange(-100000, 100001)
@@ -289,7 +304,7 @@ def main():
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
-        + intdiv_programs
+        + intdiv_programs + abs_programs
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -356,6 +371,15 @@ def main():
         b"<?php echo intdivide(1,2);",
         b"<?php echo intdiv(1,2;",
         b"<?php echo intdiv($missing,2);",
+        b"<?php echo abs();",
+        b"<?php echo abs(1,2);",
+        b"<?php echo abs(,1);",
+        b"<?php echo abs(1,);",
+        b"<?php echo abs(1;",
+        b"<?php echo absolute(-1);",
+        b"<?php echo abs($missing);",
+        # PHP promotes abs(PHP_INT_MIN) to float; intentionally unsupported.
+        b"<?php echo abs(0-9223372036854775807-1);",
         b"<?php echo 1&;",
         b"<?php echo 1^;",
         b"<?php echo 1|;",
@@ -469,7 +493,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
