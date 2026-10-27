@@ -60,6 +60,23 @@ BITWISE_BINARY_PROGRAMS = [
 ]
 
 
+SHIFT_PROGRAMS = [
+    "echo 1<<2;", "echo 16>>2;", "echo 1<<3+1;",
+    "echo 1<<2<<1;", "echo 1<<2<3;", "echo 1<<2===4;",
+    "echo 1<<2&3;", "echo 1<<2<=>3;",
+    "echo true<<2;", "echo 2<<true;",
+    "echo 1<<63;", "echo 1<<64;", "echo 1<<65;",
+    "echo -1<<64;", "echo -1>>64;", "echo -8>>65;",
+    "echo 1>>64;", "echo (0-9223372036854775807-1)>>63;",
+    "echo (0-9223372036854775807-1)<<1;",
+    "echo 9223372036854775807>>63;",
+    "echo 1<<9223372036854775807;",
+    "$x=3; $x=$x<<2; echo $x;",
+    "$x=-8; echo $x>>2;",
+    "echo (2<<3)+1;", "echo 8>>(1+1);",
+]
+
+
 SPACESHIP_PROGRAMS = [
     "echo 1<=>2;", "echo 2<=>2;", "echo 3<=>2;",
     "echo true<=>2;", "echo false<=>-1;", "echo false<=>0;",
@@ -234,6 +251,12 @@ def main():
         middle = rng.randrange(0, 256)
         right = rng.randrange(0, 256)
         bitwise_binary.append(f"echo {left} | {middle} ^ {right} & 7;")
+    shifts = list(SHIFT_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        count = rng.randrange(0, 72)
+        op = rng.choice(["<<", ">>"])
+        shifts.append(f"$x={value}; echo $x {op} {count};")
     spaceship = list(SPACESHIP_PROGRAMS)
     for _ in range(64):
         left = rng.randrange(-500, 501)
@@ -246,7 +269,7 @@ def main():
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
-        + booleans + logical_not + bitwise_not + bitwise_binary + spaceship
+        + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -311,6 +334,12 @@ def main():
         b"<?php echo &1;",
         b"<?php echo ^1;",
         b"<?php echo |1;",
+        b"<?php echo 1<<;",
+        b"<?php echo 1>>;",
+        b"<?php echo <<1;",
+        b"<?php echo >>1;",
+        b"<?php echo 1<<<2;",
+        b"<?php echo 1>>>2;",
         b"<?php echo 1&&2;",
         b"<?php echo 1||2;",
         b"<?php echo 1&$missing;",
@@ -372,10 +401,31 @@ def main():
                 file=sys.stderr,
             )
 
+    # PHP 8.4 throws ArithmeticError for negative shift counts.
+    negative_shifts = [
+        b"<?php echo 1<<-1;",
+        b"<?php echo 1>>-1;",
+        b"<?php echo 1<<(0-2);",
+        b"<?php $x=-1; echo 2>>$x;",
+        b"<?php echo 1<<(-9223372036854775807);",
+    ]
+    for index, code in enumerate(negative_shifts):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"ArithmeticError" not in php.stderr
+                or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL negative_shift={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
-        f"{len(type_errors)} PHP TypeError rejections, {failures} failures"
+        f"{len(type_errors)} PHP TypeError rejections, "
+        f"{len(negative_shifts)} PHP ArithmeticError rejections, {failures} failures"
     )
     return int(failures != 0)
 

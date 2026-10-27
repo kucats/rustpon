@@ -807,6 +807,19 @@ The PHP 8.4 CLI differential suite compares fixed precedence and
 boolean-coercion examples plus deterministic generated cases. This is
 not a general PHP language implementation or Zend/SAPI integration.
 
+### PHP 8.4 integer shifts (research)
+
+The bounded `php_eval` interpreter supports integer `<<` and `>>`
+with PHP 8.4 precedence (addition before shifts, shifts before comparison).
+Boolean operands are converted to integers. Shift counts of 64 or more
+saturate: left shifts return zero, while right shifts return zero or
+minus one according to the sign. Left shifts use signed 64-bit bit patterns,
+including `1 << 63 == PHP_INT_MIN`; right shifts are arithmetic.
+Negative counts fail closed as `NegativeShift` rather than constructing
+a Zend `ArithmeticError`. The CLI oracle compares fixed and generated
+shift cases, including negative-count exception categories, against PHP 8.4.
+This remains a deliberately limited evaluator, not a PHP VM.
+
 ### PHP 8.4 spaceship comparison
 
 The research `php_eval` binary supports `<=>` for its bounded integer and

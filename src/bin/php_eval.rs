@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, comparisons (including <=>), and integer bitwise &, ^, |.
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), and integer bitwise &, ^, |.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -26,6 +26,7 @@ enum EvalError {
     DivisionByZero,
     UnsupportedFloat,
     BitwiseTypeError,
+    NegativeShift,
     DepthLimit,
     WorkLimit,
     UnknownVariable,
@@ -417,13 +418,45 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    // PHP 8.4: additive operators bind tighter than shifts, and shifts
+    // bind tighter than comparisons. Counts >= 64 are saturated rather
+    // than masked, and right shifts preserve the sign bit.
+    fn shift(&mut self, depth: usize) -> Result<Value, EvalError> {
+        let mut lhs = self.additive(depth)?;
+        loop {
+            self.skip_space();
+            let left_shift = if self.source[self.offset..].starts_with(b"<<") {
+                true
+            } else if self.source[self.offset..].starts_with(b">>") {
+                false
+            } else {
+                break;
+            };
+            self.offset += 2;
+            self.charge()?;
+            let count = self.additive(depth)?.as_int();
+            if count < 0 {
+                return Err(EvalError::NegativeShift);
+            }
+            let value = lhs.as_int();
+            lhs = Value::Int(if count >= i64::from(i64::BITS) {
+                if left_shift || value >= 0 { 0 } else { -1 }
+            } else if left_shift {
+                value.wrapping_shl(count as u32)
+            } else {
+                value >> (count as u32)
+            });
+        }
+        Ok(lhs)
+    }
+
     // PHP 8.4 compares a boolean operand using truthiness for loose
     // equality and ordering. Strict equality preserves the value type.
     fn comparison(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
-        let lhs = self.additive(depth)?;
+        let lhs = self.shift(depth)?;
         self.skip_space();
         let remaining = &self.source[self.offset..];
         let operators: &[(&[u8], Comparison)] = &[
@@ -446,7 +479,7 @@ impl<'a> Parser<'a> {
         };
         self.offset += bytes.len();
         self.charge()?;
-        let rhs = self.additive(depth)?;
+        let rhs = self.shift(depth)?;
         let (left, right) = lhs.php_order(rhs);
         let result = match operator {
             Comparison::Spaceship => Value::Int(if left < right {
@@ -748,6 +781,55 @@ mod tests {
                 Parser::new(program.as_bytes()).evaluate().is_err(),
                 "{program}"
             );
+        }
+    }
+
+    #[test]
+    fn php84_shift_precedence_saturation_and_negative_counts() {
+        for (program, expected) in [
+            ("echo 1<<2;", Value::Int(4)),
+            ("echo 16>>2;", Value::Int(4)),
+            ("echo 1<<3+1;", Value::Int(16)),
+            ("echo 1<<2<<1;", Value::Int(8)),
+            ("echo 1<<2<3;", Value::Bool(false)),
+            ("echo 1<<2===4;", Value::Bool(true)),
+            ("echo 1<<2&3;", Value::Int(0)),
+            ("echo 1<<2<=>3;", Value::Int(1)),
+            ("echo true<<2;", Value::Int(4)),
+            ("echo 2<<true;", Value::Int(4)),
+            ("echo 1<<63;", Value::Int(i64::MIN)),
+            ("echo 1<<64;", Value::Int(0)),
+            ("echo 1<<65;", Value::Int(0)),
+            ("echo -1<<64;", Value::Int(0)),
+            ("echo -1>>64;", Value::Int(-1)),
+            ("echo -8>>65;", Value::Int(-1)),
+            ("echo 1>>64;", Value::Int(0)),
+            ("echo (0-9223372036854775807-1)>>63;", Value::Int(-1)),
+            ("$x=3; $x=$x<<2; echo $x;", Value::Int(12)),
+            ("$x=-8; echo $x>>2;", Value::Int(-2)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in ["echo 1<<-1;", "echo 1>>-1;", "echo 1<<(0-2);"] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(EvalError::NegativeShift),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo 1<<;",
+            "echo 1>>;",
+            "echo <<1;",
+            "echo >>1;",
+            "echo 1<<<2;",
+            "echo 1>>>2;",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
         }
     }
 
