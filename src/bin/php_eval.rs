@@ -769,7 +769,8 @@ impl<'a> Parser<'a> {
     // This integer-only research slice rejects those cases.
     fn pow_int(base: i64, exponent: i64) -> Result<i64, EvalError> {
         let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
-        base.checked_pow(exponent).ok_or(EvalError::UnsupportedFloat)
+        base.checked_pow(exponent)
+            .ok_or(EvalError::UnsupportedFloat)
     }
 
     // PHP 8.4 exponentiation binds more tightly than unary +/- and
