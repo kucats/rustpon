@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments (including +=/-=/*=/%=/&=/^=/|=/<<=/>>=) and unsets followed by one echo;
+//! Supported grammar: bounded scalar assignments (including +=/-=/*=/**=/%=/&=/^=/|=/<<=/>>=) and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -254,6 +254,9 @@ impl<'a> Parser<'a> {
         } else if self.source[self.offset..].starts_with(b"-=") {
             self.offset += 2;
             Some(b'-')
+        } else if self.source[self.offset..].starts_with(b"**=") {
+            self.offset += 3;
+            Some(b'P')
         } else if self.source[self.offset..].starts_with(b"*=") {
             self.offset += 2;
             Some(b'*')
@@ -298,6 +301,7 @@ impl<'a> Parser<'a> {
                 b'+' => previous.as_int().checked_add(value.as_int()),
                 b'-' => previous.as_int().checked_sub(value.as_int()),
                 b'*' => previous.as_int().checked_mul(value.as_int()),
+                b'P' => Some(Self::pow_int(previous.as_int(), value.as_int())?),
                 // PHP 8.4 coerces int/bool/null operands to signed integers
                 // for binary bitwise operators, preserving an integer tag.
                 b'&' => Some(previous.as_int() & value.as_int()),
@@ -760,6 +764,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // Shared by binary exponentiation and **=; PHP 8.4 promotes
+    // negative exponents and overflowing integer results to float.
+    // This integer-only research slice rejects those cases.
+    fn pow_int(base: i64, exponent: i64) -> Result<i64, EvalError> {
+        let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
+        base.checked_pow(exponent).ok_or(EvalError::UnsupportedFloat)
+    }
+
     // PHP 8.4 exponentiation binds more tightly than unary +/- and
     // associates to the right: -2**2 == -(2**2), 2**3**2 == 2**(3**2).
     fn power(&mut self, depth: usize) -> Result<Value, EvalError> {
@@ -774,13 +786,7 @@ impl<'a> Parser<'a> {
         self.offset += 2;
         self.charge()?;
         let exponent = self.unary(depth + 1)?.as_int();
-        // Negative exponents and out-of-range integer powers require PHP
-        // floating-point semantics, deliberately unsupported in this slice.
-        let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
-        base.as_int()
-            .checked_pow(exponent)
-            .map(Value::Int)
-            .ok_or(EvalError::UnsupportedFloat)
+        Self::pow_int(base.as_int(), exponent).map(Value::Int)
     }
 
     fn multiplicative(&mut self, depth: usize) -> Result<Value, EvalError> {
@@ -1296,6 +1302,48 @@ mod tests {
             );
         }
         let exhausted = format!("$x=1;{}echo $x;", "$x<<=0;".repeat(64));
+        assert_eq!(
+            Parser::new(exhausted.as_bytes()).evaluate(),
+            Err(EvalError::AssignmentLimit)
+        );
+    }
+
+    #[test]
+    fn php84_compound_power_assignment_and_boundaries() {
+        for (program, expected) in [
+            ("$x=2; $x**=3; echo $x;", Value::Int(8)),
+            ("$x=-2; $x**=3; echo $x;", Value::Int(-8)),
+            ("$x=2; $x**=3**2; echo $x;", Value::Int(512)),
+            ("$x=3; $x**=2+1; echo $x;", Value::Int(27)),
+            ("$x=2; $x**=0; echo $x;", Value::Int(1)),
+            ("$x=0; $x**=0; echo $x;", Value::Int(1)),
+            ("$x=true; $x**=3; echo is_int($x);", Value::Bool(true)),
+            ("$x=false; $x**=0; echo $x;", Value::Int(1)),
+            ("$x=null; $x**=0; echo $x;", Value::Int(1)),
+            ("$x=-1; $x**=63; echo $x;", Value::Int(-1)),
+            ("$x=2; $x**=3; $x**=2; echo $x;", Value::Int(64)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("$x**=2; echo $x;", EvalError::UnknownVariable),
+            ("$x=2; $x**=; echo $x;", EvalError::Syntax),
+            ("$x=2; $x** =3; echo $x;", EvalError::Syntax),
+            ("$x=2; $x**=-1; echo $x;", EvalError::UnsupportedFloat),
+            ("$x=2; $x**=63; echo $x;", EvalError::UnsupportedFloat),
+            ("$x=2; $x**=1/0; echo $x;", EvalError::DivisionByZero),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
+        let exhausted = format!("$x=1;{}echo $x;", "$x**=1;".repeat(64));
         assert_eq!(
             Parser::new(exhausted.as_bytes()).evaluate(),
             Err(EvalError::AssignmentLimit)
