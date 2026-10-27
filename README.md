@@ -820,6 +820,22 @@ a Zend `ArithmeticError`. The CLI oracle compares fixed and generated
 shift cases, including negative-count exception categories, against PHP 8.4.
 This remains a deliberately limited evaluator, not a PHP VM.
 
+### PHP 8.4 `intdiv()` builtin (research)
+
+The bounded `php_eval` interpreter now recognizes case-insensitive
+`intdiv(numerator, denominator)` with exactly two integer/boolean expression
+arguments, including nested calls and variables. PHP 8.4 truncates signed
+integer division toward zero, unlike the `/` operator, which can produce a
+float. For example, `intdiv(-7, 3)` returns `-2`; `intdiv(7, 3)`
+returns `2`. The interpreter checks the zero divisor and the signed
+`PHP_INT_MIN / -1` overflow separately, returning bounded errors without
+publishing partial output. It does not instantiate Zend exceptions.
+Malformed calls, missing arguments, unsupported names and resource-limit
+exhaustion fail closed. The PHP 8.4 CLI differential suite compares fixed and
+seeded generated calls and verifies `DivisionByZeroError` and
+`ArithmeticError` on the reference runtime. Other builtins and arbitrary
+function definitions/calls remain unsupported.
+
 ### PHP 8.4 spaceship comparison
 
 The research `php_eval` binary supports `<=>` for its bounded integer and
