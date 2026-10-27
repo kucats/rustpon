@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/min()/max()/is_int()/is_bool()/boolval()/intval() builtins (including is_integer/is_long aliases).
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/min()/max()/is_int()/is_bool()/boolval()/intval() builtins (including is_integer/is_long aliases and intval's optional scalar base).
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -386,8 +386,9 @@ impl<'a> Parser<'a> {
     }
 
     // Explicit scalar conversions preserve the PHP return type, unlike
-    // arithmetic's implicit boolean-to-integer coercion. The optional
-    // intval(value, base) string overload is intentionally unsupported.
+    // arithmetic's implicit boolean-to-integer coercion. PHP 8.4 evaluates
+    // intval(value, base) even for integer/bool values, but ignores the base
+    // when converting these types. String base conversion remains unsupported.
     fn builtin_scalar_conversion(
         &mut self,
         depth: usize,
@@ -403,6 +404,12 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         let value = self.bitwise_or(depth + 1)?;
+        if !boolean && self.consume(b',') {
+            // The second argument is evaluated (including any errors), even
+            // though PHP ignores the base for int/bool input. Parsing it
+            // through the ordinary grammar preserves depth and work limits.
+            let _base = self.bitwise_or(depth + 1)?.as_int();
+        }
         if !self.consume(b')') {
             return Err(EvalError::Syntax);
         }
@@ -938,6 +945,25 @@ mod tests {
             ),
             ("echo intval(2<1);", Value::Int(0)),
             ("echo intval(boolval(-3));", Value::Int(1)),
+            ("echo intval(7,2);", Value::Int(7)),
+            ("echo intval(-42,16);", Value::Int(-42)),
+            ("echo intval(123,0);", Value::Int(123)),
+            ("echo intval(123,1);", Value::Int(123)),
+            ("echo intval(123,999);", Value::Int(123)),
+            ("echo intval(123,-100);", Value::Int(123)),
+            ("echo intval(true,37);", Value::Int(1)),
+            ("echo intval(false,-1);", Value::Int(0)),
+            ("echo intval(123,true);", Value::Int(123)),
+            ("echo intval(123,false);", Value::Int(123)),
+            ("echo intval(9223372036854775807,-1);", Value::Int(i64::MAX)),
+            (
+                "echo intval(0-9223372036854775807-1,2);",
+                Value::Int(i64::MIN),
+            ),
+            ("echo intval(intdiv(-7,2),-42);", Value::Int(-3)),
+            ("echo is_int(intval(true,37));", Value::Bool(true)),
+            ("echo intval(7,intval(true));", Value::Int(7)),
+            ("$x=7; $base=-2; echo intval($x,$base);", Value::Int(7)),
             ("echo boolval(intval(false));", Value::Bool(false)),
             ("echo is_int(intval(true));", Value::Bool(true)),
             ("echo is_bool(boolval(5));", Value::Bool(true)),
@@ -961,7 +987,11 @@ mod tests {
             "echo boolval();",
             "echo intval();",
             "echo boolval(1,2);",
-            "echo intval(1,2);", // Valid PHP base overload, outside this subset.
+            "echo intval(1,2,3);",
+            "echo intval(1,);",
+            "echo intval(1,,2);",
+            "echo intval(1,$missing);",
+            "echo intval(1,1/0);",
             "echo boolval(1,);",
             "echo intval(,1);",
             "echo boolvalue(1);",
@@ -979,6 +1009,16 @@ mod tests {
         assert_eq!(
             Parser::new(nested.as_bytes()).evaluate(),
             Err(EvalError::DepthLimit)
+        );
+        let deep_base = format!("echo intval(1,{}1{});", "(".repeat(33), ")".repeat(33));
+        assert_eq!(
+            Parser::new(deep_base.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
+        );
+        let expensive_base = format!("echo intval(1,{});", vec!["1"; 130].join("+"));
+        assert_eq!(
+            Parser::new(expensive_base.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
         );
     }
 
