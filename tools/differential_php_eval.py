@@ -23,6 +23,15 @@ FIXED = [
 ]
 
 
+LOGICAL_NOT_PROGRAMS = [
+    "echo !true;", "echo !false;", "echo !0;", "echo !1;",
+    "echo !-1;", "echo !!true;", "echo !!false;",
+    "echo !(1<2);", "echo !2**0;", "echo !2**2;",
+    "echo !false===true;", "echo !false+2;", "echo !1<2;",
+    "echo !true==false;", "echo !true!==false;",
+    "$flag=false; echo !$flag;", "$x=0; $x=!$x; echo $x;",
+]
+
 ASSIGNMENT_PROGRAMS = [
     "$x=7; echo $x;",
     "$x=7; $x=$x+2; echo $x*3;",
@@ -165,9 +174,14 @@ def main():
         booleans.append(
             f"$flag=({a} {op} {b}); echo ($flag+{c})===({c}+({a} {op} {b}));"
         )
+    logical_not = list(LOGICAL_NOT_PROGRAMS)
+    for value in range(-10, 11):
+        logical_not.append(f"$x={value}; echo !($x<0);")
+        logical_not.append(f"$x={value}; echo !!$x;")
     cases = (
         [f"echo {expr};" for expr in expressions]
-        + variable_programs + radix_programs + arithmetic_programs + comparisons + powers + booleans
+        + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
+        + booleans + logical_not
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -223,7 +237,10 @@ def main():
         b"<?php echo truex;",
         b"<?php echo FALSE_1;",
         b"<?php echo true&&false;",
-        b"<?php echo !false;",
+        b"<?php echo !;",
+        b"<?php echo !();",
+        b"<?php echo !!!;",
+        b"<?php echo !$missing;",
         b"<?php echo true<false<true;",
         b"<?php echo (1<2;",
         b"<?php echo 1%0;",
