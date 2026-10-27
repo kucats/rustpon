@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments/unsets followed by one echo;
+//! Supported grammar: bounded scalar assignments (including +=/-=) and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -244,14 +244,44 @@ impl<'a> Parser<'a> {
             return Err(EvalError::AssignmentLimit);
         }
         let name = self.variable_name()?;
-        if !self.consume(b'=') || self.peek() == Some(b'=') {
+        self.skip_space();
+        // Compound assignment is a single PHP token: whitespace between
+        // the operator and '=' must not be accepted. The RHS is evaluated
+        // before the existing binding is updated.
+        let compound_add = if self.source[self.offset..].starts_with(b"+=") {
+            self.offset += 2;
+            Some(true)
+        } else if self.source[self.offset..].starts_with(b"-=") {
+            self.offset += 2;
+            Some(false)
+        } else if self.consume(b'=') && self.peek() != Some(b'=') {
+            None
+        } else {
             return Err(EvalError::Syntax);
-        }
+        };
         self.charge()?;
         let value = self.bitwise_or(0)?;
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
+        let value = if let Some(add) = compound_add {
+            // Undefined-variable warnings and float promotion are not
+            // modeled. Reject both instead of silently inventing a value.
+            let previous = self
+                .bindings
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| *value)
+                .ok_or(EvalError::UnknownVariable)?;
+            let result = if add {
+                previous.as_int().checked_add(value.as_int())
+            } else {
+                previous.as_int().checked_sub(value.as_int())
+            };
+            Value::Int(result.ok_or(EvalError::Overflow)?)
+        } else {
+            value
+        };
         if let Some((_, slot)) = self.bindings.iter_mut().find(|(key, _)| *key == name) {
             *slot = value;
         } else {
@@ -1005,6 +1035,55 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_compound_add_sub_assignments_and_boundaries() {
+        for (program, expected) in [
+            ("$x=1; $x+=2; echo $x;", Value::Int(3)),
+            ("$x=10; $x-=3; echo $x;", Value::Int(7)),
+            ("$x=2; $x+=3*4; echo $x;", Value::Int(14)),
+            ("$x=2; $x-=1<2; echo $x;", Value::Int(1)),
+            ("$x=true; $x+=2; echo is_int($x);", Value::Bool(true)),
+            ("$x=false; $x-=1; echo $x;", Value::Int(-1)),
+            ("$x=null; $x-=3; echo $x;", Value::Int(-3)),
+            ("$x=5; $x+=true; echo $x;", Value::Int(6)),
+            (
+                "$x=0-9223372036854775807-1; $x+=1; echo $x;",
+                Value::Int(i64::MIN + 1),
+            ),
+            (
+                "$x=9223372036854775807; $x-=1; echo $x;",
+                Value::Int(i64::MAX - 1),
+            ),
+            ("$x=1; $x+=2; $x-=3; echo is_int($x);", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("$x+=1; echo $x;", EvalError::UnknownVariable),
+            ("$x=1; $x+=; echo $x;", EvalError::Syntax),
+            ("$x=1; $x+ =2; echo $x;", EvalError::Syntax),
+            ("$x=1; $x-=1/0; echo $x;", EvalError::DivisionByZero),
+            (
+                "$x=9223372036854775807; $x+=1; echo $x;",
+                EvalError::Overflow,
+            ),
+            (
+                "$x=0-9223372036854775807-1; $x-=1; echo $x;",
+                EvalError::Overflow,
+            ),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
     }
 
     #[test]
