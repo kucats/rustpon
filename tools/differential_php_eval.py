@@ -243,6 +243,21 @@ SPACESHIP_PROGRAMS = [
     "$x=1<=>2; echo $x+2;",
 ]
 
+COMPOUND_ASSIGNMENT_PROGRAMS = [
+    "$x=1; $x+=2; echo $x;",
+    "$x=10; $x-=3; echo $x;",
+    "$x=2; $x+=3*4; echo $x;",
+    "$x=2; $x-=1<2; echo $x;",
+    "$x=true; $x+=2; echo is_int($x);",
+    "$x=false; $x-=1; echo $x;",
+    "$x=null; $x-=3; echo $x;",
+    "$x=5; $x+=true; echo $x;",
+    "$x=0-9223372036854775807-1; $x+=1; echo $x;",
+    "$x=9223372036854775807; $x-=1; echo $x;",
+    "$x=1; $x+=2; $x-=3; echo is_int($x);",
+]
+
+
 ASSIGNMENT_PROGRAMS = [
     "$x=7; echo $x;",
     "$x=7; $x=$x+2; echo $x*3;",
@@ -306,6 +321,15 @@ def main():
         subtract = rng.randrange(-10, 11)
         variable_programs.append(
             f"$x={start}; $y={delta}; $x=$x+$y; echo ($x - ({subtract}))*2;"
+        )
+    compound_assignments = list(COMPOUND_ASSIGNMENT_PROGRAMS)
+    for _ in range(128):
+        start = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-100000, 100001)
+        extra = rng.randrange(-50, 51)
+        operator = rng.choice(["+=", "-="])
+        compound_assignments.append(
+            f"$x={start}; $y={delta}; $x {operator} $y+({extra}); echo $x;"
         )
     radix_programs = []
     for _ in range(128):
@@ -507,7 +531,7 @@ def main():
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + null_programs + variable_probes + empty_expressions
-        + unset_programs
+        + unset_programs + compound_assignments
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -687,6 +711,13 @@ def main():
         b"<?php echo " + b"+".join([b"1"] * 130) + b";",
         b"<?php echo 1;" + b" " * 4096,
         b"<?php echo $missing;",
+        b"<?php $x+=1; echo $x;",
+        b"<?php $x=1; $x+=; echo $x;",
+        b"<?php $x=1; $x+ =2; echo $x;",
+        b"<?php $x=1; $x-=1/0; echo $x;",
+        # PHP promotes integer overflow to float; intentionally unsupported.
+        b"<?php $x=9223372036854775807; $x+=1; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; $x-=1; echo $x;",
         b"<?php $x=1; echo $missing;",
         b"<?php $x=$x+1; echo $x;",
         b"<?php $x==1; echo $x;",
