@@ -574,7 +574,10 @@ mod tests {
             );
         }
         for program in ["echo !;", "echo !();", "echo !!!;", "echo !$missing;"] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
     }
 
