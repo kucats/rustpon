@@ -98,6 +98,10 @@ def main():
         (3, b"a=1&b=2&c=3"),
         (2, b"a=1&a=2&b=3"),
         (2, b"a%5Bx%5D=1&a%5By%5D=2&b=3"),
+        (1, b"=ignored&a=2"),
+        (2, b"a=1&=ignored&b=2"),
+        (2, b"a=1&&b=2"),
+        (2, b"a=1&=ignored"),
     ]
     for limit, data in limited:
         expected = run([args.php_bin, "-d", f"max_input_vars={limit}", oracle], data)
@@ -112,6 +116,33 @@ def main():
         except (KeyError, ValueError) as exc:
             failures += 1
             print(f"FAIL max_input_vars={limit} body={data!r}: {exc}", file=sys.stderr)
+    # PHP counts syntactically present empty decoded names as variables.
+    # They consume quota slots without appearing in the published POST tree.
+    nul_limited = [
+        (1, b"%00ignored=1&a=2", None),
+        (2, b"a=1&%00ignored=2&b=3", None),
+        (2, b"a=1|%00ignored=2|b=3", "|"),
+        (2, b"a=1&%00ignored=2&&b=3", None),
+    ]
+    for limit, data, separators in nul_limited:
+        php_command = [args.php_bin, "-d", f"max_input_vars={limit}"]
+        rust_command = [str(args.rust_bin), "--php-max-input-vars", str(limit),
+                        "--php-nul-name-truncation"]
+        if separators is not None:
+            php_command += ["-d", f"arg_separator.input={separators}"]
+            rust_command += ["--php-arg-separators", separators]
+        expected = run(php_command + [oracle], data)
+        actual = run(rust_command, data)
+        try:
+            if expected.returncode or actual.returncode:
+                raise ValueError(f"exit PHP={expected.returncode} Rust={actual.returncode}")
+            lhs = json.loads(expected.stdout)
+            rhs = json.loads(actual.stdout)["post_tree"]
+            if lhs != rhs:
+                raise ValueError(f"PHP={lhs!r} Rust={rhs!r}")
+        except (KeyError, ValueError) as exc:
+            failures += 1
+            print(f"FAIL max_input_vars={limit} NUL body={data!r}: {exc}", file=sys.stderr)
     # PHP counts an over-depth field against max_input_vars even when the
     # variable is dropped. Compare the full tagged tree, not only exit codes.
     nested = [
@@ -261,7 +292,7 @@ def main():
         if result.returncode == 0 or result.stdout:
             failures += 1
             print(f"FAIL {label}: expected nonzero exit without stdout", file=sys.stderr)
-    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, {len(custom_separator_cases)} custom separators, {len(nul_name_cases)} opt-in NUL names, 3 strict, {failures} failures")
+    print(f"PHP differential: {len(cases)} compatibility, {len(limited)} max_input_vars, {len(nul_limited)} NUL/max_input_vars, {len(nested)} nesting, {len(combined)} combined, {len(semicolon_cases)} semicolon, 1 semicolon/vars, {len(custom_separator_cases)} custom separators, {len(nul_name_cases)} opt-in NUL names, 3 strict, {failures} failures")
     return int(failures != 0)
 if __name__ == "__main__":
     sys.exit(main())
