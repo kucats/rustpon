@@ -45,6 +45,21 @@ BITWISE_NOT_PROGRAMS = [
 ]
 
 
+BITWISE_BINARY_PROGRAMS = [
+    "echo 6&3;", "echo 6^3;", "echo 6|3;",
+    "echo 1&2|4^3;", "echo 1|2^3&4;", "echo 7^2|8&3;",
+    "echo 1^2^3;", "echo (1&3)===1;", "echo 1&3===1;",
+    "echo 1&3==1;", "echo 1^3==1;", "echo 1|3==1;",
+    "echo 1|2<3;", "echo true&false;", "echo true^false;",
+    "echo true|false;", "echo 1&true;", "echo 1^true;",
+    "echo 1|true;", "echo -1&0x7fff_ffff_ffff_ffff;",
+    "echo ~0^0x7fff_ffff_ffff_ffff;",
+    "$x=6; $x=$x&3; echo $x;",
+    "$x=6; $x=$x^3; echo $x;",
+    "$x=6; $x=$x|3; echo $x;",
+]
+
+
 SPACESHIP_PROGRAMS = [
     "echo 1<=>2;", "echo 2<=>2;", "echo 3<=>2;",
     "echo true<=>2;", "echo false<=>-1;", "echo false<=>0;",
@@ -208,6 +223,17 @@ def main():
         value = rng.randrange(-500, 501)
         offset = rng.randrange(-100, 101)
         bitwise_not.append(f"$x={value}; echo ~($x+({offset}));")
+    bitwise_binary = list(BITWISE_BINARY_PROGRAMS)
+    for _ in range(128):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        op = rng.choice(["&", "^", "|"])
+        bitwise_binary.append(f"$x={left}; $y={right}; echo $x {op} $y;")
+    for _ in range(32):
+        left = rng.randrange(0, 256)
+        middle = rng.randrange(0, 256)
+        right = rng.randrange(0, 256)
+        bitwise_binary.append(f"echo {left} | {middle} ^ {right} & 7;")
     spaceship = list(SPACESHIP_PROGRAMS)
     for _ in range(64):
         left = rng.randrange(-500, 501)
@@ -220,7 +246,7 @@ def main():
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
-        + booleans + logical_not + bitwise_not + spaceship
+        + booleans + logical_not + bitwise_not + bitwise_binary + spaceship
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -279,6 +305,16 @@ def main():
         b"<?php echo truex;",
         b"<?php echo FALSE_1;",
         b"<?php echo true&&false;",
+        b"<?php echo 1&;",
+        b"<?php echo 1^;",
+        b"<?php echo 1|;",
+        b"<?php echo &1;",
+        b"<?php echo ^1;",
+        b"<?php echo |1;",
+        b"<?php echo 1&&2;",
+        b"<?php echo 1||2;",
+        b"<?php echo 1&$missing;",
+        b"<?php echo 1^$missing;",
         b"<?php echo !;",
         b"<?php echo !();",
         b"<?php echo !!!;",
@@ -337,7 +373,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise-not differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, {failures} failures"
     )
