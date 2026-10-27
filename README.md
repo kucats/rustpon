@@ -790,6 +790,23 @@ pretending to implement Zend exception objects. No partial stdout is emitted.
 The CLI differential suite checks 85 additional fixed/generated programs
 and verifies five boolean TypeError cases against PHP CLI.
 
+### PHP 8.4 binary integer bitwise operators (research)
+
+The bounded `php_eval` interpreter now supports binary `&`, `^`, and `|`
+over signed 64-bit integer values. PHP 8.4 coerces boolean operands to
+integers for these binary operators, unlike unary `~` (which raises
+`TypeError` for booleans). Operator precedence follows PHP 8.4:
+comparisons bind tighter than `&`, followed by `^`, then `|`.
+Parenthesized expressions and existing bounded variable assignments
+use the same evaluation rules. For example, `1 & 3 == 1` evaluates
+to integer `0`, while `(1 & 3) === 1` evaluates to boolean `true`.
+The prototype still rejects unsupported `&&` and `||` syntax, missing
+operands, and unknown variables without publishing partial stdout.
+
+The PHP 8.4 CLI differential suite compares fixed precedence and
+boolean-coercion examples plus deterministic generated cases. This is
+not a general PHP language implementation or Zend/SAPI integration.
+
 ### PHP 8.4 spaceship comparison
 
 The research `php_eval` binary supports `<=>` for its bounded integer and
