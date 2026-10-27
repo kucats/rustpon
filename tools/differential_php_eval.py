@@ -171,6 +171,30 @@ NULL_PROGRAMS = [
     "$x=NULL; echo boolval($x);",
 ]
 
+CAST_PROGRAMS = [
+    "echo (int)true;", "echo (integer)false;",
+    "echo (bool)-3;", "echo (boolean)null;",
+    "echo ( BOOL ) 0;", "echo is_bool((bool)2);",
+    "echo is_int((int)true);", "echo (int)(1<2);",
+    "echo (int)2**3;", "echo (int)-2**2;",
+    "echo (bool)0**0;", "echo (bool)0**2;",
+    "echo (int)(bool)true;", "echo (bool)(int)-7;",
+    "$x=null; $x=(int)$x; echo is_int($x);",
+    "$x=0; $x=(bool)$x; echo is_bool($x);",
+    "echo (int)0-1;", "echo (bool)false===false;",
+    "echo (int)(0-9223372036854775807-1);",
+    "echo (bool) (1<2);", "echo (int) 2**3+1;",
+    "echo (int)~2;", "echo (int)false==0;",
+    "echo (int)boolval(3);", "echo (int)(1<<2);",
+    "echo (bool)(1&2);", "echo (int)true+3;",
+    "echo (boolean)(int)0;", "echo (int) (BOOL) 1;",
+    "echo (int) (int) true;", "echo (int) (1<2) + 1;",
+    "echo is_bool((bool)0**0);", "echo is_int((int)NULL);",
+    "echo (int)intdiv(-7,3);", "echo (bool)min(false,1);",
+    "echo (int)max(true,3);",
+]
+
+
 SCALAR_CONVERSION_PROGRAMS = [
     "echo boolval(0);", "echo boolval(1);", "echo boolval(-1);",
     "echo boolval(false);", "echo boolval(true);",
@@ -642,6 +666,15 @@ def main():
         scalar_conversions.append(
             f"$x={value}; echo is_int(intval(boolval($x),{base}));"
         )
+    casts = list(CAST_PROGRAMS)
+    for _ in range(96):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        cast = rng.choice(["int", "integer", "INT", "bool", "boolean", "BOOL"])
+        casts.append(f"$x={value}; echo ({cast})($x+({other}));")
+        casts.append(f"$x={value}; echo is_bool(({cast})$x);")
+        casts.append(f"echo ({cast})({value}<{other});")
+        casts.append(f"echo ({cast})({value}**2);")
     extrema_programs = list(MIN_MAX_PROGRAMS)
     for _ in range(192):
         function = rng.choice(["min", "max", "MIN", "MAX"])
@@ -658,7 +691,7 @@ def main():
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
-        + scalar_conversions + null_programs + variable_probes + empty_expressions
+        + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments
     )
     failures = 0
@@ -791,6 +824,21 @@ def main():
         b"<?php echo boolval($missing);",
         b"<?php echo intval($missing);",
         b"<?php echo boolval(1;",
+        b"<?php echo (int);",
+        b"<?php echo (bool);",
+        b"<?php echo (integer)();",
+        b"<?php echo (int)$missing;",
+        b"<?php echo (bool)(1/2);",
+        b"<?php echo (int)2**-1;",
+        b"<?php echo (bool)2**63;",
+        b"<?php echo (string)1;",
+        b"<?php echo (float)1;",
+        b"<?php echo (int)1+;",
+        b"<?php echo (int)(1+);",
+        b"<?php echo (bool)truex;",
+        b"<?php echo (int)(1/0);",
+        b"<?php echo " + b"(int)" * 33 + b"1;",
+        b"<?php echo " + b"+".join([b"(int)1"] * 100) + b";",
         b"<?php echo min();",
         b"<?php echo max();",
         b"<?php echo min(1);",
@@ -979,7 +1027,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/empty-expression/unset-lifecycle differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

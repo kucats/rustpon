@@ -976,6 +976,20 @@ semantics remain outside this research-only subset. In particular,
 `is_numeric()` recognizes supported integers but has no numeric-string or
 floating-point support; `is_scalar(null)` is false.
 
+### PHP 8.4 scalar `(int)` and `(bool)` casts (research)
+
+The bounded `php_eval` interpreter now recognizes PHP 8.4's
+case-insensitive `(int)` / `(integer)` and `(bool)` / `(boolean)` casts,
+including whitespace inside the cast parentheses, nesting, and casts of
+variables and expressions. Integer casts preserve the signed 64-bit range;
+boolean casts use PHP truthiness and preserve a boolean type tag. Casts
+share the existing unary precedence, depth/work quotas and fail-closed
+output policy. For example, `(int)-2**2` yields `-4`, while
+`is_bool((bool)2)` yields `true`. The PHP CLI differential corpus
+covers case variants, boundary values, precedence, nested casts and
+invalid/unsupported syntax. String, float, array and object casts are
+not implemented; this is not a general PHP runtime.
+
 ### PHP 8.4 explicit `boolval()` and `intval()` (research)
 
 The bounded `php_eval` evaluator supports case-insensitive

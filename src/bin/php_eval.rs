@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=) and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
+//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -736,9 +736,58 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // PHP 8.4 scalar casts bind at unary precedence, outside powers.
+    // Only int/bool/null operands exist in this research evaluator; string,
+    // float, array and object casts remain deliberately unsupported.
+    fn scalar_cast(&mut self, depth: usize) -> Result<Option<Value>, EvalError> {
+        self.skip_space();
+        let checkpoint = self.offset;
+        if self.peek() != Some(b'(') {
+            return Ok(None);
+        }
+        self.offset += 1;
+        self.skip_space();
+        let start = self.offset;
+        while self.peek().is_some_and(|byte| byte.is_ascii_alphabetic()) {
+            self.offset += 1;
+        }
+        let name = &self.source[start..self.offset];
+        let boolean = if name.eq_ignore_ascii_case(b"bool")
+            || name.eq_ignore_ascii_case(b"boolean")
+        {
+            Some(true)
+        } else if name.eq_ignore_ascii_case(b"int")
+            || name.eq_ignore_ascii_case(b"integer")
+        {
+            Some(false)
+        } else {
+            None
+        };
+        self.skip_space();
+        let Some(boolean) = boolean else {
+            self.offset = checkpoint;
+            return Ok(None);
+        };
+        if self.peek() != Some(b')') {
+            self.offset = checkpoint;
+            return Ok(None);
+        }
+        self.offset += 1;
+        self.charge()?;
+        let operand = self.unary(depth + 1)?;
+        Ok(Some(if boolean {
+            Value::Bool(operand.as_bool())
+        } else {
+            Value::Int(operand.as_int())
+        }))
+    }
+
     fn unary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
+        }
+        if let Some(value) = self.scalar_cast(depth)? {
+            return Ok(value);
         }
         if self.consume(b'+') {
             self.charge()?;
@@ -1736,6 +1785,88 @@ mod tests {
         let too_many = format!("echo min({});", "1,".repeat(256) + "1");
         assert_eq!(
             Parser::new(too_many.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn php84_integer_boolean_casts_precedence_and_resource_limits() {
+        for (program, expected) in [
+            ("echo (int)true;", Value::Int(1)),
+            ("echo (integer)false;", Value::Int(0)),
+            ("echo (bool)-3;", Value::Bool(true)),
+            ("echo (boolean)null;", Value::Bool(false)),
+            ("echo ( BOOL ) 0;", Value::Bool(false)),
+            ("echo is_bool((bool)2);", Value::Bool(true)),
+            ("echo is_int((int)true);", Value::Bool(true)),
+            ("echo (int)(1<2);", Value::Int(1)),
+            ("echo (int)2**3;", Value::Int(8)),
+            ("echo (int)-2**2;", Value::Int(-4)),
+            ("echo (bool)0**0;", Value::Bool(true)),
+            ("echo (bool)0**2;", Value::Bool(false)),
+            ("echo (int)(bool)true;", Value::Int(1)),
+            ("echo (bool)(int)-7;", Value::Bool(true)),
+            ("$x=null; $x=(int)$x; echo is_int($x);", Value::Bool(true)),
+            ("$x=0; $x=(bool)$x; echo is_bool($x);", Value::Bool(true)),
+            ("echo (int)0-1;", Value::Int(-1)),
+            ("echo (bool)false===false;", Value::Bool(true)),
+            (
+                "echo (int)(0-9223372036854775807-1);",
+                Value::Int(i64::MIN),
+            ),
+            ("echo (bool) (1<2);", Value::Bool(true)),
+            ("echo (int) 2**3+1;", Value::Int(9)),
+            ("echo (int)~2;", Value::Int(-3)),
+            ("echo (int)false==0;", Value::Bool(true)),
+            ("echo (int)boolval(3);", Value::Int(1)),
+            ("echo (int)(1<<2);", Value::Int(4)),
+            ("echo (bool)(1&2);", Value::Bool(false)),
+            ("echo (int)true+3;", Value::Int(4)),
+            ("echo (boolean)(int)0;", Value::Bool(false)),
+            ("echo (int) (BOOL) 1;", Value::Int(1)),
+            ("echo (int) (int) true;", Value::Int(1)),
+            ("echo (int) (1<2) + 1;", Value::Int(2)),
+            ("echo is_bool((bool)0**0);", Value::Bool(true)),
+            ("echo is_int((int)NULL);", Value::Bool(true)),
+            ("echo (int)intdiv(-7,3);", Value::Int(-2)),
+            ("echo (bool)min(false,1);", Value::Bool(false)),
+            ("echo (int)max(true,3);", Value::Int(1)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("echo (int);", EvalError::Syntax),
+            ("echo (bool);", EvalError::Syntax),
+            ("echo (integer)();", EvalError::Syntax),
+            ("echo (int)$missing;", EvalError::UnknownVariable),
+            ("echo (bool)(1/2);", EvalError::UnsupportedFloat),
+            ("echo (int)2**-1;", EvalError::UnsupportedFloat),
+            ("echo (bool)2**63;", EvalError::UnsupportedFloat),
+            ("echo (string)1;", EvalError::Syntax),
+            ("echo (float)1;", EvalError::Syntax),
+            ("echo (int)1+;", EvalError::Syntax),
+            ("echo (int)(1+);", EvalError::Syntax),
+            ("echo (bool)truex;", EvalError::Syntax),
+            ("echo (int)(1/0);", EvalError::DivisionByZero),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
+        let nested = format!("echo {}1;", "(int)".repeat(33));
+        assert_eq!(
+            Parser::new(nested.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
+        );
+        let expensive = format!("echo {};", vec!["(int)1"; 100].join("+"));
+        assert_eq!(
+            Parser::new(expensive.as_bytes()).evaluate(),
             Err(EvalError::WorkLimit)
         );
     }
