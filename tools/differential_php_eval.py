@@ -113,6 +113,17 @@ SCALAR_CONVERSION_PROGRAMS = [
     "echo INTVAL(9223372036854775807);",
     "echo intval(0-9223372036854775807-1);",
     "echo intval(2<1);", "echo intval(boolval(-3));",
+    "echo intval(7,2);", "echo intval(-42,16);",
+    "echo intval(123,0);", "echo intval(123,1);",
+    "echo intval(123,999);", "echo intval(123,-100);",
+    "echo intval(true,37);", "echo intval(false,-1);",
+    "echo intval(123,true);", "echo intval(123,false);",
+    "echo intval(9223372036854775807,-1);",
+    "echo intval(0-9223372036854775807-1,2);",
+    "echo intval(intdiv(-7,2),-42);",
+    "echo is_int(intval(true,37));",
+    "echo intval(7,intval(true));",
+    "$x=7; $base=-2; echo intval($x,$base);",
     "echo boolval(intval(false));",
     "echo is_int(intval(true));", "echo is_bool(boolval(5));",
     "echo is_bool(intval(true));", "echo is_int(boolval(1));",
@@ -372,6 +383,13 @@ def main():
         value = rng.randrange(-100000, 100001)
         scalar_conversions.append(f"$x={value}; echo is_bool(boolval($x));")
         scalar_conversions.append(f"$x={value}; echo is_int(intval($x));")
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        base = rng.choice([-100, -1, 0, 1, 2, 8, 10, 16, 36, 37, 999])
+        scalar_conversions.append(f"$x={value}; echo intval($x,{base});")
+        scalar_conversions.append(
+            f"$x={value}; echo is_int(intval(boolval($x),{base}));"
+        )
     extrema_programs = list(MIN_MAX_PROGRAMS)
     for _ in range(192):
         function = rng.choice(["min", "max", "MIN", "MAX"])
@@ -474,7 +492,11 @@ def main():
         b"<?php echo boolval();",
         b"<?php echo intval();",
         b"<?php echo boolval(1,2);",
-        b"<?php echo intval(1,2);",  # Valid PHP base overload; not in this subset.
+        b"<?php echo intval(1,2,3);",
+        b"<?php echo intval(1,);",
+        b"<?php echo intval(1,,2);",
+        b"<?php echo intval(1,$missing);",
+        b"<?php echo intval(1,1/0);",
         b"<?php echo boolval(1,);",
         b"<?php echo intval(,1);",
         b"<?php echo boolvalue(1);",
