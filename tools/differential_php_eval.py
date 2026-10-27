@@ -295,6 +295,22 @@ COMPOUND_ASSIGNMENT_PROGRAMS = [
     "$x=7; $x^=false; echo $x;",
     "$x=0; $x&=null; echo is_int($x);",
     "$x=3; $x&=7; $x^=2; $x|=8; echo $x;",
+    "$x=1; $x<<=3; echo $x;",
+    "$x=-8; $x>>=2; echo $x;",
+    "$x=1; $x<<=63; echo $x;",
+    "$x=-1; $x>>=64; echo $x;",
+    "$x=1; $x<<=64; echo $x;",
+    "$x=1; $x<<=65; echo $x;",
+    "$x=true; $x<<=2; echo is_int($x);",
+    "$x=null; $x>>=2; echo is_int($x);",
+    "$x=7; $x>>=1+1; echo $x;",
+    "$x=1; $x<<=2|4; echo $x;",
+    "$x=1; $x<<=2<<1; echo $x;",
+    "$x=-1; $x<<=63; echo $x;",
+    "$x=0-9223372036854775807-1; $x>>=63; echo $x;",
+    "$x=1; $x<<=true; echo $x;",
+    "$x=4; $x>>=false; echo $x;",
+    "$x=1; $x<<=2; $x>>=1; echo $x;",
 ]
 
 
@@ -388,6 +404,16 @@ def main():
         operator = rng.choice(["&=", "^=", "|="])
         compound_assignments.append(
             f"$x={start}; $y={rhs}; $x {operator} ($y+({delta})); echo $x;"
+        )
+    # Compound shifts use the same fixed-width signed semantics as binary
+    # shifts, including counts >= 64 and negative left operands.
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        count = rng.randrange(0, 76)
+        extra = rng.randrange(0, 5)
+        operator = rng.choice(["<<=", ">>="])
+        compound_assignments.append(
+            f"$x={start}; $y={count}; $x {operator} ($y+({extra})); echo $x;"
         )
     radix_programs = []
     for _ in range(128):
@@ -797,6 +823,14 @@ def main():
         b"<?php $x=2; $x|=$missing; echo $x;",
         b"<?php $x=2; $x&=3&&4; echo $x;",
         b"<?php $x=2; $x^=3||4; echo $x;",
+        b"<?php $x<<=2; echo $x;",
+        b"<?php $x>>=2; echo $x;",
+        b"<?php $x=2; $x<<=; echo $x;",
+        b"<?php $x=2; $x>>=; echo $x;",
+        b"<?php $x=2; $x<< =3; echo $x;",
+        b"<?php $x=2; $x>> =3; echo $x;",
+        b"<?php $x=2; $x<<=1/0; echo $x;",
+        b"<?php $x=2; $x>>=$missing; echo $x;",
         # PHP promotes integer overflow to float; intentionally unsupported.
         b"<?php $x=9223372036854775807; $x+=1; echo $x;",
         b"<?php $x=0-9223372036854775807-1; $x-=1; echo $x;",
@@ -849,6 +883,9 @@ def main():
         b"<?php echo 1<<(0-2);",
         b"<?php $x=-1; echo 2>>$x;",
         b"<?php echo 1<<(-9223372036854775807);",
+        b"<?php $x=2; $x<<=-1; echo $x;",
+        b"<?php $x=2; $x>>=-1; echo $x;",
+        b"<?php $x=2; $x<<=(0-2); echo $x;",
     ]
     for index, code in enumerate(negative_shifts):
         php = execute([args.php_bin, "-d", "display_errors=0"], code)

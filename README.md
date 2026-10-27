@@ -915,8 +915,14 @@ saturate: left shifts return zero, while right shifts return zero or
 minus one according to the sign. Left shifts use signed 64-bit bit patterns,
 including `1 << 63 == PHP_INT_MIN`; right shifts are arithmetic.
 Negative counts fail closed as `NegativeShift` rather than constructing
-a Zend `ArithmeticError`. The CLI oracle compares fixed and generated
-shift cases, including negative-count exception categories, against PHP 8.4.
+a Zend `ArithmeticError`. The same checked shift implementation now handles
+`$x <<= expression;` and `$x >>= expression;` for previously defined
+integer, boolean and null variables. The right-hand expression is evaluated
+before assignment; the result is always tagged as an integer. The CLI oracle
+compares fixed edge cases and 96 seeded compound-shift programs, including
+signed 64-bit boundaries, saturated counts, type coercion, and negative-count
+exception categories, against PHP 8.4. Unknown variables, malformed compound
+tokens and exhausted assignment/work budgets fail closed.
 This remains a deliberately limited evaluator, not a PHP VM.
 
 ### PHP 8.4 `intdiv()` builtin (research)
