@@ -775,8 +775,20 @@ comparisons and integer exponentiation use the existing bounded recursion
 and work budgets. As in PHP 8.4, `!2**2` negates the power result, while
 `!false+2` evaluates to integer `3`. The CLI differential suite checks
 59 additional fixed and generated programs against PHP 8.4 and rejects
-malformed negations without publishing output. Short-circuit `&&` / `||`,
-bitwise `~`, and other PHP operators remain unsupported.
+malformed negations without publishing output. Short-circuit `&&` / `||`
+and other unsupported PHP operators remain unavailable.
+
+### PHP 8.4 integer bitwise negation
+
+The research `php_eval` evaluator also accepts unary `~` on **integer**
+operands. It uses signed 64-bit bitwise complement, including `PHP_INT_MIN`
+and `PHP_INT_MAX`, with the same unary/power precedence as PHP 8.4.
+For example, `~2**3` yields `-9`, and `~~0` yields `0`.
+PHP 8.4 throws `TypeError` for `~true` and other boolean operands;
+this prototype rejects them with a bounded `BitwiseTypeError` instead of
+pretending to implement Zend exception objects. No partial stdout is emitted.
+The CLI differential suite checks 85 additional fixed/generated programs
+and verifies five boolean TypeError cases against PHP CLI.
 
 ### PHP 8.4 spaceship comparison
 
