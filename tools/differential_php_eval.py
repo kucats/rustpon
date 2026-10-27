@@ -134,6 +134,19 @@ VARIABLE_PROBE_PROGRAMS = [
 ]
 
 
+UNSET_PROGRAMS = [
+    "$x=1; unset($x); echo isset($x);",
+    "$x=1; unset($x); echo empty($x);",
+    "$x=1; $y=2; unset($x,$y,); echo isset($x,$y);",
+    "$x=1; unset($x); $x=3; echo $x;",
+    "$x=1; unset($missing); echo $x;",
+    "$x=1; UNSET($x); echo empty($x);",
+    "$x=1; $y=2; unset($x); echo isset($y);",
+    "unset($missing); echo isset($missing);",
+    "unset($x,); echo 1;",
+]
+
+
 NULL_PROGRAMS = [
     "echo null;", "echo NULL;", "echo NuLl;",
     "echo null===null;", "echo null===0;", "echo null==0;",
@@ -436,6 +449,16 @@ def main():
         )
         variable_probes.append(f"$x={value}; echo empty($x);")
         variable_probes.append(f"$x={value}; echo isset($x,$missing);")
+    unset_programs = list(UNSET_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        unset_programs.append(f"$x={value}; unset($x); echo isset($x);")
+        unset_programs.append(f"$x={value}; unset($x); $x={other}; echo $x;")
+        unset_programs.append(
+            f"$x={value}; $y={other}; unset($x,$y,); echo empty($y);"
+        )
+        unset_programs.append(f"$x={value}; unset($missing); echo $x;")
     empty_expressions = list(EMPTY_EXPRESSION_PROGRAMS)
     for _ in range(128):
         value = rng.randrange(-500, 501)
@@ -484,6 +507,7 @@ def main():
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + null_programs + variable_probes + empty_expressions
+        + unset_programs
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -576,6 +600,15 @@ def main():
         b"<?php echo emptyx($x);",
         b"<?php echo isset($x[0]);",
         b"<?php echo empty($x->foo);",
+        b"<?php $x=1; unset($x); echo $x;",
+        b"<?php unset(); echo 1;",
+        b"<?php unset($x,,); echo 1;",
+        b"<?php unset($x,1); echo 1;",
+        b"<?php unset($x[0]); echo 1;",
+        b"<?php unset($GLOBALS); echo 1;",
+        b"<?php unset($x; echo 1;",
+        b"<?php unset($x) echo 1;",
+        b"<?php unsetx($x); echo 1;",
         b"<?php echo nullx;",
         b"<?php echo null();",
         b"<?php echo is_null();",
@@ -734,7 +767,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/empty-expression differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/empty-expression/unset-lifecycle differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
