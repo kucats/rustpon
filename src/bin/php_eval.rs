@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv() builtin.
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs() builtins.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -287,6 +287,27 @@ impl<'a> Parser<'a> {
             .ok_or(EvalError::IntegerDivisionOverflow)
     }
 
+    // PHP 8.4 abs() returns an integer for supported integer/boolean
+    // operands. PHP_INT_MIN promotes to float, which this VM rejects.
+    fn builtin_abs(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"abs".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let value = self.bitwise_or(depth + 1)?.as_int();
+        if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        value
+            .checked_abs()
+            .map(Value::Int)
+            .ok_or(EvalError::UnsupportedFloat)
+    }
+
     fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
@@ -315,6 +336,15 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 return self.builtin_intdiv(depth);
+            }
+            if remaining
+                .get(..b"abs".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"abs"))
+                && !remaining
+                    .get(b"abs".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_abs(depth);
             }
             for (literal, value) in [(b"true".as_slice(), true), (b"false".as_slice(), false)] {
                 let remaining = &self.source[self.offset..];
@@ -671,6 +701,43 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_abs_builtin_integer_bool_and_float_boundary() {
+        for (program, expected) in [
+            ("echo abs(0);", 0),
+            ("echo abs(7);", 7),
+            ("echo abs(-7);", 7),
+            ("echo abs(true);", 1),
+            ("echo abs(false);", 0),
+            ("echo ABS(-9);", 9),
+            ("echo abs(1-10);", 9),
+            ("echo abs(-7)+2;", 9),
+            ("echo abs(intdiv(-9,2));", 4),
+            ("echo intdiv(abs(-9),2);", 4),
+            ("echo abs(abs(-3));", 3),
+            ("echo abs(0-9223372036854775807);", i64::MAX),
+            ("$x=-8; echo abs($x);", 8),
+            ("$x=true; echo abs($x);", 1),
+        ] {
+            assert_eq!(eval(program), Ok(expected), "{program}");
+        }
+        assert_eq!(
+            eval("echo abs(0-9223372036854775807-1);"),
+            Err(EvalError::UnsupportedFloat)
+        );
+        for program in [
+            "echo abs();",
+            "echo abs(1,2);",
+            "echo abs(,1);",
+            "echo abs(1,);",
+            "echo abs(1;",
+            "echo absolute(-1);",
+            "echo abs($missing);",
+        ] {
+            assert!(eval(program).is_err(), "{program}");
+        }
     }
 
     #[test]
