@@ -863,6 +863,23 @@ The PHP CLI differential suite adds fixed and seeded generated exact-integer
 cases, plus malformed-call and minimum-integer rejection tests. No Zend
 function dispatch or float support is implied.
 
+### PHP 8.4 scalar `min()` and `max()` (research)
+
+The bounded `php_eval` evaluator now supports case-insensitive `min()`
+and `max()` with **two or more** integer/boolean expressions. The
+winner retains its original value type, and equal PHP loose-comparison
+values preserve the first argument: `min(true, 2)` returns boolean
+`true`, while `min(2, true)` returns integer `2`. Signed 64-bit
+extremes, nested functions, assignments and type predicates use the
+existing depth and work quotas; each argument also consumes work.
+Missing arguments, malformed lists and unknown variables fail closed.
+
+PHP also accepts a single array argument to these functions. Arrays,
+strings, floats and that overload are outside this prototype; no
+Zend function dispatcher or exception objects are implemented. The
+PHP 8.4 CLI differential suite compares fixed type-tie/boundary cases
+and 384 seeded scalar-program checks against the reference runtime.
+
 ### PHP 8.4 spaceship comparison
 
 The research `php_eval` binary supports `<=>` for its bounded integer and

@@ -70,6 +70,26 @@ ABS_PROGRAMS = [
 ]
 
 
+
+MIN_MAX_PROGRAMS = [
+    "echo min(2,3);", "echo max(2,3);",
+    "echo MIN(3,1,2);", "echo MAX(1,3,2);",
+    "echo min(1+2,2*2);", "echo max(1,2,3,4);",
+    "echo min(true,1);", "echo min(1,true);",
+    "echo max(true,2);", "echo max(2,true);",
+    "echo min(false,0);", "echo min(0,false);",
+    "echo min(false,-1);", "echo max(false,-1);",
+    "echo min(true,2,-1);", "echo max(2,true,-1);",
+    "echo min(0-9223372036854775807-1,9223372036854775807);",
+    "echo max(0-9223372036854775807-1,9223372036854775807);",
+    "echo min(max(1,2),3);", "echo max(min(1,2),3);",
+    "echo is_bool(min(true,2));", "echo is_int(max(2,true));",
+    "echo min(1<2,2);", "echo max(0,1<2);",
+    "$x=2; $y=true; echo min($x,$y);",
+    "$x=2; $y=true; echo max($y,$x);",
+]
+
+
 TYPE_PREDICATE_PROGRAMS = [
     "echo is_int(0);", "echo is_int(-1);", "echo is_int(true);",
     "echo is_bool(false);", "echo is_bool(1);",
@@ -324,11 +344,22 @@ def main():
         right = rng.randrange(-100, 101)
         predicate = rng.choice(["is_int", "is_bool"])
         type_predicates.append(f"$x=({left}<{right}); echo {predicate}($x);")
+    extrema_programs = list(MIN_MAX_PROGRAMS)
+    for _ in range(192):
+        function = rng.choice(["min", "max", "MIN", "MAX"])
+        count = rng.randrange(2, 6)
+        args = [
+            rng.choice(["true", "false", str(rng.randrange(-200, 201))])
+            for _ in range(count)
+        ]
+        expression = f"{function}({','.join(args)})"
+        extrema_programs.append(f"echo {expression};")
+        extrema_programs.append(f"echo is_bool({expression});")
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
-        + intdiv_programs + abs_programs + type_predicates
+        + intdiv_programs + abs_programs + type_predicates + extrema_programs
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -411,6 +442,18 @@ def main():
         b"<?php echo abs(1;",
         b"<?php echo absolute(-1);",
         b"<?php echo abs($missing);",
+        b"<?php echo min();",
+        b"<?php echo max();",
+        b"<?php echo min(1);",
+        b"<?php echo max(true);",
+        b"<?php echo min(1,);",
+        b"<?php echo max(,2);",
+        b"<?php echo min(1,2,);",
+        b"<?php echo max(1,2,3,);",
+        b"<?php echo min(1,2;",
+        b"<?php echo minx(1,2);",
+        b"<?php echo maximal(1,2);",
+        b"<?php echo max($missing,2);",
         # PHP promotes abs(PHP_INT_MIN) to float; intentionally unsupported.
         b"<?php echo abs(0-9223372036854775807-1);",
         b"<?php echo 1&;",
@@ -526,7 +569,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

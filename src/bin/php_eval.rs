@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/is_int()/is_bool() builtins (including is_integer/is_long aliases).
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/min()/max()/is_int()/is_bool() builtins (including is_integer/is_long aliases).
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -308,6 +308,47 @@ impl<'a> Parser<'a> {
             .ok_or(EvalError::UnsupportedFloat)
     }
 
+
+    // PHP min()/max() preserve the winning argument's original scalar tag.
+    // For loose-comparison ties (e.g. true versus 2), the first wins.
+    // The single-array overload and non-scalar values remain unsupported.
+    fn builtin_extrema(
+        &mut self,
+        depth: usize,
+        name: &[u8],
+        minimum: bool,
+    ) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += name.len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let mut selected = self.bitwise_or(depth + 1)?;
+        // PHP requires at least two arguments for the scalar overload.
+        if !self.consume(b',') {
+            return Err(EvalError::Syntax);
+        }
+        loop {
+            // Charge per argument as well as for its expression to bound
+            // long argument lists independently of the source byte limit.
+            self.charge()?;
+            let candidate = self.bitwise_or(depth + 1)?;
+            let (left, right) = selected.php_order(candidate);
+            if (minimum && right < left) || (!minimum && right > left) {
+                selected = candidate;
+            }
+            if self.consume(b')') {
+                return Ok(selected);
+            }
+            if !self.consume(b',') {
+                return Err(EvalError::Syntax);
+            }
+        }
+    }
+
     // PHP's scalar type predicates inspect the actual value tag. In
     // particular, an integer converted to truthiness is not a bool, and
     // a boolean accepted by arithmetic is not an int.
@@ -369,6 +410,21 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 return self.builtin_abs(depth);
+            }
+
+            for (name, minimum) in [
+                (b"min".as_slice(), true),
+                (b"max".as_slice(), false),
+            ] {
+                if remaining
+                    .get(..name.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                    && !remaining
+                        .get(name.len())
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    return self.builtin_extrema(depth, name, minimum);
+                }
             }
             for (name, integer) in [
                 (b"is_int".as_slice(), true),
@@ -741,6 +797,69 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+
+    #[test]
+    fn php84_min_max_scalar_comparisons_ties_and_resource_limits() {
+        for (program, expected) in [
+            ("echo min(2,3);", Value::Int(2)),
+            ("echo max(2,3);", Value::Int(3)),
+            ("echo MIN(3,1,2);", Value::Int(1)),
+            ("echo MAX(1,3,2);", Value::Int(3)),
+            ("echo min(1+2,2*2);", Value::Int(3)),
+            ("echo max(1,2,3,4);", Value::Int(4)),
+            ("echo min(true,1);", Value::Bool(true)),
+            ("echo min(1,true);", Value::Int(1)),
+            ("echo max(true,2);", Value::Bool(true)),
+            ("echo max(2,true);", Value::Int(2)),
+            ("echo min(false,0);", Value::Bool(false)),
+            ("echo min(0,false);", Value::Int(0)),
+            ("echo min(false,-1);", Value::Bool(false)),
+            ("echo max(false,-1);", Value::Int(-1)),
+            ("echo min(true,2,-1);", Value::Bool(true)),
+            ("echo max(2,true,-1);", Value::Int(2)),
+            ("echo min(0-9223372036854775807-1,9223372036854775807);", Value::Int(i64::MIN)),
+            ("echo max(0-9223372036854775807-1,9223372036854775807);", Value::Int(i64::MAX)),
+            ("echo min(max(1,2),3);", Value::Int(2)),
+            ("echo max(min(1,2),3);", Value::Int(3)),
+            ("echo is_bool(min(true,2));", Value::Bool(true)),
+            ("echo is_int(max(2,true));", Value::Bool(true)),
+            ("echo min(1<2,2);", Value::Bool(true)),
+            ("echo max(0,1<2);", Value::Bool(true)),
+            ("$x=2; $y=true; echo min($x,$y);", Value::Int(2)),
+            ("$x=2; $y=true; echo max($y,$x);", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo min();",
+            "echo max();",
+            "echo min(1);",
+            "echo max(true);",
+            "echo min(1,);",
+            "echo max(,2);",
+            "echo min(1,2,);",
+            "echo max(1,2,3,);",
+            "echo min(1,2;",
+            "echo minx(1,2);",
+            "echo maximal(1,2);",
+            "echo max($missing,2);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
+        let too_many = format!("echo min({});", "1,".repeat(256) + "1");
+        assert_eq!(
+            Parser::new(too_many.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
+        );
     }
 
     #[test]
