@@ -762,9 +762,26 @@ printf '%s' '<?php $flag=3<4; echo ($flag+2)===3;' |
 
 The PHP CLI oracle adds deterministic boolean assignment, comparison,
 coercion and nested-expression cases plus malformed-token rejections.
-Chained comparisons, binary logical operators, null, strings, floats,
+Chained comparisons, binary logical operators, strings, floats,
 arrays, references, control flow and unbounded work remain unsupported. This
 is not a full Zend value model, AST, PHP VM or production PHP-FPM integration.
+
+### PHP 8.4 null literal and scalar predicates (research)
+
+The bounded interpreter now represents PHP `null` as a distinct
+`Value::Null` tag. Case-insensitive `null` literals, assignments, echo
+(empty output), arithmetic and bitwise binary integer coercion (zero),
+truthiness (false), loose versus strict comparisons, and `min()`/`max()`
+selection are compared with the installed PHP 8.4 CLI. For comparisons
+against null, PHP compares truthiness: `null <=> -1` is `-1`, while
+`null <=> 0` is `0`. The unary bitwise `~null` raises a PHP
+`TypeError`; the prototype returns its bounded `BitwiseTypeError`
+without publishing output. `is_null()`, `is_scalar()`, and
+`is_numeric()` inspect the original tag; integers are numeric,
+booleans are scalar but not numeric, and null is neither. The differential
+suite adds fixed boundary/exception cases and seeded generated comparisons.
+This is limited scalar modeling, not Zend's full zval, nullable type
+declarations, null-safe operators, or a production runtime.
 
 ### PHP 8.4 unary logical negation
 
@@ -838,25 +855,29 @@ function definitions/calls remain unsupported.
 
 ### PHP 8.4 scalar type predicates (research evaluator)
 
-The bounded `php_eval` evaluator now implements case-insensitive `is_int()`
-(and its PHP aliases `is_integer()`, `is_long()`) and `is_bool()`.
-Each takes exactly one supported integer/boolean expression, inspects the
+The bounded `php_eval` evaluator implements case-insensitive `is_int()`
+(and its PHP aliases `is_integer()`, `is_long()`), `is_bool()`, `is_null()`,
+`is_scalar()`, and `is_numeric()` for its supported scalar types.
+Each takes exactly one supported integer/boolean/null expression, inspects the
 actual `Value` tag without coercing it, and returns a PHP boolean.
 For example, `is_int(true)` is false, `is_int(true+0)` is true, and
 `is_bool(is_int(1))` is true. Existing source/work/depth limits apply to
 nested calls. Missing/extra arguments, unknown functions and unknown
 variables fail closed without output. The PHP 8.4 CLI differential suite
 checks fixed type boundaries, nested expressions and seeded values.
-Strings, floats, arrays, null, references, user functions and Zend type
-semantics remain outside this research-only subset.
+Strings, floats, arrays, references, user functions and general Zend type
+semantics remain outside this research-only subset. In particular,
+`is_numeric()` recognizes supported integers but has no numeric-string or
+floating-point support; `is_scalar(null)` is false.
 
 ### PHP 8.4 explicit `boolval()` and `intval()` (research)
 
 The bounded `php_eval` evaluator supports case-insensitive
 `boolval(value)` and `intval(value)` for its existing signed 64-bit
-integer and boolean values. `boolval()` uses PHP truthiness (only zero is
+integer, boolean and null values. `boolval()` uses PHP truthiness (only zero is
 false among supported integers); `intval()` converts booleans to 0 or 1
-and preserves the full signed 64-bit integer range. Both return the
+and preserves the full signed 64-bit integer range; null converts to zero.
+Both return the
 appropriate runtime value tag, so `is_bool(boolval(1))` and
 `is_int(intval(true))` are true. Nested calls, variable assignments,
 source/work/depth quotas, and fail-closed rejection of missing arguments,
