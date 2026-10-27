@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/min()/max()/is_int()/is_bool() builtins (including is_integer/is_long aliases).
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/min()/max()/is_int()/is_bool()/boolval()/intval() builtins (including is_integer/is_long aliases).
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -385,6 +385,34 @@ impl<'a> Parser<'a> {
         Ok(Value::Bool(matches!(value, Value::Int(_)) == integer))
     }
 
+    // Explicit scalar conversions preserve the PHP return type, unlike
+    // arithmetic's implicit boolean-to-integer coercion. The optional
+    // intval(value, base) string overload is intentionally unsupported.
+    fn builtin_scalar_conversion(
+        &mut self,
+        depth: usize,
+        name: &[u8],
+        boolean: bool,
+    ) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += name.len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let value = self.bitwise_or(depth + 1)?;
+        if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        Ok(if boolean {
+            Value::Bool(value.as_bool())
+        } else {
+            Value::Int(value.as_int())
+        })
+    }
+
     fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
@@ -449,6 +477,20 @@ impl<'a> Parser<'a> {
                         .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
                 {
                     return self.builtin_type_predicate(depth, name, integer);
+                }
+            }
+            for (name, boolean) in [
+                (b"boolval".as_slice(), true),
+                (b"intval".as_slice(), false),
+            ] {
+                if remaining
+                    .get(..name.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                    && !remaining
+                        .get(name.len())
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    return self.builtin_scalar_conversion(depth, name, boolean);
                 }
             }
             for (literal, value) in [(b"true".as_slice(), true), (b"false".as_slice(), false)] {
@@ -875,6 +917,65 @@ mod tests {
         assert_eq!(
             Parser::new(too_many.as_bytes()).evaluate(),
             Err(EvalError::WorkLimit)
+        );
+    }
+
+    #[test]
+    fn php84_boolval_intval_explicit_scalar_conversion_and_limits() {
+        for (program, expected) in [
+            ("echo boolval(0);", Value::Bool(false)),
+            ("echo boolval(1);", Value::Bool(true)),
+            ("echo boolval(-1);", Value::Bool(true)),
+            ("echo boolval(false);", Value::Bool(false)),
+            ("echo boolval(true);", Value::Bool(true)),
+            ("echo BOOLVAL(1<2);", Value::Bool(true)),
+            ("echo boolval(0-9223372036854775807-1);", Value::Bool(true)),
+            ("echo intval(0);", Value::Int(0)),
+            ("echo intval(-9);", Value::Int(-9)),
+            ("echo intval(true);", Value::Int(1)),
+            ("echo intval(false);", Value::Int(0)),
+            ("echo INTVAL(9223372036854775807);", Value::Int(i64::MAX)),
+            ("echo intval(0-9223372036854775807-1);", Value::Int(i64::MIN)),
+            ("echo intval(2<1);", Value::Int(0)),
+            ("echo intval(boolval(-3));", Value::Int(1)),
+            ("echo boolval(intval(false));", Value::Bool(false)),
+            ("echo is_int(intval(true));", Value::Bool(true)),
+            ("echo is_bool(boolval(5));", Value::Bool(true)),
+            ("echo is_bool(intval(true));", Value::Bool(false)),
+            ("echo is_int(boolval(1));", Value::Bool(false)),
+            ("echo boolval(1+2*3);", Value::Bool(true)),
+            ("echo intval(true)+2;", Value::Int(3)),
+            ("$x=false; $x=intval($x); echo is_int($x);", Value::Bool(true)),
+            ("$x=-7; echo boolval($x);", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo boolval();",
+            "echo intval();",
+            "echo boolval(1,2);",
+            "echo intval(1,2);", // Valid PHP base overload, outside this subset.
+            "echo boolval(1,);",
+            "echo intval(,1);",
+            "echo boolvalue(1);",
+            "echo integer_value(1);",
+            "echo boolval($missing);",
+            "echo intval($missing);",
+            "echo boolval(1;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
+        let nested = format!("echo {}1{};", "boolval(".repeat(33), ")".repeat(33));
+        assert_eq!(
+            Parser::new(nested.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
         );
     }
 
