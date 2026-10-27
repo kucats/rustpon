@@ -1157,7 +1157,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn php84_compound_modulo_assignment_and_boundaries() {
         for (program, expected) in [
