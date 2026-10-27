@@ -45,7 +45,24 @@ fn run() -> Result<(), String> {
             _ => return Err(usage.to_owned()),
         }
     }
-    let request = if php_nul_name_truncation {
+    // PHP counts explicit empty-name pairs and NUL-truncated names toward
+    // max_input_vars, even though they do not appear in the published tree.
+    // Preserve their wire positions only when this PHP quota is requested.
+    let request = if max_input_vars.is_some() {
+        let separators: &[u8] = if let Some(ref separators) = php_arg_separators {
+            separators.as_bytes()
+        } else if php_semicolon_separator {
+            b"&;"
+        } else {
+            b"&"
+        };
+        urlencoded::parse_reader_with_php_input_var_counting(
+            &mut io::stdin().lock(),
+            Limits::default(),
+            separators,
+            php_nul_name_truncation,
+        )
+    } else if php_nul_name_truncation {
         let separators: &[u8] = if let Some(ref separators) = php_arg_separators {
             separators.as_bytes()
         } else if php_semicolon_separator {
