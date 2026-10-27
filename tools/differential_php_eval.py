@@ -280,6 +280,21 @@ COMPOUND_ASSIGNMENT_PROGRAMS = [
     "$x=0-9223372036854775807-1; $x%=-1; echo $x;",
     "$x=9223372036854775807; $x%=2; echo $x;",
     "$x=7; $x%=1<2; echo $x;",
+    "$x=6; $x&=3; echo $x;",
+    "$x=6; $x^=3; echo $x;",
+    "$x=6; $x|=3; echo $x;",
+    "$x=true; $x&=3; echo is_int($x);",
+    "$x=false; $x|=4; echo $x;",
+    "$x=null; $x^=7; echo $x;",
+    "$x=1; $x|=2^3; echo $x;",
+    "$x=1; $x&=2|4; echo $x;",
+    "$x=-1; $x&=0x7fff_ffff_ffff_ffff; echo $x;",
+    "$x=0-9223372036854775807-1; $x^=-1; echo $x;",
+    "$x=0-9223372036854775807-1; $x|=1; echo $x;",
+    "$x=1; $x|=true; echo is_int($x);",
+    "$x=7; $x^=false; echo $x;",
+    "$x=0; $x&=null; echo is_int($x);",
+    "$x=3; $x&=7; $x^=2; $x|=8; echo $x;",
 ]
 
 
@@ -363,6 +378,16 @@ def main():
             delta = rng.randrange(-1000, 1001)
         compound_assignments.append(
             f"$x={start}; $y={delta}; $x {operator} $y+({extra}); echo $x;"
+        )
+    # Deterministic bitwise compound assignments, including signed operands,
+    # mixed operators and parenthesized RHS precedence.
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        rhs = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-1000, 1001)
+        operator = rng.choice(["&=", "^=", "|="])
+        compound_assignments.append(
+            f"$x={start}; $y={rhs}; $x {operator} ($y+({delta})); echo $x;"
         )
     radix_programs = []
     for _ in range(128):
@@ -759,6 +784,19 @@ def main():
         b"<?php $x=2; $x%=false; echo $x;",
         b"<?php $x=2; $x%=null; echo $x;",
         b"<?php $x=2; $x%=1/0; echo $x;",
+        b"<?php $x&=2; echo $x;",
+        b"<?php $x^=2; echo $x;",
+        b"<?php $x|=2; echo $x;",
+        b"<?php $x=2; $x&=; echo $x;",
+        b"<?php $x=2; $x^=; echo $x;",
+        b"<?php $x=2; $x|=; echo $x;",
+        b"<?php $x=2; $x& =3; echo $x;",
+        b"<?php $x=2; $x^ =3; echo $x;",
+        b"<?php $x=2; $x| =3; echo $x;",
+        b"<?php $x=2; $x&=1/0; echo $x;",
+        b"<?php $x=2; $x|=$missing; echo $x;",
+        b"<?php $x=2; $x&=3&&4; echo $x;",
+        b"<?php $x=2; $x^=3||4; echo $x;",
         # PHP promotes integer overflow to float; intentionally unsupported.
         b"<?php $x=9223372036854775807; $x+=1; echo $x;",
         b"<?php $x=0-9223372036854775807-1; $x-=1; echo $x;",

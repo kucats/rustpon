@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments (including +=/-=/*=/%=) and unsets followed by one echo;
+//! Supported grammar: bounded scalar assignments (including +=/-=/*=/%=/&=/^=/|=) and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -260,6 +260,15 @@ impl<'a> Parser<'a> {
         } else if self.source[self.offset..].starts_with(b"%=") {
             self.offset += 2;
             Some(b'%')
+        } else if self.source[self.offset..].starts_with(b"&=") {
+            self.offset += 2;
+            Some(b'&')
+        } else if self.source[self.offset..].starts_with(b"^=") {
+            self.offset += 2;
+            Some(b'^')
+        } else if self.source[self.offset..].starts_with(b"|=") {
+            self.offset += 2;
+            Some(b'|')
         } else if self.consume(b'=') && self.peek() != Some(b'=') {
             None
         } else {
@@ -283,6 +292,11 @@ impl<'a> Parser<'a> {
                 b'+' => previous.as_int().checked_add(value.as_int()),
                 b'-' => previous.as_int().checked_sub(value.as_int()),
                 b'*' => previous.as_int().checked_mul(value.as_int()),
+                // PHP 8.4 coerces int/bool/null operands to signed integers
+                // for binary bitwise operators, preserving an integer tag.
+                b'&' => Some(previous.as_int() & value.as_int()),
+                b'^' => Some(previous.as_int() ^ value.as_int()),
+                b'|' => Some(previous.as_int() | value.as_int()),
                 b'%' => {
                     let divisor = value.as_int();
                     if divisor == 0 {
@@ -1155,6 +1169,68 @@ mod tests {
                 "{program}"
             );
         }
+    }
+
+    #[test]
+    fn php84_compound_bitwise_assignments_types_precedence_and_limits() {
+        for (program, expected) in [
+            ("$x=6; $x&=3; echo $x;", Value::Int(2)),
+            ("$x=6; $x^=3; echo $x;", Value::Int(5)),
+            ("$x=6; $x|=3; echo $x;", Value::Int(7)),
+            ("$x=true; $x&=3; echo is_int($x);", Value::Bool(true)),
+            ("$x=false; $x|=4; echo $x;", Value::Int(4)),
+            ("$x=null; $x^=7; echo $x;", Value::Int(7)),
+            ("$x=1; $x|=2^3; echo $x;", Value::Int(1)),
+            ("$x=1; $x&=2|4; echo $x;", Value::Int(0)),
+            (
+                "$x=-1; $x&=0x7fff_ffff_ffff_ffff; echo $x;",
+                Value::Int(i64::MAX),
+            ),
+            (
+                "$x=0-9223372036854775807-1; $x^=-1; echo $x;",
+                Value::Int(i64::MAX),
+            ),
+            (
+                "$x=0-9223372036854775807-1; $x|=1; echo $x;",
+                Value::Int(i64::MIN + 1),
+            ),
+            ("$x=1; $x|=true; echo is_int($x);", Value::Bool(true)),
+            ("$x=7; $x^=false; echo $x;", Value::Int(7)),
+            ("$x=0; $x&=null; echo is_int($x);", Value::Bool(true)),
+            ("$x=3; $x&=7; $x^=2; $x|=8; echo $x;", Value::Int(9)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("$x&=2; echo $x;", EvalError::UnknownVariable),
+            ("$x^=2; echo $x;", EvalError::UnknownVariable),
+            ("$x|=2; echo $x;", EvalError::UnknownVariable),
+            ("$x=2; $x&=; echo $x;", EvalError::Syntax),
+            ("$x=2; $x^=; echo $x;", EvalError::Syntax),
+            ("$x=2; $x|=; echo $x;", EvalError::Syntax),
+            ("$x=2; $x& =3; echo $x;", EvalError::Syntax),
+            ("$x=2; $x^ =3; echo $x;", EvalError::Syntax),
+            ("$x=2; $x| =3; echo $x;", EvalError::Syntax),
+            ("$x=2; $x&=1/0; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x|=$missing; echo $x;", EvalError::UnknownVariable),
+            ("$x=2; $x&=3&&4; echo $x;", EvalError::Syntax),
+            ("$x=2; $x^=3||4; echo $x;", EvalError::Syntax),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
+        let exhausted = format!("$x=1;{}echo $x;", "$x&=1;".repeat(64));
+        assert_eq!(
+            Parser::new(exhausted.as_bytes()).evaluate(),
+            Err(EvalError::AssignmentLimit)
+        );
     }
 
     #[test]

@@ -891,6 +891,21 @@ The PHP 8.4 CLI differential suite compares fixed precedence and
 boolean-coercion examples plus deterministic generated cases. This is
 not a general PHP language implementation or Zend/SAPI integration.
 
+### PHP 8.4 bitwise compound assignments (research)
+
+The bounded `php_eval` evaluator now supports `&=`, `^=` and `|=`
+for previously defined integer, boolean and null variables. Both operands
+are converted to signed 64-bit integers and the assigned value is tagged
+as an integer, matching PHP 8.4 for these scalar types. The complete
+right-hand expression is evaluated before the assignment; for example,
+`$x=1; $x&=2|4; echo $x;` emits `0`. Negative operands and
+`PHP_INT_MIN`/`PHP_INT_MAX` use fixed-width bitwise operations.
+Missing variables, malformed operator tokens, unsupported logical
+operators, and exhausted source/work/assignment budgets fail closed.
+The PHP 8.4 CLI oracle includes fixed type/boundary cases and 96
+seeded generated compound-assignment programs. Strings, arrays,
+references and PHP's full compound-assignment semantics remain unsupported.
+
 ### PHP 8.4 integer shifts (research)
 
 The bounded `php_eval` interpreter supports integer `<<` and `>>`
