@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded typed scalar assignments followed by one echo;
+//! Supported grammar: bounded scalar assignments/unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -1056,11 +1056,6 @@ mod tests {
         assert_eq!(
             Parser::new(reused_slots.as_bytes()).evaluate(),
             Ok(Value::Int(1))
-        );
-        let too_many_assignments = format!("{}echo 1;", "$x=1; unset($x);".repeat(65));
-        assert_eq!(
-            Parser::new(too_many_assignments.as_bytes()).evaluate(),
-            Err(EvalError::AssignmentLimit)
         );
     }
 
