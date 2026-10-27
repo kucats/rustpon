@@ -1103,15 +1103,15 @@ mod tests {
             ("$x=5; $x*=false; echo $x;", Value::Int(0)),
             ("$x=7; $x*=true; echo $x;", Value::Int(7)),
             ("$x=1; $x*=3; $x+=2; echo $x;", Value::Int(5)),
-            ("$x=9223372036854775807; $x*=1; echo $x;", Value::Int(i64::MAX)),
+            (
+                "$x=9223372036854775807; $x*=1; echo $x;",
+                Value::Int(i64::MAX),
+            ),
             (
                 "$x=0-9223372036854775807-1; $x*=1; echo $x;",
                 Value::Int(i64::MIN),
             ),
-            (
-                "$x=0-9223372036854775807-1; $x*=0; echo $x;",
-                Value::Int(0),
-            ),
+            ("$x=0-9223372036854775807-1; $x*=0; echo $x;", Value::Int(0)),
         ] {
             assert_eq!(
                 Parser::new(program.as_bytes()).evaluate(),
