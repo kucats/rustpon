@@ -60,6 +60,20 @@ BITWISE_BINARY_PROGRAMS = [
 ]
 
 
+INTDIV_PROGRAMS = [
+    "echo intdiv(7,3);", "echo intdiv(-7,3);",
+    "echo intdiv(7,-3);", "echo intdiv(-7,-3);",
+    "echo intdiv(true,2);", "echo intdiv(false,2);",
+    "echo INTDIV(9,2);", "echo intdiv(9,2)*3;",
+    "echo intdiv(8,intdiv(4,2));",
+    "echo intdiv(5|2,2);",
+    "echo intdiv(0-9223372036854775807-1,1);",
+    "echo intdiv(9223372036854775807,1);",
+    "$x=9; echo intdiv($x,2);",
+    "$x=-9; $y=2; echo intdiv($x,$y);",
+]
+
+
 SHIFT_PROGRAMS = [
     "echo 1<<2;", "echo 16>>2;", "echo 1<<3+1;",
     "echo 1<<2<<1;", "echo 1<<2<3;", "echo 1<<2===4;",
@@ -251,6 +265,11 @@ def main():
         middle = rng.randrange(0, 256)
         right = rng.randrange(0, 256)
         bitwise_binary.append(f"echo {left} | {middle} ^ {right} & 7;")
+    intdiv_programs = list(INTDIV_PROGRAMS)
+    for _ in range(128):
+        numerator = rng.randrange(-100000, 100001)
+        denominator = rng.choice([n for n in range(-100, 101) if n])
+        intdiv_programs.append(f"echo intdiv({numerator},{denominator});")
     shifts = list(SHIFT_PROGRAMS)
     for _ in range(128):
         value = rng.randrange(-100000, 100001)
@@ -270,6 +289,7 @@ def main():
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
+        + intdiv_programs
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -328,6 +348,14 @@ def main():
         b"<?php echo truex;",
         b"<?php echo FALSE_1;",
         b"<?php echo true&&false;",
+        b"<?php echo intdiv();",
+        b"<?php echo intdiv(1);",
+        b"<?php echo intdiv(1,2,3);",
+        b"<?php echo intdiv(1,);",
+        b"<?php echo intdiv(,2);",
+        b"<?php echo intdivide(1,2);",
+        b"<?php echo intdiv(1,2;",
+        b"<?php echo intdiv($missing,2);",
         b"<?php echo 1&;",
         b"<?php echo 1^;",
         b"<?php echo 1|;",
@@ -421,11 +449,31 @@ def main():
                 file=sys.stderr,
             )
 
+    # intdiv() raises distinct PHP runtime exceptions for zero divisors
+    # and the one signed-64-bit overflow case.
+    intdiv_errors = [
+        (b"<?php echo intdiv(1,0);", b"DivisionByZeroError"),
+        (b"<?php echo intdiv(1,0*3);", b"DivisionByZeroError"),
+        (b"<?php echo intdiv(0-9223372036854775807-1,-1);", b"ArithmeticError"),
+    ]
+    for index, (code, error_class) in enumerate(intdiv_errors):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or error_class not in php.stderr
+                or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL intdiv_error={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
-        f"{len(negative_shifts)} PHP ArithmeticError rejections, {failures} failures"
+        f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
+        f"{len(intdiv_errors)} PHP intdiv runtime-error rejections, {failures} failures"
     )
     return int(failures != 0)
 
