@@ -311,6 +311,17 @@ COMPOUND_ASSIGNMENT_PROGRAMS = [
     "$x=1; $x<<=true; echo $x;",
     "$x=4; $x>>=false; echo $x;",
     "$x=1; $x<<=2; $x>>=1; echo $x;",
+    "$x=2; $x**=3; echo $x;",
+    "$x=-2; $x**=3; echo $x;",
+    "$x=2; $x**=3**2; echo $x;",
+    "$x=3; $x**=2+1; echo $x;",
+    "$x=2; $x**=0; echo $x;",
+    "$x=0; $x**=0; echo $x;",
+    "$x=true; $x**=3; echo is_int($x);",
+    "$x=false; $x**=0; echo $x;",
+    "$x=null; $x**=0; echo $x;",
+    "$x=-1; $x**=63; echo $x;",
+    "$x=2; $x**=3; $x**=2; echo $x;",
 ]
 
 
@@ -414,6 +425,15 @@ def main():
         operator = rng.choice(["<<=", ">>="])
         compound_assignments.append(
             f"$x={start}; $y={count}; $x {operator} ($y+({extra})); echo $x;"
+        )
+    # Exact signed-i64 exponentiation; negative exponents and float
+    # promotion are intentionally excluded from the compatibility set.
+    for _ in range(64):
+        start = rng.randrange(-6, 7)
+        exponent = rng.randrange(0, 7)
+        extra = rng.randrange(0, 3)
+        compound_assignments.append(
+            f"$x={start}; $y={exponent}; $x **= ($y+({extra})); echo $x;"
         )
     radix_programs = []
     for _ in range(128):
@@ -825,6 +845,12 @@ def main():
         b"<?php $x=2; $x^=3||4; echo $x;",
         b"<?php $x<<=2; echo $x;",
         b"<?php $x>>=2; echo $x;",
+        b"<?php $x**=2; echo $x;",
+        b"<?php $x=2; $x**=; echo $x;",
+        b"<?php $x=2; $x** =3; echo $x;",
+        b"<?php $x=2; $x**=-1; echo $x;",
+        b"<?php $x=2; $x**=63; echo $x;",
+        b"<?php $x=2; $x**=1/0; echo $x;",
         b"<?php $x=2; $x<<=; echo $x;",
         b"<?php $x=2; $x>>=; echo $x;",
         b"<?php $x=2; $x<< =3; echo $x;",
