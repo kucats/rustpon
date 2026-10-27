@@ -668,6 +668,28 @@ types, superglobals, arbitrary statements, or Zend/SAPI execution. The
 interpreter has no file/network access and is not connected to the FFI layer.
 
 
+### PHP 8.4 `unset()` local-variable lifecycle (research)
+
+The bounded `php_eval` interpreter accepts case-insensitive
+`unset($name)`, `unset($a,$b,)`, and interleaved assignments before the
+final `echo`. Removing a defined variable makes subsequent `isset()`
+false and `empty()` true; removing an undefined variable succeeds. A
+subsequent assignment can reuse the freed binding slot, while the cumulative
+64-assignment, source-byte and work quotas still apply. Only simple ASCII
+local variables are supported; array elements, object properties, references
+and `$GLOBALS` are rejected. Parsing remains fail-closed, without partial
+output or a Zend symbol table.
+
+```sh
+printf '%s' '<?php $x=7; unset($x); echo isset($x);' |
+  cargo run --offline --locked --bin php_eval
+# stdout: empty (PHP false)
+```
+
+The PHP CLI differential suite compares missing, existing, redefined and
+multiple-variable unsets, including generated programs and malformed input.
+This does not model PHP destructors, references or request-scoped superglobals.
+
 ## PHP 8.4 integer literal lexical compatibility
 
 The research-only `php_eval` interpreter recognizes bounded PHP 8.4
