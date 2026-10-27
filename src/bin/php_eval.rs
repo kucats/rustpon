@@ -752,13 +752,10 @@ impl<'a> Parser<'a> {
             self.offset += 1;
         }
         let name = &self.source[start..self.offset];
-        let boolean = if name.eq_ignore_ascii_case(b"bool")
-            || name.eq_ignore_ascii_case(b"boolean")
+        let boolean = if name.eq_ignore_ascii_case(b"bool") || name.eq_ignore_ascii_case(b"boolean")
         {
             Some(true)
-        } else if name.eq_ignore_ascii_case(b"int")
-            || name.eq_ignore_ascii_case(b"integer")
-        {
+        } else if name.eq_ignore_ascii_case(b"int") || name.eq_ignore_ascii_case(b"integer") {
             Some(false)
         } else {
             None
@@ -1810,10 +1807,7 @@ mod tests {
             ("$x=0; $x=(bool)$x; echo is_bool($x);", Value::Bool(true)),
             ("echo (int)0-1;", Value::Int(-1)),
             ("echo (bool)false===false;", Value::Bool(true)),
-            (
-                "echo (int)(0-9223372036854775807-1);",
-                Value::Int(i64::MIN),
-            ),
+            ("echo (int)(0-9223372036854775807-1);", Value::Int(i64::MIN)),
             ("echo (bool) (1<2);", Value::Bool(true)),
             ("echo (int) 2**3+1;", Value::Int(9)),
             ("echo (int)~2;", Value::Int(-3)),
