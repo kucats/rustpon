@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments (including +=/-=/*=/**=/%=/&=/^=/|=/<<=/>>=) and unsets followed by one echo;
+//! Supported grammar: bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=) and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -260,6 +260,9 @@ impl<'a> Parser<'a> {
         } else if self.source[self.offset..].starts_with(b"*=") {
             self.offset += 2;
             Some(b'*')
+        } else if self.source[self.offset..].starts_with(b"/=") {
+            self.offset += 2;
+            Some(b'/')
         } else if self.source[self.offset..].starts_with(b"%=") {
             self.offset += 2;
             Some(b'%')
@@ -301,6 +304,7 @@ impl<'a> Parser<'a> {
                 b'+' => previous.as_int().checked_add(value.as_int()),
                 b'-' => previous.as_int().checked_sub(value.as_int()),
                 b'*' => previous.as_int().checked_mul(value.as_int()),
+                b'/' => Some(Self::exact_div_int(previous.as_int(), value.as_int())?),
                 b'P' => Some(Self::pow_int(previous.as_int(), value.as_int())?),
                 // PHP 8.4 coerces int/bool/null operands to signed integers
                 // for binary bitwise operators, preserving an integer tag.
@@ -773,6 +777,23 @@ impl<'a> Parser<'a> {
             .ok_or(EvalError::UnsupportedFloat)
     }
 
+    // Shared by binary division and /= so that exact integer quotients,
+    // zero divisors, and float promotion use identical semantics.
+    fn exact_div_int(numerator: i64, denominator: i64) -> Result<i64, EvalError> {
+        if denominator == 0 {
+            return Err(EvalError::DivisionByZero);
+        }
+        // checked_div also rejects PHP_INT_MIN / -1, which PHP promotes
+        // to float. Do not evaluate '%' before checking that overflow.
+        let quotient = numerator
+            .checked_div(denominator)
+            .ok_or(EvalError::UnsupportedFloat)?;
+        if numerator % denominator != 0 {
+            return Err(EvalError::UnsupportedFloat);
+        }
+        Ok(quotient)
+    }
+
     // PHP 8.4 exponentiation binds more tightly than unary +/- and
     // associates to the right: -2**2 == -(2**2), 2**3**2 == 2**(3**2).
     fn power(&mut self, depth: usize) -> Result<Value, EvalError> {
@@ -808,16 +829,7 @@ impl<'a> Parser<'a> {
             let left = lhs.as_int();
             lhs = Value::Int(match op {
                 b'*' => left.checked_mul(rhs).ok_or(EvalError::Overflow)?,
-                b'/' => {
-                    if rhs == 0 {
-                        return Err(EvalError::DivisionByZero);
-                    }
-                    let quotient = left.checked_div(rhs).ok_or(EvalError::UnsupportedFloat)?;
-                    if left % rhs != 0 {
-                        return Err(EvalError::UnsupportedFloat);
-                    }
-                    quotient
-                }
+                b'/' => Self::exact_div_int(left, rhs)?,
                 b'%' => {
                     if rhs == 0 {
                         return Err(EvalError::DivisionByZero);
@@ -1133,6 +1145,60 @@ mod tests {
                 "$x=0-9223372036854775807-1; $x-=1; echo $x;",
                 EvalError::Overflow,
             ),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
+    }
+
+    #[test]
+    fn php84_compound_exact_division_assignment_and_boundaries() {
+        for (program, expected) in [
+            ("$x=12; $x/=3; echo $x;", Value::Int(4)),
+            ("$x=-12; $x/=3; echo $x;", Value::Int(-4)),
+            ("$x=12; $x/=-3; echo $x;", Value::Int(-4)),
+            ("$x=-12; $x/=-3; echo $x;", Value::Int(4)),
+            ("$x=12; $x/=3*2; echo $x;", Value::Int(2)),
+            ("$x=12; $x/=1+2; echo $x;", Value::Int(4)),
+            ("$x=true; $x/=1; echo is_int($x);", Value::Bool(true)),
+            ("$x=false; $x/=2; echo is_int($x);", Value::Bool(true)),
+            ("$x=null; $x/=2; echo is_int($x);", Value::Bool(true)),
+            ("$x=6; $x/=true; echo $x;", Value::Int(6)),
+            ("$x=0; $x/=-7; echo $x;", Value::Int(0)),
+            (
+                "$x=0-9223372036854775807-1; $x/=2; echo $x;",
+                Value::Int(i64::MIN / 2),
+            ),
+            (
+                "$x=9223372036854775807; $x/=1; echo $x;",
+                Value::Int(i64::MAX),
+            ),
+            ("$x=4; $x/=2; $x+=3; echo $x;", Value::Int(5)),
+            ("$x=1; $x/=1<2; echo $x;", Value::Int(1)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("$x/=1; echo $x;", EvalError::UnknownVariable),
+            ("$x=2; $x/=; echo $x;", EvalError::Syntax),
+            ("$x=2; $x/ =1; echo $x;", EvalError::Syntax),
+            ("$x=2; $x/=0; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x/=false; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x/=null; echo $x;", EvalError::DivisionByZero),
+            ("$x=2; $x/=1/0; echo $x;", EvalError::DivisionByZero),
+            ("$x=3; $x/=2; echo $x;", EvalError::UnsupportedFloat),
+            (
+                "$x=0-9223372036854775807-1; $x/=-1; echo $x;",
+                EvalError::UnsupportedFloat,
+            ),
+            ("$x=2; $x/=$missing; echo $x;", EvalError::UnknownVariable),
         ] {
             assert_eq!(
                 Parser::new(program.as_bytes()).evaluate(),
