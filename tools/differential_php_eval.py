@@ -244,6 +244,21 @@ SPACESHIP_PROGRAMS = [
 ]
 
 COMPOUND_ASSIGNMENT_PROGRAMS = [
+    "$x=12; $x/=3; echo $x;",
+    "$x=-12; $x/=3; echo $x;",
+    "$x=12; $x/=-3; echo $x;",
+    "$x=-12; $x/=-3; echo $x;",
+    "$x=12; $x/=3*2; echo $x;",
+    "$x=12; $x/=1+2; echo $x;",
+    "$x=true; $x/=1; echo is_int($x);",
+    "$x=false; $x/=2; echo is_int($x);",
+    "$x=null; $x/=2; echo is_int($x);",
+    "$x=6; $x/=true; echo $x;",
+    "$x=0; $x/=-7; echo $x;",
+    "$x=0-9223372036854775807-1; $x/=2; echo $x;",
+    "$x=9223372036854775807; $x/=1; echo $x;",
+    "$x=4; $x/=2; $x+=3; echo $x;",
+    "$x=1; $x/=1<2; echo $x;",
     "$x=1; $x+=2; echo $x;",
     "$x=10; $x-=3; echo $x;",
     "$x=2; $x+=3*4; echo $x;",
@@ -405,6 +420,15 @@ def main():
             delta = rng.randrange(-1000, 1001)
         compound_assignments.append(
             f"$x={start}; $y={delta}; $x {operator} $y+({extra}); echo $x;"
+        )
+    # Exact integer division only: PHP / and /= promote non-integral
+    # quotients (and PHP_INT_MIN / -1) to floats, outside this VM.
+    for _ in range(96):
+        quotient = rng.randrange(-10000, 10001)
+        divisor = rng.choice([n for n in range(-50, 51) if n])
+        dividend = quotient * divisor
+        compound_assignments.append(
+            f"$x={dividend}; $y={divisor}; $x /= $y; echo $x;"
         )
     # Deterministic bitwise compound assignments, including signed operands,
     # mixed operators and parenthesized RHS precedence.
@@ -819,6 +843,16 @@ def main():
         b"<?php $x=1; $x+=; echo $x;",
         b"<?php $x=1; $x+ =2; echo $x;",
         b"<?php $x=1; $x-=1/0; echo $x;",
+        b"<?php $x/=1; echo $x;",
+        b"<?php $x=2; $x/=; echo $x;",
+        b"<?php $x=2; $x/ =1; echo $x;",
+        b"<?php $x=2; $x/=0; echo $x;",
+        b"<?php $x=2; $x/=false; echo $x;",
+        b"<?php $x=2; $x/=null; echo $x;",
+        b"<?php $x=2; $x/=1/0; echo $x;",
+        b"<?php $x=3; $x/=2; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; $x/=-1; echo $x;",
+        b"<?php $x=2; $x/=$missing; echo $x;",
         b"<?php $x*=2; echo $x;",
         b"<?php $x=2; $x*=; echo $x;",
         b"<?php $x=2; $x* =3; echo $x;",
