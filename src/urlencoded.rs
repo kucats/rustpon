@@ -196,10 +196,11 @@ impl FormParser {
             self.request().arena.truncate(discard_from);
         } else {
             let field_start = self.field_start;
+            let truncate_nul = self.php_nul_name_truncation;
             let (name_end, value_end) = {
                 let arena = &mut self.request().arena;
                 let decoded_name = url_decode(&mut arena[field_start..value_start]);
-                let name_len = if self.php_nul_name_truncation {
+                let name_len = if truncate_nul {
                     arena[field_start..field_start + decoded_name]
                         .iter()
                         .position(|&byte| byte == 0)
@@ -400,7 +401,10 @@ mod tests {
     #[test]
     fn php_decoded_nul_names_are_opt_in_and_chunk_independent() {
         let body = b"a%00suffix=one&%00empty=ignored&a%5Bx%00y%5D=two&z=hi%00there";
-        assert_eq!(parse(body, Limits::default()).unwrap_err(), Error::Malformed);
+        assert_eq!(
+            parse(body, Limits::default()).unwrap_err(),
+            Error::Malformed
+        );
         let expected = vec![
             (b"a".to_vec(), b"one".to_vec()),
             (b"a[x".to_vec(), b"two".to_vec()),
