@@ -780,7 +780,10 @@ mod tests {
             "echo is_boolean(true);",
             "echo is_int($missing);",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
         let nested = format!("echo {}1{};", "is_int(".repeat(33), ")".repeat(33));
         assert_eq!(
