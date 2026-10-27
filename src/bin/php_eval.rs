@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs() builtins.
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/is_int()/is_bool() builtins (including is_integer/is_long aliases).
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -308,6 +308,30 @@ impl<'a> Parser<'a> {
             .ok_or(EvalError::UnsupportedFloat)
     }
 
+    // PHP's scalar type predicates inspect the actual value tag. In
+    // particular, an integer converted to truthiness is not a bool, and
+    // a boolean accepted by arithmetic is not an int.
+    fn builtin_type_predicate(
+        &mut self,
+        depth: usize,
+        name: &[u8],
+        integer: bool,
+    ) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += name.len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let value = self.bitwise_or(depth + 1)?;
+        if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        Ok(Value::Bool(matches!(value, Value::Int(_)) == integer))
+    }
+
     fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
@@ -345,6 +369,22 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 return self.builtin_abs(depth);
+            }
+            for (name, integer) in [
+                (b"is_int".as_slice(), true),
+                (b"is_integer".as_slice(), true),
+                (b"is_long".as_slice(), true),
+                (b"is_bool".as_slice(), false),
+            ] {
+                if remaining
+                    .get(..name.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
+                    && !remaining
+                        .get(name.len())
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    return self.builtin_type_predicate(depth, name, integer);
+                }
             }
             for (literal, value) in [(b"true".as_slice(), true), (b"false".as_slice(), false)] {
                 let remaining = &self.source[self.offset..];
@@ -701,6 +741,52 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_type_predicates_preserve_scalar_tags_and_enforce_arity() {
+        for (program, expected) in [
+            ("echo is_int(0);", Value::Bool(true)),
+            ("echo is_int(-1);", Value::Bool(true)),
+            ("echo is_int(true);", Value::Bool(false)),
+            ("echo is_bool(false);", Value::Bool(true)),
+            ("echo is_bool(1);", Value::Bool(false)),
+            ("echo IS_BOOL(1<2);", Value::Bool(true)),
+            ("echo IS_INT(true+0);", Value::Bool(true)),
+            ("echo is_integer(7);", Value::Bool(true)),
+            ("echo is_long(false);", Value::Bool(false)),
+            ("echo is_int(0-9223372036854775807-1);", Value::Bool(true)),
+            ("echo is_bool(is_int(1));", Value::Bool(true)),
+            ("echo is_int(intdiv(7,3));", Value::Bool(true)),
+            ("echo is_bool(abs(-3));", Value::Bool(false)),
+            ("$x=true; echo is_bool($x);", Value::Bool(true)),
+            ("$x=3; $x=$x<2; echo is_bool($x);", Value::Bool(true)),
+            ("$x=false; $x=$x+1; echo is_int($x);", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo is_int();",
+            "echo is_bool();",
+            "echo is_int(1,2);",
+            "echo is_bool(true,);",
+            "echo is_integer(,1);",
+            "echo is_long(1;",
+            "echo is_intx(1);",
+            "echo is_boolean(true);",
+            "echo is_int($missing);",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+        }
+        let nested = format!("echo {}1{};", "is_int(".repeat(33), ")".repeat(33));
+        assert_eq!(
+            Parser::new(nested.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
+        );
     }
 
     #[test]
