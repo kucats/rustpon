@@ -9,7 +9,16 @@ fn run_with_args(args: &[&str], body: &[u8]) -> std::process::Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(body).unwrap();
+    // Invalid CLI options may terminate the child before the parent writes.
+    // BrokenPipe is expected in that case; assert the process result below
+    // rather than turning a correctly rejected invocation into a flaky test.
+    if let Err(error) = child.stdin.take().unwrap().write_all(body) {
+        assert_eq!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe,
+            "unexpected stdin write error: {error}"
+        );
+    }
     child.wait_with_output().unwrap()
 }
 
@@ -38,6 +47,18 @@ fn cli_custom_separator_and_conflicting_options() {
         assert!(!invalid.status.success(), "{args:?}");
         assert!(invalid.stdout.is_empty(), "{args:?}");
     }
+}
+
+#[test]
+fn cli_invalid_options_reject_large_stdin_without_partial_output() {
+    // A body larger than a pipe buffer makes the early-exit race reproducible.
+    let body = vec![b'a'; 1024 * 1024];
+    let output = run_with_args(
+        &["--php-arg-separators", "|", "--php-semicolon-separator"],
+        &body,
+    );
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
 }
 
 #[test]
