@@ -32,6 +32,18 @@ LOGICAL_NOT_PROGRAMS = [
     "$flag=false; echo !$flag;", "$x=0; $x=!$x; echo $x;",
 ]
 
+SPACESHIP_PROGRAMS = [
+    "echo 1<=>2;", "echo 2<=>2;", "echo 3<=>2;",
+    "echo true<=>2;", "echo false<=>-1;", "echo false<=>0;",
+    "echo true<=>false;", "echo 1+2<=>2*2;",
+    "echo (1<=>2)===-1;", "echo (2<=>1)+2;",
+    "echo !0<=>true;", "echo (1<=>2)<0;",
+    "echo (0-9223372036854775807-1)<=>0;",
+    "echo 9223372036854775807<=>(0-9223372036854775807-1);",
+    "$x=4; $y=5; echo $x<=>$y;",
+    "$x=1<=>2; echo $x+2;",
+]
+
 ASSIGNMENT_PROGRAMS = [
     "$x=7; echo $x;",
     "$x=7; $x=$x+2; echo $x*3;",
@@ -178,10 +190,19 @@ def main():
     for value in range(-10, 11):
         logical_not.append(f"$x={value}; echo !($x<0);")
         logical_not.append(f"$x={value}; echo !!$x;")
+    spaceship = list(SPACESHIP_PROGRAMS)
+    for _ in range(64):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        spaceship.append(f"$x={left}; $y={right}; echo ($x+1)<=>($y*2);")
+    for _ in range(32):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        spaceship.append(f"$x={left}; $y={right}; echo ($x<=>$y)===-1;")
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
-        + booleans + logical_not
+        + booleans + logical_not + spaceship
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -234,6 +255,9 @@ def main():
         b"<?php echo 1<;",
         b"<?php echo 1!==;",
         b"<?php echo 1<2<3;",
+        b"<?php echo 1<=>;",
+        b"<?php echo 1<=>2<=>3;",
+        b"<?php echo 1<==>2;",
         b"<?php echo truex;",
         b"<?php echo FALSE_1;",
         b"<?php echo true&&false;",
@@ -274,7 +298,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/power differential: {len(cases)} compatible "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power differential: {len(cases)} compatible "
         f"cases, {len(invalid)} strict rejections, {failures} failures"
     )
     return int(failures != 0)
