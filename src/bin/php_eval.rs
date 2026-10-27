@@ -308,7 +308,6 @@ impl<'a> Parser<'a> {
             .ok_or(EvalError::UnsupportedFloat)
     }
 
-
     // PHP min()/max() preserve the winning argument's original scalar tag.
     // PHP's two-argument min() fast path selects the second on a loose tie;
     // max() and min() with three or more arguments preserve the first.
