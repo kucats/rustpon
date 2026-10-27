@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers and comparisons (including <=>).
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, comparisons (including <=>), and integer bitwise &, ^, |.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -241,7 +241,7 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         self.charge()?;
-        let value = self.comparison(0)?;
+        let value = self.bitwise_or(0)?;
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
@@ -261,7 +261,7 @@ impl<'a> Parser<'a> {
             return Err(EvalError::DepthLimit);
         }
         if self.consume(b'(') {
-            let value = self.comparison(depth + 1)?;
+            let value = self.bitwise_or(depth + 1)?;
             if !self.consume(b')') {
                 return Err(EvalError::Syntax);
             }
@@ -468,6 +468,53 @@ impl<'a> Parser<'a> {
         Ok(result)
     }
 
+    // PHP 8.4 precedence: comparisons bind tighter than bitwise AND,
+    // which binds tighter than XOR, which binds tighter than OR.
+    // Binary bitwise operators convert booleans to integers (unlike ~).
+    fn bitwise_and(&mut self, depth: usize) -> Result<Value, EvalError> {
+        let mut lhs = self.comparison(depth)?;
+        loop {
+            self.skip_space();
+            if self.source[self.offset..].starts_with(b"&&") {
+                return Err(EvalError::Syntax);
+            }
+            if !self.consume(b'&') {
+                break;
+            }
+            self.charge()?;
+            let rhs = self.comparison(depth)?;
+            lhs = Value::Int(lhs.as_int() & rhs.as_int());
+        }
+        Ok(lhs)
+    }
+
+    fn bitwise_xor(&mut self, depth: usize) -> Result<Value, EvalError> {
+        let mut lhs = self.bitwise_and(depth)?;
+        while self.consume(b'^') {
+            self.charge()?;
+            let rhs = self.bitwise_and(depth)?;
+            lhs = Value::Int(lhs.as_int() ^ rhs.as_int());
+        }
+        Ok(lhs)
+    }
+
+    fn bitwise_or(&mut self, depth: usize) -> Result<Value, EvalError> {
+        let mut lhs = self.bitwise_xor(depth)?;
+        loop {
+            self.skip_space();
+            if self.source[self.offset..].starts_with(b"||") {
+                return Err(EvalError::Syntax);
+            }
+            if !self.consume(b'|') {
+                break;
+            }
+            self.charge()?;
+            let rhs = self.bitwise_xor(depth)?;
+            lhs = Value::Int(lhs.as_int() | rhs.as_int());
+        }
+        Ok(lhs)
+    }
+
     fn evaluate(&mut self) -> Result<Value, EvalError> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
@@ -504,7 +551,7 @@ impl<'a> Parser<'a> {
         {
             return Err(EvalError::Syntax);
         }
-        let value = self.comparison(0)?;
+        let value = self.bitwise_or(0)?;
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
@@ -648,6 +695,50 @@ mod tests {
                 Parser::new(program.as_bytes()).evaluate().is_err(),
                 "{program}"
             );
+        }
+    }
+
+    #[test]
+    fn php84_binary_bitwise_precedence_coercion_and_boundaries() {
+        for (program, expected) in [
+            ("echo 6&3;", Value::Int(2)),
+            ("echo 6^3;", Value::Int(5)),
+            ("echo 6|3;", Value::Int(7)),
+            ("echo 1&2|4^3;", Value::Int(7)),
+            ("echo 1|2^3&4;", Value::Int(3)),
+            ("echo 7^2|8&3;", Value::Int(5)),
+            ("echo 1^2^3;", Value::Int(0)),
+            ("echo (1&3)===1;", Value::Bool(true)),
+            ("echo 1&3===1;", Value::Int(0)),
+            ("echo 1&3==1;", Value::Int(0)),
+            ("echo 1^3==1;", Value::Int(1)),
+            ("echo 1|3==1;", Value::Int(1)),
+            ("echo 1|2<3;", Value::Int(1)),
+            ("echo true&false;", Value::Int(0)),
+            ("echo true^false;", Value::Int(1)),
+            ("echo true|false;", Value::Int(1)),
+            ("echo 1&true;", Value::Int(1)),
+            ("echo 1^true;", Value::Int(0)),
+            ("echo 1|true;", Value::Int(1)),
+            ("echo -1&0x7fff_ffff_ffff_ffff;", Value::Int(i64::MAX)),
+            ("echo ~0^0x7fff_ffff_ffff_ffff;", Value::Int(i64::MIN)),
+            ("$x=6; $x=$x&3; echo $x;", Value::Int(2)),
+            ("$x=6; $x=$x^3; echo $x;", Value::Int(5)),
+            ("$x=6; $x=$x|3; echo $x;", Value::Int(7)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo 1&;", "echo 1^;", "echo 1|;",
+            "echo &1;", "echo ^1;", "echo |1;",
+            "echo 1&&2;", "echo 1||2;",
+            "echo 1&$missing;", "echo 1^$missing;",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
         }
     }
 
