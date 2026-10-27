@@ -32,6 +32,19 @@ LOGICAL_NOT_PROGRAMS = [
     "$flag=false; echo !$flag;", "$x=0; $x=!$x; echo $x;",
 ]
 
+BITWISE_NOT_PROGRAMS = [
+    "echo ~0;", "echo ~1;", "echo ~-1;", "echo ~~0;",
+    "echo ~0x7fff_ffff_ffff_ffff;",
+    "echo ~(0-9223372036854775807-1);",
+    "echo ~2**3;", "echo ~2**3+1;", "echo ~(2**3+1);",
+    "echo -~2**3;", "echo ~-2;", "echo !~0;",
+    "echo ~1<=>-2;", "echo ~1===-2;",
+    "echo ~+3;", "echo +~3;", "echo ~-~0;",
+    "$x=5; echo ~$x;", "$x=5; echo ~($x+1);",
+    "$x=1; $x=~$x; echo $x;", "echo ~(1<=>2);",
+]
+
+
 SPACESHIP_PROGRAMS = [
     "echo 1<=>2;", "echo 2<=>2;", "echo 3<=>2;",
     "echo true<=>2;", "echo false<=>-1;", "echo false<=>0;",
@@ -190,6 +203,11 @@ def main():
     for value in range(-10, 11):
         logical_not.append(f"$x={value}; echo !($x<0);")
         logical_not.append(f"$x={value}; echo !!$x;")
+    bitwise_not = list(BITWISE_NOT_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-500, 501)
+        offset = rng.randrange(-100, 101)
+        bitwise_not.append(f"$x={value}; echo ~($x+({offset}));")
     spaceship = list(SPACESHIP_PROGRAMS)
     for _ in range(64):
         left = rng.randrange(-500, 501)
@@ -202,7 +220,7 @@ def main():
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
-        + booleans + logical_not + spaceship
+        + booleans + logical_not + bitwise_not + spaceship
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -297,9 +315,31 @@ def main():
                 file=sys.stderr,
             )
 
+    # PHP 8.4 raises TypeError for bitwise not applied to booleans.
+    # Unlike arbitrary unsupported syntax, these are verified on both runtimes.
+    type_errors = [
+        b"<?php echo ~true;",
+        b"<?php echo ~false;",
+        b"<?php echo ~(1<2);",
+        b"<?php echo ~!0;",
+        b"<?php $x=true; echo ~$x;",
+    ]
+    for index, code in enumerate(type_errors):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"TypeError" not in php.stderr
+                or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL bitwise_type_error={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power differential: {len(cases)} compatible "
-        f"cases, {len(invalid)} strict rejections, {failures} failures"
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise-not differential: "
+        f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
+        f"{len(type_errors)} PHP TypeError rejections, {failures} failures"
     )
     return int(failures != 0)
 
