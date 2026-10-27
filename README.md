@@ -149,6 +149,26 @@ resource limits by placing a NUL near the beginning of a long name.
 The PHP CLI differential suite checks the decoded-NUL cases against
 PHP 8.4 `parse_str()`. This does not claim raw-NUL HTTP SAPI equivalence.
 
+## PHP max_input_vars and ignored names (opt-in)
+
+PHP 8.4 counts syntactically present URL-encoded pairs with empty decoded
+variable names against `max_input_vars`, even though they are omitted from
+`$_POST`. For example, at a limit of 2, `a=1&=ignored&b=2` publishes
+only `a`. Blank separator-only pairs such as `a=1&&b=2` do not consume
+a variable slot. A name truncated to empty by `%00` also consumes a slot.
+
+When `--php-max-input-vars N` is selected, the URL-encoded CLI now preserves
+ignored empty-name pairs in the internal wire representation, so the POST
+projection counts them in input order before omitting them from the output.
+Library callers can opt in with `FormParser::with_php_input_var_counting()`
+or `urlencoded::parse_reader_with_php_input_var_counting(reader, limits,
+separators, truncate_nul)` before using `into_post_with_max_input_vars()`
+or `into_post_with_php_limits()`. Without this parser option, empty-name
+pairs are discarded as before; using only the POST adapter cannot recover
+their positions. Raw input, part-count and memory quotas continue to apply
+to the preserved pairs. The PHP CLI differential suite covers both explicit
+empty names and NUL-truncated names, including custom separators.
+
 ## PHP-style adapter scope
 
 An opt-in `admission::admit_with_php_post_max_size` adapter models PHP
