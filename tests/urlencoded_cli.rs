@@ -62,3 +62,36 @@ fn cli_does_not_publish_partial_trees_after_decoding_failure() {
     assert!(output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Malformed"));
 }
+
+#[test]
+fn cli_php_max_input_vars_counts_ignored_names_but_not_blank_pairs() {
+    let cases: &[(&[&str], &[u8], bool)] = &[
+        (&["--php-max-input-vars", "2"], b"a=1&=ignored&b=2", false),
+        (&["--php-max-input-vars", "2"], b"a=1&&b=2", true),
+        (
+            &["--php-max-input-vars", "2", "--php-nul-name-truncation"],
+            b"a=1&%00ignored=2&b=3",
+            false,
+        ),
+        (
+            &["--php-max-input-vars", "2", "--php-arg-separators", "|"],
+            b"a=1|=ignored|b=2",
+            false,
+        ),
+    ];
+    for (args, body, includes_b) in cases {
+        let output = run_with_args(args, body);
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(stdout.contains(r#"["s","61"],["s","31"]"#), "{args:?}");
+        assert_eq!(
+            stdout.contains(r#"["s","62"],["s","32"]"#),
+            *includes_b,
+            "{args:?}"
+        );
+    }
+}
