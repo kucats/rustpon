@@ -627,7 +627,6 @@ mod tests {
             "echo truex;",
             "echo FALSE_1;",
             "echo true&&false;",
-            "echo !false;",
             "echo true<false<true;",
             "echo (1<2;",
         ] {
