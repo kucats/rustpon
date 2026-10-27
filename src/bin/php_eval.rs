@@ -502,10 +502,7 @@ impl<'a> Parser<'a> {
         } else {
             self.skip_space();
             let remaining = &self.source[self.offset..];
-            for (name, all_set) in [
-                (b"isset".as_slice(), true),
-                (b"empty".as_slice(), false),
-            ] {
+            for (name, all_set) in [(b"isset".as_slice(), true), (b"empty".as_slice(), false)] {
                 if remaining
                     .get(..name.len())
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
