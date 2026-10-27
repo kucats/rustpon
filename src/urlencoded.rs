@@ -26,6 +26,9 @@ pub struct FormParser {
     separators: [u64; 4],
     // Opt-in PHP parse_str() behavior: decoded NUL terminates the name.
     php_nul_name_truncation: bool,
+    // Preserve syntactically present but empty decoded names so the POST
+    // adapter can count them toward PHP max_input_vars in wire order.
+    php_count_ignored_names: bool,
 }
 
 impl FormParser {
@@ -77,6 +80,7 @@ impl FormParser {
             raw_values_total: 0,
             separators: [1u64 << (b'&' as usize % 64), 0, 0, 0],
             php_nul_name_truncation: false,
+            php_count_ignored_names: false,
         })
     }
 
@@ -106,6 +110,15 @@ impl FormParser {
     /// Raw input limits are still enforced before any decoding or truncation.
     pub fn with_php_nul_name_truncation(mut self) -> Self {
         self.php_nul_name_truncation = true;
+        self
+    }
+
+    /// PHP counts nonblank pairs with empty decoded names against
+    /// max_input_vars even though they do not appear in $_POST. Preserve
+    /// those pairs as empty-name wire entries for the projection adapter.
+    /// This is opt-in; the strict wire parser continues to discard them.
+    pub fn with_php_input_var_counting(mut self) -> Self {
+        self.php_count_ignored_names = true;
         self
     }
 
@@ -190,8 +203,11 @@ impl FormParser {
     fn complete_field(&mut self) -> Result<(), Error> {
         let end = self.request().arena.len();
         let value_start = self.value_start.unwrap_or(end);
-        if self.field_start == value_start {
-            // PHP ignores blank pairs and pairs with an empty name.
+        if self.field_start == value_start
+            && !(self.php_count_ignored_names && self.value_start.is_some())
+        {
+            // Blank pairs never count. In strict mode empty names are also
+            // discarded; PHP counting mode retains explicit '=value' pairs.
             let discard_from = self.field_start;
             self.request().arena.truncate(discard_from);
         } else {
@@ -221,8 +237,8 @@ impl FormParser {
             if self.request().arena[field_start..name_end].contains(&0) {
                 return Err(Error::Malformed);
             }
-            if name_end == field_start {
-                // PHP ignores names that become empty after NUL truncation.
+            if name_end == field_start && !self.php_count_ignored_names {
+                // Strict wire IR omits names that decode to empty.
                 self.request().arena.truncate(field_start);
             } else {
                 let part_count = add_usize(
@@ -313,7 +329,7 @@ fn url_decode(bytes: &mut [u8]) -> usize {
 
 /// Standalone blocking-Read adapter with no HTTP transport assumptions.
 pub fn parse_reader(reader: &mut impl Read, limits: Limits) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, b"&", false)
+    parse_reader_impl(reader, limits, b"&", false, false)
 }
 
 /// Opt-in PHP 8.4 `arg_separator.input='&;'` parsing for trusted SAPI settings.
@@ -322,7 +338,7 @@ pub fn parse_reader_with_php_semicolon_separator(
     reader: &mut impl Read,
     limits: Limits,
 ) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, b"&;", false)
+    parse_reader_impl(reader, limits, b"&;", false, false)
 }
 
 /// Parse using PHP's configured arg_separator.input byte set. The empty
@@ -332,7 +348,7 @@ pub fn parse_reader_with_php_arg_separators(
     limits: Limits,
     separators: &[u8],
 ) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, separators, false)
+    parse_reader_impl(reader, limits, separators, false, false)
 }
 
 /// Opt-in PHP 8.4 parse_str() handling of percent-decoded NULs in field
@@ -343,7 +359,21 @@ pub fn parse_reader_with_php_nul_name_truncation(
     limits: Limits,
     separators: &[u8],
 ) -> Result<Request, Error> {
-    parse_reader_impl(reader, limits, separators, true)
+    parse_reader_impl(reader, limits, separators, true, false)
+}
+
+/// Opt-in PHP max_input_vars-compatible accounting for empty variable names.
+/// Blank separator-only pairs remain ignored; explicit '=value' pairs and
+/// percent-decoded NUL names occupy an input-variable slot without becoming
+/// visible POST entries. Use with into_post_with_max_input_vars or
+/// into_post_with_php_limits; independent wire resource limits still apply.
+pub fn parse_reader_with_php_input_var_counting(
+    reader: &mut impl Read,
+    limits: Limits,
+    separators: &[u8],
+    php_nul_name_truncation: bool,
+) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, separators, php_nul_name_truncation, true)
 }
 
 fn parse_reader_impl(
@@ -351,8 +381,12 @@ fn parse_reader_impl(
     limits: Limits,
     separators: &[u8],
     php_nul_name_truncation: bool,
+    php_count_ignored_names: bool,
 ) -> Result<Request, Error> {
     let mut parser = FormParser::new(limits)?.with_php_arg_separators(separators);
+    if php_count_ignored_names {
+        parser = parser.with_php_input_var_counting();
+    }
     if php_nul_name_truncation {
         parser = parser.with_php_nul_name_truncation();
     }
@@ -465,6 +499,79 @@ mod tests {
         )
         .unwrap();
         assert_eq!(fields(&parsed), vec![(b"a".to_vec(), b"2".to_vec())]);
+    }
+
+    #[test]
+    fn php_input_var_counting_retains_ignored_names_in_wire_order() {
+        let body = b"a=1&=ignored&b=2";
+        let request = parse_reader_with_php_input_var_counting(
+            &mut Cursor::new(body),
+            Limits::default(),
+            b"&",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&request),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (Vec::new(), b"ignored".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+            ]
+        );
+        let post = request
+            .into_post_with_max_input_vars(post::Limits::default(), 2)
+            .unwrap();
+        let mut json = Vec::new();
+        post.write_json(&mut json).unwrap();
+        let json = String::from_utf8(json).unwrap();
+        assert!(json.contains(r#"["s","61"],["s","31"]"#));
+        assert!(!json.contains(r#"["s","62"]"#));
+
+        // A separator-only empty pair does not consume a PHP variable slot.
+        let request = parse_reader_with_php_input_var_counting(
+            &mut Cursor::new(b"a=1&&b=2"),
+            Limits::default(),
+            b"&",
+            false,
+        )
+        .unwrap();
+        assert_eq!(request.parts().len(), 2);
+        assert_eq!(
+            request
+                .into_post_with_max_input_vars(post::Limits::default(), 2)
+                .unwrap()
+                .stats()
+                .fields,
+            2
+        );
+
+        // NUL-truncated empty names also consume a slot, even though the
+        // resulting $_POST has no entry for that name.
+        let request = parse_reader_with_php_input_var_counting(
+            &mut Cursor::new(b"%00discard=1&a=2"),
+            Limits::default(),
+            b"&",
+            true,
+        )
+        .unwrap();
+        assert_eq!(fields(&request)[0].0, b"");
+        let post = request
+            .into_post_with_max_input_vars(post::Limits::default(), 1)
+            .unwrap();
+        let mut json = Vec::new();
+        post.write_json(&mut json).unwrap();
+        assert_eq!(json, b"[\"a\",[]]");
+
+        // Every possible two-feed split must yield the same projection.
+        for split in 0..=body.len() {
+            let mut parser = FormParser::new(Limits::default())
+                .unwrap()
+                .with_php_input_var_counting();
+            parser.feed(&body[..split]).unwrap();
+            parser.feed(&body[split..]).unwrap();
+            assert_eq!(fields(&parser.finish().unwrap())[1].0, b"", "split {split}");
+        }
     }
 
     #[test]
