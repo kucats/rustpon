@@ -836,6 +836,19 @@ seeded generated calls and verifies `DivisionByZeroError` and
 `ArithmeticError` on the reference runtime. Other builtins and arbitrary
 function definitions/calls remain unsupported.
 
+### PHP 8.4 `abs()` builtin (research)
+
+The bounded `php_eval` interpreter supports case-insensitive `abs(value)`
+for integer and boolean expressions. Boolean operands convert to integers;
+negative integers use checked absolute value, and nested `abs()`/`intdiv()`
+calls share the existing expression depth and work budgets. On PHP 8.4,
+`abs(PHP_INT_MIN)` promotes to a floating-point value. This integer-only
+prototype rejects that case as `UnsupportedFloat` before writing output.
+Missing or extra arguments, unknown functions and variables are rejected.
+The PHP CLI differential suite adds fixed and seeded generated exact-integer
+cases, plus malformed-call and minimum-integer rejection tests. No Zend
+function dispatch or float support is implied.
+
 ### PHP 8.4 spaceship comparison
 
 The research `php_eval` binary supports `<=>` for its bounded integer and
