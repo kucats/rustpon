@@ -104,6 +104,24 @@ TYPE_PREDICATE_PROGRAMS = [
 ]
 
 
+SCALAR_CONVERSION_PROGRAMS = [
+    "echo boolval(0);", "echo boolval(1);", "echo boolval(-1);",
+    "echo boolval(false);", "echo boolval(true);",
+    "echo BOOLVAL(1<2);", "echo boolval(0-9223372036854775807-1);",
+    "echo intval(0);", "echo intval(-9);",
+    "echo intval(true);", "echo intval(false);",
+    "echo INTVAL(9223372036854775807);",
+    "echo intval(0-9223372036854775807-1);",
+    "echo intval(2<1);", "echo intval(boolval(-3));",
+    "echo boolval(intval(false));",
+    "echo is_int(intval(true));", "echo is_bool(boolval(5));",
+    "echo is_bool(intval(true));", "echo is_int(boolval(1));",
+    "echo boolval(1+2*3);", "echo intval(true)+2;",
+    "$x=false; $x=intval($x); echo is_int($x);",
+    "$x=-7; echo boolval($x);",
+]
+
+
 INTDIV_PROGRAMS = [
     "echo intdiv(7,3);", "echo intdiv(-7,3);",
     "echo intdiv(7,-3);", "echo intdiv(-7,-3);",
@@ -344,6 +362,16 @@ def main():
         right = rng.randrange(-100, 101)
         predicate = rng.choice(["is_int", "is_bool"])
         type_predicates.append(f"$x=({left}<{right}); echo {predicate}($x);")
+    scalar_conversions = list(SCALAR_CONVERSION_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-1000, 1001)
+        scalar_conversions.append(f"$x={value}; echo boolval($x+({delta}));")
+        scalar_conversions.append(f"$x={value}; echo intval(boolval($x+({delta})));")
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        scalar_conversions.append(f"$x={value}; echo is_bool(boolval($x));")
+        scalar_conversions.append(f"$x={value}; echo is_int(intval($x));")
     extrema_programs = list(MIN_MAX_PROGRAMS)
     for _ in range(192):
         function = rng.choice(["min", "max", "MIN", "MAX"])
@@ -360,6 +388,7 @@ def main():
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
+        + scalar_conversions
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -442,6 +471,17 @@ def main():
         b"<?php echo abs(1;",
         b"<?php echo absolute(-1);",
         b"<?php echo abs($missing);",
+        b"<?php echo boolval();",
+        b"<?php echo intval();",
+        b"<?php echo boolval(1,2);",
+        b"<?php echo intval(1,2);",  # Valid PHP base overload; not in this subset.
+        b"<?php echo boolval(1,);",
+        b"<?php echo intval(,1);",
+        b"<?php echo boolvalue(1);",
+        b"<?php echo integer_value(1);",
+        b"<?php echo boolval($missing);",
+        b"<?php echo intval($missing);",
+        b"<?php echo boolval(1;",
         b"<?php echo min();",
         b"<?php echo max();",
         b"<?php echo min(1);",
@@ -569,7 +609,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
