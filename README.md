@@ -862,12 +862,15 @@ appropriate runtime value tag, so `is_bool(boolval(1))` and
 source/work/depth quotas, and fail-closed rejection of missing arguments,
 unknown variables, and unsupported function names are retained.
 
-PHP accepts a second base argument to `intval()` and additional value
-types such as strings and floats. The base overload and these types are
-**not implemented** in this subset; extra arguments are rejected.
-The deterministic PHP 8.4 CLI differential suite compares fixed boundary
-cases and generated integer/boolean conversions. No Zend function dispatch
-or native PHP runtime integration is implied.
+PHP 8.4 also accepts `intval(value, base)` for integer/boolean values.
+The optional base expression is fully evaluated and charged to the usual
+source/work/depth budgets, but PHP ignores its numeric value for these input
+types (including bases outside 2–36). Malformed, missing and third arguments
+fail closed. String parsing with a numeric base, floats, named arguments and
+other PHP value types remain unsupported. The deterministic PHP 8.4 CLI
+differential suite compares fixed boundaries, nested/invalid calls and
+generated scalar/base combinations. No Zend function dispatch or native PHP
+runtime integration is implied.
 
 ### PHP 8.4 `abs()` builtin (research)
 
