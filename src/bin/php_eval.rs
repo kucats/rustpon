@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, and variable-only isset()/empty() probes.
+//! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), and scalar-expression empty().
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -436,26 +436,18 @@ impl<'a> Parser<'a> {
         })
     }
 
-    // PHP 8.4 isset()/empty() are language constructs, not ordinary
-    // functions: probing an undefined variable must not raise a notice or
-    // UnknownVariable. This intentionally supports only simple $ident
-    // operands; array offsets, properties, and empty(expressions) are not
-    // represented by the current bounded evaluator.
-    fn variable_probe(
-        &mut self,
-        depth: usize,
-        name: &[u8],
-        all_set: bool,
-    ) -> Result<Value, EvalError> {
+    // isset() is a language construct: undefined and null variables
+    // are not set. This subset accepts only simple variable names.
+    fn isset_probe(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth >= MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
-        self.offset += name.len();
+        self.offset += b"isset".len();
         self.charge()?;
         if !self.consume(b'(') {
             return Err(EvalError::Syntax);
         }
-        let mut result = all_set;
+        let mut all_set = true;
         loop {
             let variable = self.variable_name()?;
             let value = self
@@ -463,23 +455,54 @@ impl<'a> Parser<'a> {
                 .iter()
                 .find(|(key, _)| *key == variable)
                 .map(|(_, value)| *value);
-            if all_set {
-                result &= value.is_some_and(|value| !matches!(value, Value::Null));
-            } else {
-                result = value.is_none_or(|value| !value.as_bool());
-            }
+            all_set &= value.is_some_and(|value| !matches!(value, Value::Null));
             if self.consume(b')') {
-                return Ok(Value::Bool(result));
+                return Ok(Value::Bool(all_set));
             }
-            // isset($a, $b,) is valid in PHP 8.4. empty() accepts only
-            // one operand and does not accept a trailing comma.
-            if !all_set || !self.consume(b',') {
+            if !self.consume(b',') {
                 return Err(EvalError::Syntax);
             }
+            // PHP 8.4 permits one trailing comma for isset().
             if self.consume(b')') {
-                return Ok(Value::Bool(result));
+                return Ok(Value::Bool(all_set));
             }
         }
+    }
+
+    // PHP 8.4 empty() accepts scalar expressions, but a bare variable
+    // must be probed without triggering an undefined-variable error.
+    // Rewind only the speculative variable lookup, restoring its work
+    // charge, before parsing a nontrivial expression normally.
+    fn empty_probe(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"empty".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        self.skip_space();
+        let expression_start = self.offset;
+        let work_before_probe = self.work;
+        if self.peek() == Some(b'$') {
+            let variable = self.variable_name()?;
+            if self.consume(b')') {
+                let value = self
+                    .bindings
+                    .iter()
+                    .find(|(key, _)| *key == variable)
+                    .map(|(_, value)| *value);
+                return Ok(Value::Bool(value.is_none_or(|value| !value.as_bool())));
+            }
+            self.offset = expression_start;
+            self.work = work_before_probe;
+        }
+        let value = self.bitwise_or(depth + 1)?;
+        if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        Ok(Value::Bool(!value.as_bool()))
     }
 
     fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
@@ -510,7 +533,11 @@ impl<'a> Parser<'a> {
                         .get(name.len())
                         .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
                 {
-                    return self.variable_probe(depth, name, all_set);
+                    return if all_set {
+                        self.isset_probe(depth)
+                    } else {
+                        self.empty_probe(depth)
+                    };
                 }
             }
             if remaining
@@ -956,6 +983,23 @@ mod tests {
             ("$x=null; echo is_bool(isset($x));", Value::Bool(true)),
             ("$x=0; echo empty($x)===true;", Value::Bool(true)),
             ("$x=7; echo isset($x)===true;", Value::Bool(true)),
+            ("echo empty(0);", Value::Bool(true)),
+            ("echo empty(1);", Value::Bool(false)),
+            ("echo EMPTY(false);", Value::Bool(true)),
+            ("echo empty(null);", Value::Bool(true)),
+            ("echo empty(1-1);", Value::Bool(true)),
+            ("echo empty(1<2);", Value::Bool(false)),
+            ("echo empty(1&2);", Value::Bool(true)),
+            ("echo empty(intdiv(8,4)-2);", Value::Bool(true)),
+            ("echo empty(isset($missing));", Value::Bool(true)),
+            ("echo empty(empty($missing));", Value::Bool(false)),
+            ("$x=1; echo empty($x-1);", Value::Bool(true)),
+            ("$x=0; echo empty($x+1);", Value::Bool(false)),
+            ("$x=7; echo empty(($x));", Value::Bool(false)),
+            ("$x=0; echo empty(($x));", Value::Bool(true)),
+            ("$x=null; echo empty($x+0);", Value::Bool(true)),
+            ("echo is_bool(empty(0));", Value::Bool(true)),
+            ("echo empty(0)===true;", Value::Bool(true)),
         ] {
             assert_eq!(
                 Parser::new(program.as_bytes()).evaluate(),
@@ -967,7 +1011,10 @@ mod tests {
             "echo isset();",
             "echo empty();",
             "echo isset(1);",
-            "echo empty(0);",
+            "echo empty(0,1);",
+            "echo empty(0,);",
+            "echo empty(1+);",
+            "echo empty($missing+1);",
             "echo isset($x,1);",
             "echo empty($x,$y);",
             "echo empty($x,);",
@@ -988,6 +1035,16 @@ mod tests {
         assert_eq!(
             Parser::new(expensive.as_bytes()).evaluate(),
             Err(EvalError::WorkLimit)
+        );
+        let expensive_empty = format!("echo empty({});", vec!["1"; 260].join("+"));
+        assert_eq!(
+            Parser::new(expensive_empty.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
+        );
+        let deep_empty = format!("echo {}0{};", "empty(".repeat(33), ")".repeat(33));
+        assert_eq!(
+            Parser::new(deep_empty.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
         );
         let deep = format!("echo {}isset($x){};", "(".repeat(33), ")".repeat(33));
         assert_eq!(

@@ -104,6 +104,19 @@ TYPE_PREDICATE_PROGRAMS = [
 ]
 
 
+EMPTY_EXPRESSION_PROGRAMS = [
+    "echo empty(0);", "echo empty(1);",
+    "echo EMPTY(false);", "echo empty(null);",
+    "echo empty(1-1);", "echo empty(1<2);",
+    "echo empty(1&2);", "echo empty(intdiv(8,4)-2);",
+    "echo empty(isset($missing));", "echo empty(empty($missing));",
+    "$x=1; echo empty($x-1);", "$x=0; echo empty($x+1);",
+    "$x=7; echo empty(($x));", "$x=0; echo empty(($x));",
+    "$x=null; echo empty($x+0);",
+    "echo is_bool(empty(0));", "echo empty(0)===true;",
+]
+
+
 VARIABLE_PROBE_PROGRAMS = [
     "echo isset($missing);", "echo empty($missing);",
     "echo ISSET($missing);", "echo EMPTY($missing);",
@@ -423,6 +436,12 @@ def main():
         )
         variable_probes.append(f"$x={value}; echo empty($x);")
         variable_probes.append(f"$x={value}; echo isset($x,$missing);")
+    empty_expressions = list(EMPTY_EXPRESSION_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-500, 501)
+        delta = rng.randrange(-500, 501)
+        empty_expressions.append(f"$x={value}; echo empty($x+({delta}));")
+        empty_expressions.append(f"$x={value}; echo is_bool(empty($x+({delta})));")
     null_programs = list(NULL_PROGRAMS)
     for _ in range(64):
         value = rng.randrange(-100000, 100001)
@@ -464,7 +483,7 @@ def main():
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
-        + scalar_conversions + null_programs + variable_probes
+        + scalar_conversions + null_programs + variable_probes + empty_expressions
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -543,7 +562,10 @@ def main():
         b"<?php echo isset();",
         b"<?php echo empty();",
         b"<?php echo isset(1);",
-        b"<?php echo empty(0);",
+        b"<?php echo empty(0,1);",
+        b"<?php echo empty(0,);",
+        b"<?php echo empty(1+);",
+        b"<?php echo empty($missing+1);",
         b"<?php echo isset($x,1);",
         b"<?php echo empty($x,$y);",
         b"<?php echo empty($x,);",
@@ -712,7 +734,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/empty-expression differential: 
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

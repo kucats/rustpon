@@ -766,23 +766,25 @@ Chained comparisons, binary logical operators, strings, floats,
 arrays, references, control flow and unbounded work remain unsupported. This
 is not a full Zend value model, AST, PHP VM or production PHP-FPM integration.
 
-### PHP 8.4 variable-only `isset()` and `empty()` (research)
+### PHP 8.4 `isset()` probes and scalar-expression `empty()` (research)
 
-The bounded evaluator now recognizes PHP's case-insensitive `isset($name)`
-and `empty($name)` language constructs without raising an unknown-variable
-error. `isset` returns false for undefined or null variables, and accepts
-multiple simple variables with an optional trailing comma; `empty` tests
-PHP truthiness for exactly one variable, including undefined/null/false/zero.
-The original integer, boolean, and null value tags are retained. Each probe
-is charged against the existing work, source-size, identifier, and depth
-budgets. Differential tests compare defined/undefined variables, multiple
-arguments, nesting with existing operators/predicates, and generated scalar
-values with PHP 8.4 CLI; malformed and unsupported forms are rejected.
+The bounded evaluator recognizes case-insensitive `isset($name)` and
+`empty($name)` without raising an unknown-variable error. `isset` returns
+false for undefined or null variables and accepts multiple simple variables
+with an optional trailing comma. `empty` additionally evaluates supported
+integer/boolean/null expressions, including arithmetic, comparisons, nested
+builtins and parentheses, then applies PHP truthiness. A bare undefined
+variable remains a notice-free probe. The original value tags are retained,
+and expression parsing obeys existing source, work and recursion limits.
 
-Only simple ASCII `$identifier` operands are supported. PHP permits more
-complex `empty(expr)` and `isset($array[key])` forms; these remain explicitly
-unsupported, along with properties, references, and PHP's full symbol table.
-This is not a general PHP language parser or production runtime.
+The PHP 8.4 CLI differential suite compares defined/undefined variables,
+scalar expressions, nested probes and 256 generated expression programs.
+Malformed argument lists and unsupported forms are rejected without output.
+`isset()` still accepts only simple ASCII `$identifier` operands. Array
+offsets, properties, references and the full symbol table remain unsupported;
+`empty($missing + 1)` is rejected because general undefined-variable
+expression semantics are not modeled. This is not a general PHP language
+parser or production runtime.
 
 ### PHP 8.4 null literal and scalar predicates (research)
 
