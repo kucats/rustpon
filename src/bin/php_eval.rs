@@ -733,12 +733,21 @@ mod tests {
             );
         }
         for program in [
-            "echo 1&;", "echo 1^;", "echo 1|;",
-            "echo &1;", "echo ^1;", "echo |1;",
-            "echo 1&&2;", "echo 1||2;",
-            "echo 1&$missing;", "echo 1^$missing;",
+            "echo 1&;",
+            "echo 1^;",
+            "echo 1|;",
+            "echo &1;",
+            "echo ^1;",
+            "echo |1;",
+            "echo 1&&2;",
+            "echo 1||2;",
+            "echo 1&$missing;",
+            "echo 1^$missing;",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
     }
 
