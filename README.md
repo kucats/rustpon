@@ -836,6 +836,20 @@ seeded generated calls and verifies `DivisionByZeroError` and
 `ArithmeticError` on the reference runtime. Other builtins and arbitrary
 function definitions/calls remain unsupported.
 
+### PHP 8.4 scalar type predicates (research evaluator)
+
+The bounded `php_eval` evaluator now implements case-insensitive `is_int()`
+(and its PHP aliases `is_integer()`, `is_long()`) and `is_bool()`.
+Each takes exactly one supported integer/boolean expression, inspects the
+actual `Value` tag without coercing it, and returns a PHP boolean.
+For example, `is_int(true)` is false, `is_int(true+0)` is true, and
+`is_bool(is_int(1))` is true. Existing source/work/depth limits apply to
+nested calls. Missing/extra arguments, unknown functions and unknown
+variables fail closed without output. The PHP 8.4 CLI differential suite
+checks fixed type boundaries, nested expressions and seeded values.
+Strings, floats, arrays, null, references, user functions and Zend type
+semantics remain outside this research-only subset.
+
 ### PHP 8.4 `abs()` builtin (research)
 
 The bounded `php_eval` interpreter supports case-insensitive `abs(value)`
