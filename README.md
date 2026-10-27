@@ -925,6 +925,19 @@ exception categories, against PHP 8.4. Unknown variables, malformed compound
 tokens and exhausted assignment/work budgets fail closed.
 This remains a deliberately limited evaluator, not a PHP VM.
 
+### PHP 8.4 integer exponentiation assignment (research)
+
+The bounded `php_eval` interpreter supports `$x **= expression;` for
+previously initialized integer, boolean and null variables. It shares the
+checked exponentiation implementation with binary `**`, including PHP 8.4
+right associativity and expression precedence. For example,
+`$x=2; $x**=3**2; echo $x;` emits `512`. The stored result is an integer.
+Negative exponents, floating-point promotion on overflow, missing variables
+and malformed tokens fail closed; no floating-point behavior is claimed.
+The PHP CLI oracle covers fixed type/boundary cases and 64 seeded exact
+integer exponentiation assignments. The usual source, work and assignment
+budgets still apply.
+
 ### PHP 8.4 `intdiv()` builtin (research)
 
 The bounded `php_eval` interpreter now recognizes case-insensitive
