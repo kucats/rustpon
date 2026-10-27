@@ -479,10 +479,7 @@ impl<'a> Parser<'a> {
                     return self.builtin_type_predicate(depth, name, integer);
                 }
             }
-            for (name, boolean) in [
-                (b"boolval".as_slice(), true),
-                (b"intval".as_slice(), false),
-            ] {
+            for (name, boolean) in [(b"boolval".as_slice(), true), (b"intval".as_slice(), false)] {
                 if remaining
                     .get(..name.len())
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
@@ -935,7 +932,10 @@ mod tests {
             ("echo intval(true);", Value::Int(1)),
             ("echo intval(false);", Value::Int(0)),
             ("echo INTVAL(9223372036854775807);", Value::Int(i64::MAX)),
-            ("echo intval(0-9223372036854775807-1);", Value::Int(i64::MIN)),
+            (
+                "echo intval(0-9223372036854775807-1);",
+                Value::Int(i64::MIN),
+            ),
             ("echo intval(2<1);", Value::Int(0)),
             ("echo intval(boolval(-3));", Value::Int(1)),
             ("echo boolval(intval(false));", Value::Bool(false)),
@@ -945,7 +945,10 @@ mod tests {
             ("echo is_int(boolval(1));", Value::Bool(false)),
             ("echo boolval(1+2*3);", Value::Bool(true)),
             ("echo intval(true)+2;", Value::Int(3)),
-            ("$x=false; $x=intval($x); echo is_int($x);", Value::Bool(true)),
+            (
+                "$x=false; $x=intval($x); echo is_int($x);",
+                Value::Bool(true),
+            ),
             ("$x=-7; echo boolval($x);", Value::Bool(true)),
         ] {
             assert_eq!(
