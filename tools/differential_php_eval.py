@@ -70,6 +70,20 @@ ABS_PROGRAMS = [
 ]
 
 
+TYPE_PREDICATE_PROGRAMS = [
+    "echo is_int(0);", "echo is_int(-1);", "echo is_int(true);",
+    "echo is_bool(false);", "echo is_bool(1);",
+    "echo IS_BOOL(1<2);", "echo IS_INT(true+0);",
+    "echo is_integer(7);", "echo is_long(false);",
+    "echo is_int(0-9223372036854775807-1);",
+    "echo is_bool(is_int(1));", "echo is_int(intdiv(7,3));",
+    "echo is_bool(abs(-3));",
+    "$x=true; echo is_bool($x);",
+    "$x=3; $x=$x<2; echo is_bool($x);",
+    "$x=false; $x=$x+1; echo is_int($x);",
+]
+
+
 INTDIV_PROGRAMS = [
     "echo intdiv(7,3);", "echo intdiv(-7,3);",
     "echo intdiv(7,-3);", "echo intdiv(-7,-3);",
@@ -300,11 +314,21 @@ def main():
         left = rng.randrange(-500, 501)
         right = rng.randrange(-500, 501)
         spaceship.append(f"$x={left}; $y={right}; echo ($x<=>$y)===-1;")
+    type_predicates = list(TYPE_PREDICATE_PROGRAMS)
+    for _ in range(96):
+        value = rng.randrange(-100000, 100001)
+        predicate = rng.choice(["is_int", "IS_INT", "is_integer", "is_long", "is_bool", "IS_BOOL"])
+        type_predicates.append(f"$x={value}; echo {predicate}($x);")
+    for _ in range(32):
+        left = rng.randrange(-100, 101)
+        right = rng.randrange(-100, 101)
+        predicate = rng.choice(["is_int", "is_bool"])
+        type_predicates.append(f"$x=({left}<{right}); echo {predicate}($x);")
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
-        + intdiv_programs + abs_programs
+        + intdiv_programs + abs_programs + type_predicates
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -371,6 +395,15 @@ def main():
         b"<?php echo intdivide(1,2);",
         b"<?php echo intdiv(1,2;",
         b"<?php echo intdiv($missing,2);",
+        b"<?php echo is_int();",
+        b"<?php echo is_bool();",
+        b"<?php echo is_int(1,2);",
+        b"<?php echo is_bool(true,);",
+        b"<?php echo is_integer(,1);",
+        b"<?php echo is_long(1;",
+        b"<?php echo is_intx(1);",
+        b"<?php echo is_boolean(true);",
+        b"<?php echo is_int($missing);",
         b"<?php echo abs();",
         b"<?php echo abs(1,2);",
         b"<?php echo abs(,1);",
@@ -493,7 +526,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs differential: "
+        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
