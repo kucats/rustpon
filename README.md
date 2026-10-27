@@ -867,9 +867,11 @@ function dispatch or float support is implied.
 
 The bounded `php_eval` evaluator now supports case-insensitive `min()`
 and `max()` with **two or more** integer/boolean expressions. The
-winner retains its original value type, and equal PHP loose-comparison
-values preserve the first argument: `min(true, 2)` returns boolean
-`true`, while `min(2, true)` returns integer `2`. Signed 64-bit
+winner retains its original value type. PHP 8.4's direct two-argument
+`min()` fast path selects the **second** operand on a loose-comparison tie:
+`min(true, 2)` returns integer `2`, while `min(2, true)` returns boolean
+`true`. Three-or-more-argument `min()` and all `max()` calls retain the
+first operand on ties. Dynamic function calls are outside this prototype. Signed 64-bit
 extremes, nested functions, assignments and type predicates use the
 existing depth and work quotas; each argument also consumes work.
 Missing arguments, malformed lists and unknown variables fail closed.

@@ -310,7 +310,8 @@ impl<'a> Parser<'a> {
 
 
     // PHP min()/max() preserve the winning argument's original scalar tag.
-    // For loose-comparison ties (e.g. true versus 2), the first wins.
+    // PHP's two-argument min() fast path selects the second on a loose tie;
+    // max() and min() with three or more arguments preserve the first.
     // The single-array overload and non-scalar values remain unsupported.
     fn builtin_extrema(
         &mut self,
@@ -326,7 +327,9 @@ impl<'a> Parser<'a> {
         if !self.consume(b'(') {
             return Err(EvalError::Syntax);
         }
-        let mut selected = self.bitwise_or(depth + 1)?;
+        let first = self.bitwise_or(depth + 1)?;
+        let mut selected = first;
+        let mut argument_count = 1usize;
         // PHP requires at least two arguments for the scalar overload.
         if !self.consume(b',') {
             return Err(EvalError::Syntax);
@@ -336,11 +339,21 @@ impl<'a> Parser<'a> {
             // long argument lists independently of the source byte limit.
             self.charge()?;
             let candidate = self.bitwise_or(depth + 1)?;
+            argument_count += 1;
             let (left, right) = selected.php_order(candidate);
             if (minimum && right < left) || (!minimum && right > left) {
                 selected = candidate;
             }
             if self.consume(b')') {
+                // PHP 8.4's direct two-argument min() fast path selects
+                // the second operand on equality. Three-or-more arguments
+                // use the ordinary first-on-tie reduction instead.
+                if minimum && argument_count == 2 {
+                    let (first_order, candidate_order) = first.php_order(candidate);
+                    if first_order == candidate_order {
+                        selected = candidate;
+                    }
+                }
                 return Ok(selected);
             }
             if !self.consume(b',') {
@@ -412,10 +425,7 @@ impl<'a> Parser<'a> {
                 return self.builtin_abs(depth);
             }
 
-            for (name, minimum) in [
-                (b"min".as_slice(), true),
-                (b"max".as_slice(), false),
-            ] {
+            for (name, minimum) in [(b"min".as_slice(), true), (b"max".as_slice(), false)] {
                 if remaining
                     .get(..name.len())
                     .is_some_and(|prefix| prefix.eq_ignore_ascii_case(name))
@@ -799,7 +809,6 @@ mod tests {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
     }
 
-
     #[test]
     fn php84_min_max_scalar_comparisons_ties_and_resource_limits() {
         for (program, expected) in [
@@ -809,25 +818,33 @@ mod tests {
             ("echo MAX(1,3,2);", Value::Int(3)),
             ("echo min(1+2,2*2);", Value::Int(3)),
             ("echo max(1,2,3,4);", Value::Int(4)),
-            ("echo min(true,1);", Value::Bool(true)),
-            ("echo min(1,true);", Value::Int(1)),
+            ("echo min(true,1);", Value::Int(1)),
+            ("echo min(1,true);", Value::Bool(true)),
             ("echo max(true,2);", Value::Bool(true)),
             ("echo max(2,true);", Value::Int(2)),
-            ("echo min(false,0);", Value::Bool(false)),
-            ("echo min(0,false);", Value::Int(0)),
+            ("echo min(false,0);", Value::Int(0)),
+            ("echo min(0,false);", Value::Bool(false)),
             ("echo min(false,-1);", Value::Bool(false)),
             ("echo max(false,-1);", Value::Int(-1)),
             ("echo min(true,2,-1);", Value::Bool(true)),
+            ("echo min(true,2,1);", Value::Bool(true)),
+            ("echo min(2,true,1);", Value::Int(1)),
             ("echo max(2,true,-1);", Value::Int(2)),
-            ("echo min(0-9223372036854775807-1,9223372036854775807);", Value::Int(i64::MIN)),
-            ("echo max(0-9223372036854775807-1,9223372036854775807);", Value::Int(i64::MAX)),
+            (
+                "echo min(0-9223372036854775807-1,9223372036854775807);",
+                Value::Int(i64::MIN),
+            ),
+            (
+                "echo max(0-9223372036854775807-1,9223372036854775807);",
+                Value::Int(i64::MAX),
+            ),
             ("echo min(max(1,2),3);", Value::Int(2)),
             ("echo max(min(1,2),3);", Value::Int(3)),
-            ("echo is_bool(min(true,2));", Value::Bool(true)),
+            ("echo is_bool(min(true,2));", Value::Bool(false)),
             ("echo is_int(max(2,true));", Value::Bool(true)),
-            ("echo min(1<2,2);", Value::Bool(true)),
+            ("echo min(1<2,2);", Value::Int(2)),
             ("echo max(0,1<2);", Value::Bool(true)),
-            ("$x=2; $y=true; echo min($x,$y);", Value::Int(2)),
+            ("$x=2; $y=true; echo min($x,$y);", Value::Bool(true)),
             ("$x=2; $y=true; echo max($y,$x);", Value::Bool(true)),
         ] {
             assert_eq!(
