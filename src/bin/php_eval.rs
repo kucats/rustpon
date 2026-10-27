@@ -305,6 +305,11 @@ impl<'a> Parser<'a> {
                 .checked_neg()
                 .map(Value::Int)
                 .ok_or(EvalError::Overflow)
+        } else if self.consume(b'!') {
+            // PHP logical negation returns a boolean and binds tighter than
+            // arithmetic/comparisons, but looser than exponentiation.
+            self.charge()?;
+            Ok(Value::Bool(!self.unary(depth + 1)?.as_bool()))
         } else {
             self.power(depth)
         }
@@ -539,6 +544,38 @@ mod tests {
         assert_eq!(eval("echo -(-5);"), Ok(5));
         assert_eq!(eval(" \n<?php\n echo 0; ?>\n"), Ok(0));
         assert_eq!(eval("echo 9223372036854775807;"), Ok(i64::MAX));
+    }
+
+    #[test]
+    fn php84_logical_not_truthiness_and_precedence() {
+        for (program, expected) in [
+            ("echo !true;", Value::Bool(false)),
+            ("echo !false;", Value::Bool(true)),
+            ("echo !0;", Value::Bool(true)),
+            ("echo !1;", Value::Bool(false)),
+            ("echo !-1;", Value::Bool(false)),
+            ("echo !!true;", Value::Bool(true)),
+            ("echo !!false;", Value::Bool(false)),
+            ("echo !(1<2);", Value::Bool(false)),
+            ("echo !2**0;", Value::Bool(false)),
+            ("echo !2**2;", Value::Bool(false)),
+            ("echo !false===true;", Value::Bool(true)),
+            ("echo !false+2;", Value::Int(3)),
+            ("echo !1<2;", Value::Bool(true)),
+            ("echo !true==false;", Value::Bool(true)),
+            ("echo !true!==false;", Value::Bool(false)),
+            ("$flag=false; echo !$flag;", Value::Bool(true)),
+            ("$x=0; $x=!$x; echo $x;", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in ["echo !;", "echo !();", "echo !!!;", "echo !$missing;"] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+        }
     }
 
     #[test]
