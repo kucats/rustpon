@@ -348,11 +348,11 @@ def main():
     for _ in range(192):
         function = rng.choice(["min", "max", "MIN", "MAX"])
         count = rng.randrange(2, 6)
-        args = [
+        operands = [
             rng.choice(["true", "false", str(rng.randrange(-200, 201))])
             for _ in range(count)
         ]
-        expression = f"{function}({','.join(args)})"
+        expression = f"{function}({','.join(operands)})"
         extrema_programs.append(f"echo {expression};")
         extrema_programs.append(f"echo is_bool({expression});")
     cases = (
