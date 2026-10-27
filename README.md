@@ -762,9 +762,21 @@ printf '%s' '<?php $flag=3<4; echo ($flag+2)===3;' |
 
 The PHP CLI oracle adds deterministic boolean assignment, comparison,
 coercion and nested-expression cases plus malformed-token rejections.
-Chained comparisons, logical operators, null, strings, floats, arrays,
-references, control flow and unbounded work remain unsupported. This is not
-a full Zend value model, AST, PHP VM or production PHP-FPM integration.
+Chained comparisons, binary logical operators, null, strings, floats,
+arrays, references, control flow and unbounded work remain unsupported. This
+is not a full Zend value model, AST, PHP VM or production PHP-FPM integration.
+
+### PHP 8.4 unary logical negation
+
+The bounded scalar evaluator accepts unary `!` on its existing integer and
+boolean values, returning a boolean using PHP truthiness (`0` is false;
+nonzero integers are true). Repeated negation, variables, parentheses,
+comparisons and integer exponentiation use the existing bounded recursion
+and work budgets. As in PHP 8.4, `!2**2` negates the power result, while
+`!false+2` evaluates to integer `3`. The CLI differential suite checks
+59 additional fixed and generated programs against PHP 8.4 and rejects
+malformed negations without publishing output. Short-circuit `&&` / `||`,
+bitwise `~`, and other PHP operators remain unsupported.
 
 ## Bounded Interrupted I/O retries and deterministic parser fault campaign
 
