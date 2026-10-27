@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv()/abs()/min()/max()/is_int()/is_bool()/boolval()/intval() builtins (including is_integer/is_long aliases and intval's optional scalar base).
+//! variables, typed integer/boolean/null values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -53,6 +53,7 @@ enum Comparison {
 enum Value {
     Int(i64),
     Bool(bool),
+    Null,
 }
 
 impl Value {
@@ -60,6 +61,7 @@ impl Value {
         match self {
             Self::Int(value) => value,
             Self::Bool(value) => i64::from(value),
+            Self::Null => 0,
         }
     }
 
@@ -67,11 +69,13 @@ impl Value {
         match self {
             Self::Int(value) => value != 0,
             Self::Bool(value) => value,
+            Self::Null => false,
         }
     }
 
     fn php_equal(self, other: Self) -> bool {
-        if matches!(self, Self::Bool(_)) || matches!(other, Self::Bool(_)) {
+        if matches!(self, Self::Bool(_) | Self::Null)
+            || matches!(other, Self::Bool(_) | Self::Null) {
             self.as_bool() == other.as_bool()
         } else {
             self == other
@@ -79,7 +83,8 @@ impl Value {
     }
 
     fn php_order(self, other: Self) -> (i64, i64) {
-        if matches!(self, Self::Bool(_)) || matches!(other, Self::Bool(_)) {
+        if matches!(self, Self::Bool(_) | Self::Null)
+            || matches!(other, Self::Bool(_) | Self::Null) {
             (i64::from(self.as_bool()), i64::from(other.as_bool()))
         } else {
             (self.as_int(), other.as_int())
@@ -90,7 +95,7 @@ impl Value {
         match self {
             Self::Int(value) => value.to_string(),
             Self::Bool(true) => "1".to_owned(),
-            Self::Bool(false) => String::new(),
+            Self::Bool(false) | Self::Null => String::new(),
         }
     }
 }
@@ -368,7 +373,6 @@ impl<'a> Parser<'a> {
         &mut self,
         depth: usize,
         name: &[u8],
-        integer: bool,
     ) -> Result<Value, EvalError> {
         if depth >= MAX_DEPTH {
             return Err(EvalError::DepthLimit);
@@ -382,7 +386,23 @@ impl<'a> Parser<'a> {
         if !self.consume(b')') {
             return Err(EvalError::Syntax);
         }
-        Ok(Value::Bool(matches!(value, Value::Int(_)) == integer))
+        // PHP's predicates inspect the original tag, not the numeric or
+        // truthiness conversion used by operators. Numeric strings/floats
+        // are outside this deliberately bounded scalar subset.
+        let result = if name == b"is_int" || name == b"is_integer" || name == b"is_long" {
+            matches!(value, Value::Int(_))
+        } else if name == b"is_bool" {
+            matches!(value, Value::Bool(_))
+        } else if name == b"is_null" {
+            matches!(value, Value::Null)
+        } else if name == b"is_scalar" {
+            matches!(value, Value::Int(_) | Value::Bool(_))
+        } else if name == b"is_numeric" {
+            matches!(value, Value::Int(_))
+        } else {
+            return Err(EvalError::Syntax);
+        };
+        Ok(Value::Bool(result))
     }
 
     // Explicit scalar conversions preserve the PHP return type, unlike
@@ -470,11 +490,14 @@ impl<'a> Parser<'a> {
                     return self.builtin_extrema(depth, name, minimum);
                 }
             }
-            for (name, integer) in [
-                (b"is_int".as_slice(), true),
-                (b"is_integer".as_slice(), true),
-                (b"is_long".as_slice(), true),
-                (b"is_bool".as_slice(), false),
+            for name in [
+                b"is_int".as_slice(),
+                b"is_integer".as_slice(),
+                b"is_long".as_slice(),
+                b"is_bool".as_slice(),
+                b"is_null".as_slice(),
+                b"is_scalar".as_slice(),
+                b"is_numeric".as_slice(),
             ] {
                 if remaining
                     .get(..name.len())
@@ -483,7 +506,7 @@ impl<'a> Parser<'a> {
                         .get(name.len())
                         .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
                 {
-                    return self.builtin_type_predicate(depth, name, integer);
+                    return self.builtin_type_predicate(depth, name);
                 }
             }
             for (name, boolean) in [(b"boolval".as_slice(), true), (b"intval".as_slice(), false)] {
@@ -497,7 +520,11 @@ impl<'a> Parser<'a> {
                     return self.builtin_scalar_conversion(depth, name, boolean);
                 }
             }
-            for (literal, value) in [(b"true".as_slice(), true), (b"false".as_slice(), false)] {
+            for (literal, value) in [
+                (b"true".as_slice(), Value::Bool(true)),
+                (b"false".as_slice(), Value::Bool(false)),
+                (b"null".as_slice(), Value::Null),
+            ] {
                 let remaining = &self.source[self.offset..];
                 if remaining
                     .get(..literal.len())
@@ -508,7 +535,7 @@ impl<'a> Parser<'a> {
                 {
                     self.offset += literal.len();
                     self.charge()?;
-                    return Ok(Value::Bool(value));
+                    return Ok(value);
                 }
             }
             self.number().map(Value::Int)
@@ -540,7 +567,7 @@ impl<'a> Parser<'a> {
             self.charge()?;
             match self.unary(depth + 1)? {
                 Value::Int(value) => Ok(Value::Int(!value)),
-                Value::Bool(_) => Err(EvalError::BitwiseTypeError),
+                Value::Bool(_) | Value::Null => Err(EvalError::BitwiseTypeError),
             }
         } else {
             self.power(depth)
@@ -852,6 +879,56 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_null_literal_coercion_comparisons_predicates_and_limits() {
+        for (program, expected) in [
+            ("echo null;", Value::Null),
+            ("echo NULL;", Value::Null),
+            ("echo NuLl===null;", Value::Bool(true)),
+            ("echo null===0;", Value::Bool(false)),
+            ("echo null==0;", Value::Bool(true)),
+            ("echo null==false;", Value::Bool(true)),
+            ("echo null==-1;", Value::Bool(false)),
+            ("echo null<=>-1;", Value::Int(-1)),
+            ("echo -1<=>null;", Value::Int(1)),
+            ("echo null<=>0;", Value::Int(0)),
+            ("echo null+2;", Value::Int(2)),
+            ("echo null|2;", Value::Int(2)),
+            ("echo null&2;", Value::Int(0)),
+            ("echo null^2;", Value::Int(2)),
+            ("echo !null;", Value::Bool(true)),
+            ("echo boolval(null);", Value::Bool(false)),
+            ("echo intval(null);", Value::Int(0)),
+            ("echo is_null(null);", Value::Bool(true)),
+            ("echo IS_NULL(false);", Value::Bool(false)),
+            ("echo is_bool(null);", Value::Bool(false)),
+            ("echo is_int(null);", Value::Bool(false)),
+            ("echo is_scalar(null);", Value::Bool(false)),
+            ("echo is_scalar(true);", Value::Bool(true)),
+            ("echo is_numeric(null);", Value::Bool(false)),
+            ("echo is_numeric(true);", Value::Bool(false)),
+            ("echo is_numeric(-3);", Value::Bool(true)),
+            ("echo min(null,2);", Value::Null),
+            ("echo max(null,2);", Value::Int(2)),
+            ("echo min(null,0);", Value::Int(0)),
+            ("echo max(null,0);", Value::Null),
+            ("$x=null; echo is_null($x);", Value::Bool(true)),
+            ("$x=null; $x=$x+1; echo is_int($x);", Value::Bool(true)),
+            ("echo is_null(min(null,1));", Value::Bool(true)),
+        ] {
+            assert_eq!(Parser::new(program.as_bytes()).evaluate(), Ok(expected), "{program}");
+        }
+        for program in [
+            "echo nullx;", "echo null();", "echo is_null();",
+            "echo is_null(1,2);", "echo is_null(1,);",
+            "echo is_scalar();", "echo is_numeric();",
+            "echo is_scalar($missing);",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+        }
+        assert_eq!(Parser::new(b"echo ~null;").evaluate(), Err(EvalError::BitwiseTypeError));
     }
 
     #[test]
