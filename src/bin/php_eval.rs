@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), and integer bitwise &, ^, |.
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, and the intdiv() builtin.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -27,6 +27,7 @@ enum EvalError {
     UnsupportedFloat,
     BitwiseTypeError,
     NegativeShift,
+    IntegerDivisionOverflow,
     DepthLimit,
     WorkLimit,
     UnknownVariable,
@@ -257,6 +258,35 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    // A bounded first PHP builtin: integer division truncates toward zero.
+    // Parse both arguments as complete expressions, retaining the normal
+    // precedence and depth/work quotas. Other function calls remain unsupported.
+    fn builtin_intdiv(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"intdiv".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let numerator = self.bitwise_or(depth + 1)?.as_int();
+        if !self.consume(b',') {
+            return Err(EvalError::Syntax);
+        }
+        let denominator = self.bitwise_or(depth + 1)?.as_int();
+        if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        if denominator == 0 {
+            return Err(EvalError::DivisionByZero);
+        }
+        numerator
+            .checked_div(denominator)
+            .map(Value::Int)
+            .ok_or(EvalError::IntegerDivisionOverflow)
+    }
+
     fn primary(&mut self, depth: usize) -> Result<Value, EvalError> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
@@ -276,6 +306,16 @@ impl<'a> Parser<'a> {
                 .ok_or(EvalError::UnknownVariable)
         } else {
             self.skip_space();
+            let remaining = &self.source[self.offset..];
+            if remaining
+                .get(..b"intdiv".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"intdiv"))
+                && !remaining
+                    .get(b"intdiv".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_intdiv(depth);
+            }
             for (literal, value) in [(b"true".as_slice(), true), (b"false".as_slice(), false)] {
                 let remaining = &self.source[self.offset..];
                 if remaining
@@ -631,6 +671,49 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_intdiv_builtin_truncation_types_and_limits() {
+        for (program, expected) in [
+            ("echo intdiv(7,3);", 2),
+            ("echo intdiv(-7,3);", -2),
+            ("echo intdiv(7,-3);", -2),
+            ("echo intdiv(-7,-3);", 2),
+            ("echo intdiv(true,2);", 0),
+            ("echo intdiv(false,2);", 0),
+            ("echo INTDIV(9,2);", 4),
+            ("echo intdiv(9,2)*3;", 12),
+            ("echo intdiv(8,intdiv(4,2));", 4),
+            ("echo intdiv(5|2,2);", 3),
+            ("$x=9; echo intdiv($x,2);", 4),
+            ("echo intdiv(0-9223372036854775807-1,1);", i64::MIN),
+            ("echo intdiv(9223372036854775807,1);", i64::MAX),
+        ] {
+            assert_eq!(eval(program), Ok(expected), "{program}");
+        }
+        for (program, error) in [
+            ("echo intdiv(1,0);", EvalError::DivisionByZero),
+            ("echo intdiv(1,0*3);", EvalError::DivisionByZero),
+            (
+                "echo intdiv(0-9223372036854775807-1,-1);",
+                EvalError::IntegerDivisionOverflow,
+            ),
+        ] {
+            assert_eq!(eval(program), Err(error), "{program}");
+        }
+        for program in [
+            "echo intdiv();",
+            "echo intdiv(1);",
+            "echo intdiv(1,2,3);",
+            "echo intdiv(1,);",
+            "echo intdiv(,2);",
+            "echo intdivide(1,2);",
+            "echo intdiv(1,2;",
+            "echo intdiv($missing,2);",
+        ] {
+            assert!(eval(program).is_err(), "{program}");
+        }
     }
 
     #[test]
