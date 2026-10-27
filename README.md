@@ -670,12 +670,14 @@ interpreter has no file/network access and is not connected to the FFI layer.
 
 ### PHP 8.4 scalar compound assignments (research)
 
-The standalone `php_eval` interpreter accepts `$x += expression;` and
-`$x -= expression;` for previously defined integer, boolean, or null
-variables. RHS expressions use the existing PHP precedence and checked
-signed-64-bit arithmetic. Both operators store an integer result, matching
-PHP 8.4 for representable values; the usual assignment-count, work and
-variable limits remain in force. The operator and `=` must be adjacent.
+The standalone `php_eval` interpreter accepts `$x += expression;`,
+`$x -= expression;`, and `$x *= expression;` for previously defined integer,
+boolean, or null variables. RHS expressions use the existing PHP precedence
+and checked signed-64-bit arithmetic. All three operators store an integer
+result, matching PHP 8.4 for representable values; the usual assignment-count,
+work and variable limits remain in force. The operator and `=` must be adjacent.
+Multiplication is checked before publication, including `PHP_INT_MIN * -1`;
+overflowing results that PHP promotes to float are rejected.
 
 ```sh
 printf '%s' '<?php $x=true; $x+=4; $x-=2; echo $x;' |
