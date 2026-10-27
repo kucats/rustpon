@@ -74,8 +74,8 @@ impl Value {
     }
 
     fn php_equal(self, other: Self) -> bool {
-        if matches!(self, Self::Bool(_) | Self::Null)
-            || matches!(other, Self::Bool(_) | Self::Null) {
+        if matches!(self, Self::Bool(_) | Self::Null) || matches!(other, Self::Bool(_) | Self::Null)
+        {
             self.as_bool() == other.as_bool()
         } else {
             self == other
@@ -83,8 +83,8 @@ impl Value {
     }
 
     fn php_order(self, other: Self) -> (i64, i64) {
-        if matches!(self, Self::Bool(_) | Self::Null)
-            || matches!(other, Self::Bool(_) | Self::Null) {
+        if matches!(self, Self::Bool(_) | Self::Null) || matches!(other, Self::Bool(_) | Self::Null)
+        {
             (i64::from(self.as_bool()), i64::from(other.as_bool()))
         } else {
             (self.as_int(), other.as_int())
@@ -369,11 +369,7 @@ impl<'a> Parser<'a> {
     // PHP's scalar type predicates inspect the actual value tag. In
     // particular, an integer converted to truthiness is not a bool, and
     // a boolean accepted by arithmetic is not an int.
-    fn builtin_type_predicate(
-        &mut self,
-        depth: usize,
-        name: &[u8],
-    ) -> Result<Value, EvalError> {
+    fn builtin_type_predicate(&mut self, depth: usize, name: &[u8]) -> Result<Value, EvalError> {
         if depth >= MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
@@ -918,17 +914,31 @@ mod tests {
             ("$x=null; $x=$x+1; echo is_int($x);", Value::Bool(true)),
             ("echo is_null(min(null,1));", Value::Bool(true)),
         ] {
-            assert_eq!(Parser::new(program.as_bytes()).evaluate(), Ok(expected), "{program}");
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
         }
         for program in [
-            "echo nullx;", "echo null();", "echo is_null();",
-            "echo is_null(1,2);", "echo is_null(1,);",
-            "echo is_scalar();", "echo is_numeric();",
+            "echo nullx;",
+            "echo null();",
+            "echo is_null();",
+            "echo is_null(1,2);",
+            "echo is_null(1,);",
+            "echo is_scalar();",
+            "echo is_numeric();",
             "echo is_scalar($missing);",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
-        assert_eq!(Parser::new(b"echo ~null;").evaluate(), Err(EvalError::BitwiseTypeError));
+        assert_eq!(
+            Parser::new(b"echo ~null;").evaluate(),
+            Err(EvalError::BitwiseTypeError)
+        );
     }
 
     #[test]
