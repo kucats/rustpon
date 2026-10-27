@@ -850,6 +850,25 @@ checks fixed type boundaries, nested expressions and seeded values.
 Strings, floats, arrays, null, references, user functions and Zend type
 semantics remain outside this research-only subset.
 
+### PHP 8.4 explicit `boolval()` and `intval()` (research)
+
+The bounded `php_eval` evaluator supports case-insensitive
+`boolval(value)` and `intval(value)` for its existing signed 64-bit
+integer and boolean values. `boolval()` uses PHP truthiness (only zero is
+false among supported integers); `intval()` converts booleans to 0 or 1
+and preserves the full signed 64-bit integer range. Both return the
+appropriate runtime value tag, so `is_bool(boolval(1))` and
+`is_int(intval(true))` are true. Nested calls, variable assignments,
+source/work/depth quotas, and fail-closed rejection of missing arguments,
+unknown variables, and unsupported function names are retained.
+
+PHP accepts a second base argument to `intval()` and additional value
+types such as strings and floats. The base overload and these types are
+**not implemented** in this subset; extra arguments are rejected.
+The deterministic PHP 8.4 CLI differential suite compares fixed boundary
+cases and generated integer/boolean conversions. No Zend function dispatch
+or native PHP runtime integration is implied.
+
 ### PHP 8.4 `abs()` builtin (research)
 
 The bounded `php_eval` interpreter supports case-insensitive `abs(value)`
