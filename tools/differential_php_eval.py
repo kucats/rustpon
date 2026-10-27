@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic PHP CLI oracle for the deliberately narrow php_eval prototype.
 
-Only supported integer/boolean expressions, exact division and signed remainder are compared. Rejections are asserted
+Only supported integer/boolean/null expressions, exact division and signed remainder are compared. Rejections are asserted
 separately; this is not evidence of general PHP language compatibility.
 """
 import argparse
@@ -103,6 +103,30 @@ TYPE_PREDICATE_PROGRAMS = [
     "$x=false; $x=$x+1; echo is_int($x);",
 ]
 
+
+NULL_PROGRAMS = [
+    "echo null;", "echo NULL;", "echo NuLl;",
+    "echo null===null;", "echo null===0;", "echo null==0;",
+    "echo null==false;", "echo null==-1;", "echo null!=1;",
+    "echo null<=>-1;", "echo -1<=>null;",
+    "echo null<=>0;", "echo null<=>1;",
+    "echo null+2;", "echo 2+null;", "echo null*7;",
+    "echo null|2;", "echo null&2;", "echo null^2;",
+    "echo !null;", "echo !!null;", "echo -null;",
+    "echo boolval(null);", "echo intval(null);",
+    "echo is_null(null);", "echo IS_NULL(false);",
+    "echo is_bool(null);", "echo is_int(null);",
+    "echo is_scalar(null);", "echo is_scalar(true);",
+    "echo is_scalar(0);", "echo is_numeric(null);",
+    "echo is_numeric(true);", "echo is_numeric(-3);",
+    "echo min(null,2);", "echo max(null,2);",
+    "echo min(null,0);", "echo max(null,0);",
+    "echo min(0,null);", "echo max(0,null);",
+    "echo is_null(min(null,1));",
+    "$x=null; echo is_null($x);",
+    "$x=null; $x=$x+1; echo is_int($x);",
+    "$x=NULL; echo boolval($x);",
+]
 
 SCALAR_CONVERSION_PROGRAMS = [
     "echo boolval(0);", "echo boolval(1);", "echo boolval(-1);",
@@ -373,6 +397,14 @@ def main():
         right = rng.randrange(-100, 101)
         predicate = rng.choice(["is_int", "is_bool"])
         type_predicates.append(f"$x=({left}<{right}); echo {predicate}($x);")
+    null_programs = list(NULL_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        null_programs.append(f"echo null<=>{value};")
+        null_programs.append(f"echo {value}<=>null;")
+        null_programs.append(f"echo is_null(min(null,{value}));")
+        null_programs.append(f"echo is_numeric({value});")
+        null_programs.append(f"$x=null; echo is_scalar($x+{value});")
     scalar_conversions = list(SCALAR_CONVERSION_PROGRAMS)
     for _ in range(128):
         value = rng.randrange(-100000, 100001)
@@ -406,7 +438,7 @@ def main():
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
-        + scalar_conversions
+        + scalar_conversions + null_programs
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -482,6 +514,14 @@ def main():
         b"<?php echo is_intx(1);",
         b"<?php echo is_boolean(true);",
         b"<?php echo is_int($missing);",
+        b"<?php echo nullx;",
+        b"<?php echo null();",
+        b"<?php echo is_null();",
+        b"<?php echo is_null(1,2);",
+        b"<?php echo is_null(1,);",
+        b"<?php echo is_scalar();",
+        b"<?php echo is_numeric();",
+        b"<?php echo is_scalar($missing);",
         b"<?php echo abs();",
         b"<?php echo abs(1,2);",
         b"<?php echo abs(,1);",
@@ -574,6 +614,7 @@ def main():
     # Unlike arbitrary unsupported syntax, these are verified on both runtimes.
     type_errors = [
         b"<?php echo ~true;",
+        b"<?php echo ~null;",
         b"<?php echo ~false;",
         b"<?php echo ~(1<2);",
         b"<?php echo ~!0;",
@@ -631,7 +672,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
