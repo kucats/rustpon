@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, parentheses, arithmetic, integer powers and comparisons (including <=>).
+//! variables, typed integer/boolean values, unary +/-, logical/bitwise not, parentheses, arithmetic, integer powers and comparisons (including <=>).
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -25,6 +25,7 @@ enum EvalError {
     Overflow,
     DivisionByZero,
     UnsupportedFloat,
+    BitwiseTypeError,
     DepthLimit,
     WorkLimit,
     UnknownVariable,
@@ -311,6 +312,14 @@ impl<'a> Parser<'a> {
             // arithmetic/comparisons, but looser than exponentiation.
             self.charge()?;
             Ok(Value::Bool(!self.unary(depth + 1)?.as_bool()))
+        } else if self.consume(b'~') {
+            // PHP 8.4 bitwise not is defined on integers, not booleans.
+            // Preserve the signed 64-bit representation without overflow.
+            self.charge()?;
+            match self.unary(depth + 1)? {
+                Value::Int(value) => Ok(Value::Int(!value)),
+                Value::Bool(_) => Err(EvalError::BitwiseTypeError),
+            }
         } else {
             self.power(depth)
         }
@@ -583,6 +592,58 @@ mod tests {
             );
         }
         for program in ["echo !;", "echo !();", "echo !!!;", "echo !$missing;"] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
+    }
+
+    #[test]
+    fn php84_integer_bitwise_not_precedence_and_types() {
+        for (program, expected) in [
+            ("echo ~0;", Value::Int(-1)),
+            ("echo ~1;", Value::Int(-2)),
+            ("echo ~-1;", Value::Int(0)),
+            ("echo ~~0;", Value::Int(0)),
+            ("echo ~0x7fff_ffff_ffff_ffff;", Value::Int(i64::MIN)),
+            ("echo ~(0-9223372036854775807-1);", Value::Int(i64::MAX)),
+            ("echo ~2**3;", Value::Int(-9)),
+            ("echo ~2**3+1;", Value::Int(-8)),
+            ("echo ~(2**3+1);", Value::Int(-10)),
+            ("echo -~2**3;", Value::Int(9)),
+            ("echo ~-2;", Value::Int(1)),
+            ("echo !~0;", Value::Bool(false)),
+            ("echo ~1<=>-2;", Value::Int(0)),
+            ("echo ~1===-2;", Value::Bool(true)),
+            ("echo ~+3;", Value::Int(-4)),
+            ("echo +~3;", Value::Int(-4)),
+            ("echo ~-~0;", Value::Int(-2)),
+            ("$x=5; echo ~$x;", Value::Int(-6)),
+            ("$x=5; echo ~($x+1);", Value::Int(-7)),
+            ("$x=1; $x=~$x; echo $x;", Value::Int(-2)),
+            ("echo ~(1<=>2);", Value::Int(0)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo ~true;",
+            "echo ~false;",
+            "echo ~(1<2);",
+            "echo ~!0;",
+            "$x=true; echo ~$x;",
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(EvalError::BitwiseTypeError),
+                "{program}"
+            );
+        }
+        for program in ["echo ~;", "echo ~();", "echo ~$missing;"] {
             assert!(
                 Parser::new(program.as_bytes()).evaluate().is_err(),
                 "{program}"
