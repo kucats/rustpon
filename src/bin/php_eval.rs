@@ -829,7 +829,10 @@ mod tests {
             "echo 1<<<2;",
             "echo 1>>>2;",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
     }
 
