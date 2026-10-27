@@ -3,7 +3,7 @@
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: bounded typed scalar assignments followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean values, unary +/-, parentheses, arithmetic, integer powers and comparisons.
+//! variables, typed integer/boolean values, unary +/-, parentheses, arithmetic, integer powers and comparisons (including <=>).
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -34,6 +34,7 @@ enum EvalError {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Comparison {
+    Spaceship,
     Equal,
     NotEqual,
     StrictEqual,
@@ -417,6 +418,7 @@ impl<'a> Parser<'a> {
         self.skip_space();
         let remaining = &self.source[self.offset..];
         let operators: &[(&[u8], Comparison)] = &[
+            (b"<=>", Comparison::Spaceship),
             (b"===", Comparison::StrictEqual),
             (b"!==", Comparison::StrictNotEqual),
             (b"<=", Comparison::LessEqual),
@@ -438,16 +440,23 @@ impl<'a> Parser<'a> {
         let rhs = self.additive(depth)?;
         let (left, right) = lhs.php_order(rhs);
         let result = match operator {
-            Comparison::Equal => lhs.php_equal(rhs),
-            Comparison::NotEqual => !lhs.php_equal(rhs),
-            Comparison::StrictEqual => lhs == rhs,
-            Comparison::StrictNotEqual => lhs != rhs,
-            Comparison::Less => left < right,
-            Comparison::LessEqual => left <= right,
-            Comparison::Greater => left > right,
-            Comparison::GreaterEqual => left >= right,
+            Comparison::Spaceship => Value::Int(if left < right {
+                -1
+            } else if left > right {
+                1
+            } else {
+                0
+            }),
+            Comparison::Equal => Value::Bool(lhs.php_equal(rhs)),
+            Comparison::NotEqual => Value::Bool(!lhs.php_equal(rhs)),
+            Comparison::StrictEqual => Value::Bool(lhs == rhs),
+            Comparison::StrictNotEqual => Value::Bool(lhs != rhs),
+            Comparison::Less => Value::Bool(left < right),
+            Comparison::LessEqual => Value::Bool(left <= right),
+            Comparison::Greater => Value::Bool(left > right),
+            Comparison::GreaterEqual => Value::Bool(left >= right),
         };
-        Ok(Value::Bool(result))
+        Ok(result)
     }
 
     fn evaluate(&mut self) -> Result<Value, EvalError> {
@@ -674,6 +683,40 @@ mod tests {
             ("echo 2**3**;", EvalError::Syntax),
         ] {
             assert_eq!(eval(program), Err(expected), "{program}");
+        }
+    }
+
+    #[test]
+    fn php84_spaceship_returns_integer_with_boolean_coercion() {
+        for (program, expected) in [
+            ("echo 1<=>2;", Value::Int(-1)),
+            ("echo 2<=>2;", Value::Int(0)),
+            ("echo 3<=>2;", Value::Int(1)),
+            ("echo true<=>2;", Value::Int(0)),
+            ("echo false<=>-1;", Value::Int(-1)),
+            ("echo false<=>0;", Value::Int(0)),
+            ("echo true<=>false;", Value::Int(1)),
+            ("echo 1+2<=>2*2;", Value::Int(-1)),
+            ("echo (1<=>2)===-1;", Value::Bool(true)),
+            ("echo (2<=>1)+2;", Value::Int(3)),
+            ("echo !0<=>true;", Value::Int(0)),
+            ("echo (1<=>2)<0;", Value::Bool(true)),
+            ("echo (0-9223372036854775807-1)<=>0;", Value::Int(-1)),
+            (
+                "echo 9223372036854775807<=>(0-9223372036854775807-1);",
+                Value::Int(1),
+            ),
+            ("$x=4; $y=5; echo $x<=>$y;", Value::Int(-1)),
+            ("$x=1<=>2; echo $x+2;", Value::Int(1)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in ["echo 1<=>;", "echo 1<=>2<=>3;", "echo 1<==>2;"] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
         }
     }
 
