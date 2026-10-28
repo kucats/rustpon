@@ -584,7 +584,24 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         let value = self.bitwise_or(depth + 1)?;
-        if !self.consume(b')') {
+        if name == b"is_callable" {
+            // PHP 8.4 accepts an optional $syntax_only boolean and a
+            // trailing comma. Both arguments are evaluated even when the
+            // first value cannot be callable. The third by-reference output
+            // parameter is outside this bounded scalar evaluator.
+            if self.consume(b',') && !self.consume(b')') {
+                let _syntax_only = self.bitwise_or(depth + 1)?.as_bool();
+                if self.consume(b',') {
+                    if !self.consume(b')') {
+                        return Err(EvalError::Syntax);
+                    }
+                } else if !self.consume(b')') {
+                    return Err(EvalError::Syntax);
+                }
+            } else if self.source[self.offset.saturating_sub(1)] != b')' {
+                return Err(EvalError::Syntax);
+            }
+        } else if !self.consume(b')') {
             return Err(EvalError::Syntax);
         }
         // PHP's predicates inspect the original tag, not the numeric or
@@ -604,7 +621,9 @@ impl<'a> Parser<'a> {
             // PHP 8.4 coerces int/bool/null to finite numeric values.
             // No float, numeric string, INF or NAN exists in this VM.
             true
-        } else if name == b"is_infinite" || name == b"is_nan" {
+        } else if name == b"is_infinite" || name == b"is_nan" || name == b"is_callable" {
+            // No functions, objects, arrays or strings are representable;
+            // PHP 8.4 reports every supported int/bool/null as not callable.
             false
         } else if [
             b"is_float".as_slice(),
@@ -846,6 +865,7 @@ impl<'a> Parser<'a> {
                 b"is_resource".as_slice(),
                 b"is_iterable".as_slice(),
                 b"is_countable".as_slice(),
+                b"is_callable".as_slice(),
             ] {
                 if remaining
                     .get(..name.len())
@@ -1638,6 +1658,44 @@ mod tests {
             Parser::new(exhausted.as_bytes()).evaluate(),
             Err(EvalError::WorkLimit)
         );
+    }
+
+    #[test]
+    fn php84_is_callable_scalar_and_optional_syntax_only() {
+        for program in [
+            "echo is_callable(0);",
+            "echo IS_CALLABLE(-7);",
+            "echo Is_CaLlAbLe(true,true);",
+            "echo is_callable(false,0);",
+            "echo is_callable(null,false,);",
+            "echo is_callable(1,);",
+            "echo is_callable(1,true,);",
+            "echo is_callable(is_int(1),is_bool(false));",
+            "$x=42; echo is_callable($x),is_bool(is_callable($x,true));",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program}");
+            let expected = if program.contains("is_bool(is_callable") {
+                "1"
+            } else {
+                ""
+            };
+            assert_eq!(parser.output, expected, "{program}");
+        }
+        for program in [
+            "echo is_callable();",
+            "echo is_callable(1,2,3);",
+            "echo is_callable(1,,);",
+            "echo is_callable(1,true,,);",
+            "echo is_callable(1,$missing);",
+            "echo is_callable(1,1/0);",
+            "echo is_callablex(1);",
+            "echo is_callable(1,2",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program}");
+            assert!(parser.output.is_empty(), "{program}");
+        }
     }
 
     #[test]
