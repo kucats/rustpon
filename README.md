@@ -677,6 +677,27 @@ against the installed PHP 8.4 interpreter, including CR, LF, CRLF, mixed-case
 spelling, source-position changes and malformed identifier boundaries.
 This remains a standalone research evaluator, not a Zend compiler.
 
+## PHP 8.4 empty statements and terminal top-level return (research evaluator)
+
+The bounded `php_eval` CLI now accepts standalone `;` statements anywhere
+between supported statements, including repeated semicolons. Each empty
+statement consumes one work unit. It also accepts case-insensitive top-level
+`return;` and `return expression;` as the **final** statement, with optional
+closing `?>`; PHP 8.4 permits omitting the semicolon immediately before that
+closing tag. The return expression is evaluated with the existing scalar
+rules, but its value is not printed or used as a CLI exit status. Previously
+buffered output is committed only if the entire accepted program succeeds.
+
+A PHP script may contain syntactically valid but unreachable statements
+after `return`. This research evaluator currently **rejects** those programs
+instead of skipping their validation. Unsupported expressions and malformed
+comments after `return` likewise fail closed. PHP may have emitted earlier
+output before a runtime exception; rustpon retains its stricter atomic-output
+contract. Rust unit tests cover terminal returns, empty-statement work
+exhaustion and rejected trailing code; the PHP CLI differential suite compares
+fixed and seeded accepted programs with PHP 8.4. No general control-flow,
+function-return stack or Zend execution lifecycle is implied.
+
 ## PHP 8.4 ordered output and local statement execution (research evaluator)
 
 The bounded `php_eval` CLI accepts multiple `echo` and `print` statements,

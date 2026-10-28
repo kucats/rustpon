@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
+//! Supported grammar: empty statements, terminal top-level return, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -1308,6 +1308,46 @@ impl<'a> Parser<'a> {
                     Err(EvalError::TrailingInput)
                 };
             }
+            // PHP 8.4 permits empty statements between supported statements.
+            // Charge each one to prevent unbounded no-op loops.
+            if self.consume(b';') {
+                self.charge()?;
+                had_statement = true;
+                continue;
+            }
+            // Terminal top-level return ends CLI script execution. Until a
+            // syntax-only pass can validate unreachable code, reject any
+            // statements following return rather than silently skip them.
+            let remaining = &self.source[self.offset..];
+            if remaining
+                .get(..b"return".len())
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"return"))
+                && !remaining
+                    .get(b"return".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                self.offset += b"return".len();
+                self.charge()?;
+                let value = if self.consume(b';') || self.source[self.offset..].starts_with(b"?>") {
+                    Value::Null
+                } else {
+                    let value = self.bitwise_or(0)?;
+                    if !self.consume(b';') && !self.source[self.offset..].starts_with(b"?>") {
+                        return Err(EvalError::Syntax);
+                    }
+                    value
+                };
+                self.skip_space();
+                if self.source[self.offset..].starts_with(b"?>") {
+                    self.offset += 2;
+                    self.skip_space();
+                }
+                return if self.offset == self.source.len() {
+                    Ok(value)
+                } else {
+                    Err(EvalError::TrailingInput)
+                };
+            }
             if self.source[self.offset..].starts_with(b"++")
                 || self.source[self.offset..].starts_with(b"--")
             {
@@ -1447,6 +1487,52 @@ mod tests {
         assert_eq!(
             Parser::new(oversized.as_bytes()).evaluate(),
             Err(EvalError::OutputLimit)
+        );
+    }
+
+    #[test]
+    fn php84_empty_statements_and_terminal_top_level_return() {
+        for (program, output, returned) in [
+            (";", "", Value::Null),
+            (";;echo 1;;", "1", Value::Int(1)),
+            ("print 1;;", "1", Value::Int(1)),
+            ("echo 1;; print 2;", "12", Value::Int(2)),
+            ("$x=1;;$x+=2;;echo $x;", "3", Value::Int(3)),
+            ("echo 1; /*c*/ ; # hello\necho 2;", "12", Value::Int(2)),
+            ("echo 1; return;", "1", Value::Null),
+            ("echo 1; return 42;", "1", Value::Int(42)),
+            ("echo 1; ReTuRn (2+3);", "1", Value::Int(5)),
+            ("echo 1; return null;", "1", Value::Null),
+            ("echo 1; return 2 ?>", "1", Value::Int(2)),
+            ("return 1;", "", Value::Int(1)),
+            ("return;", "", Value::Null),
+            ("return/*c*/ 1;", "", Value::Int(1)),
+            ("echo 1; return; ?> ", "1", Value::Null),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert_eq!(parser.evaluate(), Ok(returned), "{program}");
+            assert_eq!(parser.output, output, "{program}");
+        }
+        for program in [
+            "echo 1; return 1/0;",
+            "echo 1; return $missing;",
+            "echo 1; return 1; echo 2;",
+            "echo 1; return 1; ?> trailing",
+            "returner 1;",
+            "echo 1; return 1",
+            "echo 1; return; /* unterminated",
+            "return 1,2;",
+            "return 1; ;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
+        let exhausted = ";".repeat(MAX_WORK + 1);
+        assert_eq!(
+            Parser::new(exhausted.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
         );
     }
 
@@ -1657,7 +1743,6 @@ mod tests {
             "printx 1;",
             "PRINT 1/0;",
             "print $missing;",
-            "print 1;;",
             "PRINT (int);",
             "echoer 1;",
         ] {

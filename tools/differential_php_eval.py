@@ -67,6 +67,18 @@ ABSENT_KIND_PROGRAMS = [
 ]
 
 
+# PHP 8.4 accepts no-op semicolons and terminal top-level return.
+# Unreachable statements after return remain deliberately unsupported.
+EMPTY_RETURN_PROGRAMS = [
+    ";", ";;echo 1;;", "print 1;;", "echo 1;; print 2;",
+    "$x=1;;$x+=2;;echo $x;",
+    "echo 1; /*c*/ ; # hello\necho 2;",
+    "echo 1; return;", "echo 1; return 42;",
+    "echo 1; ReTuRn (2+3);", "echo 1; return null;",
+    "echo 1; return 2 ?>", "return 1;", "return;",
+    "return/*c*/ 1;", "echo 1; return; ?> ",
+]
+
 # Multiple output statements may be interleaved with local assignments
 # and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
 MULTI_STATEMENT_PROGRAMS = [
@@ -885,6 +897,14 @@ def main():
         function = rng.choice(["is_finite", "is_infinite", "is_nan"])
         argument = rng.choice(["true", "false", "null", str(rng.randrange(-100000, 100001)), "is_int(1)"])
         float_classification.append(f"echo {function}({argument});")
+    empty_returns = list(EMPTY_RETURN_PROGRAMS)
+    for _ in range(48):
+        left = rng.randrange(-1000, 1001)
+        right = rng.randrange(-1000, 1001)
+        empty_returns.append(
+            ";" * rng.randrange(1, 9) + f"echo {left};"
+            + ";" * rng.randrange(1, 9) + f"return {right};"
+        )
     multi_statements = list(MULTI_STATEMENT_PROGRAMS)
     for _ in range(96):
         first = rng.randrange(-10000, 10001)
@@ -921,7 +941,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + multi_statements
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + multi_statements + empty_returns
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -952,6 +972,15 @@ def main():
         b"<?php echo is_finiteness(1);",
         b"<?php echo is_nanny(1);",
         b"<?php echo is_nan($missing);",
+        b"<?php echo 1; return 1/0;",
+        b"<?php echo 1; return $missing;",
+        b"<?php echo 1; return 1; echo 2;",
+        b"<?php echo 1; return 1; ?> trailing",
+        b"<?php echo 1; return 1",
+        b"<?php echo 1; return; /* unterminated",
+        b"<?php return 1,2;",
+        b"<?php return 1; ;",
+        b"<?php returner 1;",
         b"<?php print;",
         b"<?php echo 1; print 2,3;",
         b"<?php echo 1; echo 2,;",
@@ -970,7 +999,6 @@ def main():
         b"<?php printx 1;",
         b"<?php PRINT 1/0;",
         b"<?php print $missing;",
-        b"<?php print 1;;",
         b"<?php PRINT (int);",
         b"<?php echoer 1;",
         b"<?php echo 08;",
@@ -1341,7 +1369,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/absent-kind-predicates differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-return/absent-kind-predicates differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
