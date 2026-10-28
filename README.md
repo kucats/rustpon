@@ -1550,3 +1550,12 @@ represent PHP strings. Trailing commas, nested calls, work/depth limits
 and the cumulative 1,024-byte output cap apply. Output remains private
 until the complete program succeeds. Differential tests compare fixed
 and seeded scalar cases byte-for-byte against PHP 8.4 CLI.
+
+For the signed 64-bit minimum `PHP_INT_MIN`, PHP 8.4's `var_export()`
+prints `-9223372036854775807-1`, rather than the plain decimal
+`-9223372036854775808`. This keeps the exported source re-evaluable
+as an integer instead of treating an out-of-range decimal literal as
+floating-point. The research evaluator now reproduces that byte sequence
+for the minimum integer from constants, variables, and arithmetic;
+`echo` and `var_dump` retain their distinct existing formatting.
+The Linux PHP CLI differential suite includes these boundary cases.
