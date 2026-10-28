@@ -1844,8 +1844,8 @@ mod tests {
             ("echo is_bool(print_r(12));", "121"),
             ("echo 1,print_r(2),3;", "1213"),
             ("print_r(print_r(false));", "1"),
-            ("print_r(1,var_dump(false));", "bool(false)\\n1"),
-            ("print_r(1); var_dump(true);", "1bool(true)\\n"),
+            ("print_r(1,var_dump(false));", "bool(false)\n1"),
+            ("print_r(1); var_dump(true);", "1bool(true)\n"),
             ("print_r(1) ?>", "1"),
             ("$x=1; print_r($x++); print_r($x);", "12"),
             ("echo is_int(print_r(5));", "5"),
@@ -1875,10 +1875,10 @@ mod tests {
             assert!(parser.evaluate().is_err(), "{program:?}");
         }
         // The cumulative 1,024-byte output cap includes nested print_r
-        // output. It is enforced even when every scalar is individually small.
-        let program = format!("echo {};", "print_r(1)," .repeat(300) + "0");
+        // output, independently of source length and work limits.
+        let program = format!("echo {}0;", "print_r(PHP_INT_MAX),".repeat(60));
         let mut parser = Parser::new(program.as_bytes());
-        assert!(parser.evaluate().is_err());
+        assert_eq!(parser.evaluate(), Err(EvalError::OutputLimit));
     }
 
     #[test]
