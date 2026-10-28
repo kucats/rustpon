@@ -689,15 +689,21 @@ The differential suite checks both keywords against real PHP 8.4 CLI,
 including mixed-case spelling, scalar conversions, prior assignments,
 comma lists, and rejection boundaries.
 
-### PHP 8.4 statement-level increment/decrement (research)
+### PHP 8.4 scalar increment/decrement statements and expressions (research)
 
 The bounded `php_eval` interpreter accepts prefix `++$x;`/`--$x;` and
 postfix `$x++;`/`$x--;` as standalone statements for initialized scalar
-variables. Integer values change by one; PHP 8.4 leaves booleans unchanged,
-converts incremented null to integer one, and leaves decremented null as null.
-The usual assignment-count, work and variable limits apply. Overflow that
-PHP promotes to float, undefined-variable warning paths, and increment or
-decrement *expressions* are deliberately rejected without output.
+variables. It also evaluates these operators inside scalar expressions, including
+`echo ++$x, $x++, $x;`, `print $x++;`, function arguments, and arithmetic.
+Prefix returns the updated value; postfix returns the previous tagged value.
+Updates are visible to subsequent operands and `echo` arguments. PHP 8.4
+binds these updates before exponentiation (`++$x**2` is `(++$x)**2`).
+Integer values change by one; PHP 8.4 leaves booleans unchanged, converts
+incremented null to integer one, and leaves decremented null as null.
+The usual assignment-count (for standalone statements), work and variable
+limits apply. Float promotion on overflow and undefined-variable warning paths
+remain unsupported; malformed lvalues such as `++($x)` and `($x)++` fail
+closed. Output is published only after the complete program succeeds.
 
 ```sh
 printf '%s' '<?php $x=null; ++$x; $x++; echo $x;' |
@@ -706,7 +712,8 @@ printf '%s' '<?php $x=null; ++$x; $x++; echo $x;' |
 ```
 
 The differential suite compares both token placements, mixed scalar tags,
-boundary values, repeated updates, and malformed syntax with PHP 8.4 CLI.
+expression evaluation order, exponentiation precedence, boundary values,
+repeated updates, and malformed syntax with PHP 8.4 CLI.
 
 ### PHP 8.4 scalar compound assignments (research)
 
