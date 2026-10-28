@@ -857,6 +857,15 @@ impl<'a> Parser<'a> {
                 }
             }
             if remaining
+                .get(..b"var_dump".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"var_dump"))
+                && !remaining
+                    .get(b"var_dump".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_var_dump(depth);
+            }
+            if remaining
                 .get(..b"intdiv".len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"intdiv"))
                 && !remaining
@@ -1357,17 +1366,20 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    // Statement-only var_dump(): arguments are evaluated left-to-right.
-    // Arrays, objects, references, named arguments and expression-level
-    // function calls remain outside this bounded language subset.
-    fn dump_statement(&mut self) -> Result<(), EvalError> {
+    // PHP 8.4 var_dump() evaluates arguments from left to right, writes
+    // tagged output, and returns null. Reuse the same bounded call parser
+    // for statements and nested expressions, including a trailing comma.
+    fn builtin_var_dump(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
         self.offset += b"var_dump".len();
         self.charge()?;
         if !self.consume(b'(') {
             return Err(EvalError::Syntax);
         }
         loop {
-            let value = self.bitwise_or(0)?;
+            let value = self.bitwise_or(depth + 1)?;
             self.append_dump_output(value)?;
             if self.consume(b')') {
                 break;
@@ -1380,6 +1392,11 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
+        Ok(Value::Null)
+    }
+
+    fn dump_statement(&mut self) -> Result<(), EvalError> {
+        self.builtin_var_dump(0)?;
         if !self.consume(b';') && !self.terminal_close_tag()? {
             return Err(EvalError::Syntax);
         }
@@ -1644,6 +1661,51 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_var_dump_expression_returns_null_and_preserves_output_order() {
+        for (program, expected) in [
+            ("echo var_dump(1);", "int(1)\n"),
+            ("echo is_null(var_dump(1,2));", "int(1)\nint(2)\n1"),
+            ("var_dump(var_dump(true));", "bool(true)\nNULL\n"),
+            ("echo 1,var_dump(2),3;", "1int(2)\n3"),
+            ("echo var_dump(1)+2;", "int(1)\n2"),
+            (
+                "var_dump(var_dump(1),var_dump(2));",
+                "int(1)\nint(2)\nNULL\nNULL\n",
+            ),
+            ("echo is_bool(var_dump(false,));", "bool(false)\n"),
+            ("echo is_int(var_dump(7));", "int(7)\n"),
+            ("$x=1; echo var_dump($x++,++$x),$x;", "int(1)\nint(3)\n3"),
+            ("echo VaR_DuMp(null);", "NULL\n"),
+            ("echo var_dump(1,2,);", "int(1)\nint(2)\n"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_var_dump_expression_rejects_invalid_calls_and_depth() {
+        for program in [
+            "echo var_dump();",
+            "echo var_dump(1,,2);",
+            "echo var_dump(1); echo $missing;",
+            "echo var_dump(1); echo 1/0;",
+            "echo var_dumpx(1);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program:?}"
+            );
+        }
+        let nested = format!("echo {}1{};", "var_dump(".repeat(33), ")".repeat(33));
+        assert_eq!(
+            Parser::new(nested.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
+        );
     }
 
     #[test]
