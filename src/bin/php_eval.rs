@@ -1764,11 +1764,16 @@ impl<'a> Parser<'a> {
             {
                 (5, false)
             } else {
-                return Err(if had_statement {
-                    EvalError::TrailingInput
-                } else {
-                    EvalError::Syntax
-                });
+                // PHP permits scalar expressions as statements even when
+                // their value is discarded. Parse the entire expression,
+                // preserving side effects and rejecting unsupported syntax.
+                // A closing tag may terminate the final expression.
+                let _ = self.bitwise_or(0)?;
+                if !self.consume(b';') && !self.terminal_close_tag()? {
+                    return Err(EvalError::Syntax);
+                }
+                had_statement = true;
+                continue;
             };
             self.offset += keyword_len;
             if self
@@ -1829,6 +1834,49 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_discarded_scalar_expression_statements() {
+        for (program, expected_output) in [
+            ("<?php 1+2; echo 9;", "9"),
+            ("<?php (1+2)*3; echo 9;", "9"),
+            ("<?php true; false; null; echo 7;", "7"),
+            ("<?php abs(-3); echo 4;", "4"),
+            ("<?php intdiv(8,2); echo 4;", "4"),
+            ("<?php is_int(7); echo 1;", "1"),
+            ("<?php isset($missing); echo 1;", "1"),
+            ("<?php empty($missing); echo 1;", "1"),
+            ("<?php strlen(PHP_INT_MIN); echo 1;", "1"),
+            ("<?php (var_dump(7)+1); echo 2;", "int(7)\n2"),
+            ("<?php (print_r(7)+1); echo 2;", "72"),
+            ("<?php (var_export(7)+1); echo 2;", "72"),
+            ("<?php 1+2 ?>", ""),
+            ("<?php 1+2 ?>\r\n", ""),
+            ("<?php 42;", ""),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program}");
+            assert_eq!(parser.output, expected_output, "{program}");
+        }
+        for program in [
+            "<?php 1/0;",
+            "<?php echo 1; 1/0;",
+            "<?php 1+;",
+            "<?php 1+2 ?>raw",
+            "<?php 1+2 ?>\n\n",
+            "<?php nonexistent(1);",
+            "<?php (1+2;",
+            "<?php 1+2 3;",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program}");
+        }
+        let expensive = format!("<?php {}echo 1;", "0;".repeat(MAX_WORK + 1));
+        assert_eq!(
+            Parser::new(expensive.as_bytes()).evaluate(),
+            Err(EvalError::WorkLimit)
+        );
     }
 
     #[test]
