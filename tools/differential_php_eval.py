@@ -23,6 +23,20 @@ FIXED = [
 ]
 
 
+TERMINAL_PRINT_PROGRAMS = [
+    "print 0;", "print 42;", "print -1;", "PRINT (true);",
+    "PrInT false;", "print null;", "print (int)true;",
+    "print (bool)0;", "print 1+2*3;", "print 2**3;",
+    "print (1<2);", "print is_null(null);", "print abs(-7);",
+    "print intdiv(9,3);", "$x=4; print $x;",
+    "$x=true; $x++; print $x;", "$x=2; $x+=3; print $x;",
+    "$x=5; unset($x); print isset($x);",
+    "EcHo 1+2;", "ECHO (true);", "eChO is_bool(false);",
+    "PRINT 1<=>2;", "print 0-9223372036854775807-1;",
+    "print (bool)null;", "print (int)(1<2);",
+]
+
+
 LOGICAL_NOT_PROGRAMS = [
     "echo !true;", "echo !false;", "echo !0;", "echo !1;",
     "echo !-1;", "echo !!true;", "echo !!false;",
@@ -720,7 +734,7 @@ def main():
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
-        + unset_programs + compound_assignments + increments
+        + unset_programs + compound_assignments + increments + TERMINAL_PRINT_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -738,6 +752,16 @@ def main():
             )
 
     invalid = [
+        b"<?php print;",
+        b"<?php print 1,2;",
+        b"<?php print 1+;",
+        b"<?php printx 1;",
+        b"<?php print 1; echo 2;",
+        b"<?php PRINT 1/0;",
+        b"<?php print $missing;",
+        b"<?php print 1;;",
+        b"<?php PRINT (int);",
+        b"<?php echoer 1;",
         b"<?php echo 08;",
         b"<?php echo 09;",
         b"<?php echo 0_8;",
@@ -1062,7 +1086,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/terminal-print differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

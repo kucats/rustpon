@@ -648,7 +648,7 @@ security review.
 
 The `php_eval` binary now accepts up to 64 assignments to at most 32
 case-sensitive, ASCII-named local integer/boolean variables before its one final
-`echo` statement. Expressions can read previously initialized variables,
+`echo` or `print` statement. Expressions can read previously initialized variables,
 use integer unary `+`/`-`, parentheses and `+`/`-`/`*`, and reassign
 existing variables. Each name is capped at 64 bytes, while the existing source,
 AST-depth-equivalent recursion, and work budgets remain active. Unknown
@@ -667,6 +667,20 @@ provide general PHP lexing/AST, PHP scope or reference semantics, dynamic
 types, superglobals, arbitrary statements, or Zend/SAPI execution. The
 interpreter has no file/network access and is not connected to the FFI layer.
 
+
+### PHP 8.4 terminal print and case-insensitive echo (research)
+
+The bounded `php_eval` CLI now accepts a single final `print expression;`
+statement as an alternative to `echo expression;`, including the parenthesized
+form `print(expression);`. Both keywords are case-insensitive, matching PHP
+8.4. The interpreter evaluates the existing integer/boolean/null subset and
+writes its bytes only after the complete program passes validation. PHP
+`print` returns integer 1 when used as an expression; that form, comma-separated
+`echo` arguments, and additional output statements remain unsupported.
+Malformed expressions, unknown variables, and resource-limit failures produce
+no stdout. The differential suite checks both keywords against real PHP 8.4
+CLI, including mixed-case spelling, scalar conversions, prior assignments,
+and rejection boundaries.
 
 ### PHP 8.4 statement-level increment/decrement (research)
 

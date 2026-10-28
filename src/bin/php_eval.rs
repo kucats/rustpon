@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement-only ++/--, and unsets followed by one echo;
+//! Supported grammar: one final case-insensitive echo/print statement, bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement-only ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -1155,10 +1155,25 @@ impl<'a> Parser<'a> {
             }
             break;
         }
-        if !self.source[self.offset..].starts_with(b"echo") {
+        // PHP 8.4 treats echo and print as case-insensitive language
+        // constructs. In this deliberately bounded interpreter they are
+        // supported only as the final output statement. In particular,
+        // print's expression return value is not exposed.
+        let remaining = &self.source[self.offset..];
+        let keyword_len = if remaining
+            .get(..4)
+            .is_some_and(|word| word.eq_ignore_ascii_case(b"echo"))
+        {
+            4
+        } else if remaining
+            .get(..5)
+            .is_some_and(|word| word.eq_ignore_ascii_case(b"print"))
+        {
+            5
+        } else {
             return Err(EvalError::Syntax);
-        }
-        self.offset += 4;
+        };
+        self.offset += keyword_len;
         if self
             .peek()
             .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
@@ -1212,6 +1227,60 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_terminal_print_and_case_insensitive_echo() {
+        for (program, expected) in [
+            ("print 0;", Value::Int(0)),
+            ("print 42;", Value::Int(42)),
+            ("print -1;", Value::Int(-1)),
+            ("PRINT (true);", Value::Bool(true)),
+            ("PrInT false;", Value::Bool(false)),
+            ("print null;", Value::Null),
+            ("print (int)true;", Value::Int(1)),
+            ("print (bool)0;", Value::Bool(false)),
+            ("print 1+2*3;", Value::Int(7)),
+            ("print 2**3;", Value::Int(8)),
+            ("print (1<2);", Value::Bool(true)),
+            ("print is_null(null);", Value::Bool(true)),
+            ("print abs(-7);", Value::Int(7)),
+            ("print intdiv(9,3);", Value::Int(3)),
+            ("$x=4; print $x;", Value::Int(4)),
+            ("$x=true; $x++; print $x;", Value::Bool(true)),
+            ("$x=2; $x+=3; print $x;", Value::Int(5)),
+            ("$x=5; unset($x); print isset($x);", Value::Bool(false)),
+            ("EcHo 1+2;", Value::Int(3)),
+            ("ECHO (true);", Value::Bool(true)),
+            ("eChO is_bool(false);", Value::Bool(true)),
+            ("PRINT 1<=>2;", Value::Int(-1)),
+            ("print 0-9223372036854775807-1;", Value::Int(i64::MIN)),
+            ("print (bool)null;", Value::Bool(false)),
+            ("print (int)(1<2);", Value::Int(1)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "print;",
+            "print 1,2;",
+            "print 1+;",
+            "printx 1;",
+            "print 1; echo 2;",
+            "PRINT 1/0;",
+            "print $missing;",
+            "print 1;;",
+            "PRINT (int);",
+            "echoer 1;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
     }
 
     #[test]
