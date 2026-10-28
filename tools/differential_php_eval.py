@@ -70,6 +70,27 @@ MULTI_STATEMENT_PROGRAMS = [
 ]
 
 
+# PHP 8.4 comments are lexical whitespace, including inside expressions.
+# A closing PHP tag inside a line comment ends the comment (raw trailing
+# template output remains outside this bounded evaluator).
+COMMENT_PROGRAMS = [
+    "echo 1/*x*/+2;",
+    "echo/*x*/ 1;",
+    "echo 1; // comment\necho 2;",
+    "echo 1; # comment\necho 2;",
+    "echo 1; /* comment */ echo 2;",
+    "$x/*c*/=/*c*/3; echo $x;",
+    "echo (/*c*/1+2/*c*/);",
+    "echo 1,/*c*/2;",
+    "echo __LINE__; // hi\necho __LINE__;",
+    "echo 1; // comment\r\necho 2;",
+    "echo 1; // comment",
+    "echo 1; # comment",
+    "echo 1; /* comment */",
+    "echo 1;/**/echo 2;",
+]
+
+
 LINE_MAGIC_PROGRAMS = [
     "echo __LINE__;", "echo __line__;", "echo __LiNe__+1;",
     "echo (__LINE__*2);", "echo __LINE__,__LINE__;",
@@ -857,6 +878,16 @@ def main():
     for count in range(1, 33):
         newline = ["\\n", "\\r", "\\r\\n"][count % 3]
         line_magic.append(newline.encode("ascii").decode("unicode_escape") * count + "echo __LINE__;")
+    comments = list(COMMENT_PROGRAMS)
+    for _ in range(48):
+        left = rng.randrange(0, 100)
+        right = rng.randrange(0, 100)
+        comments.append(rng.choice([
+            f"echo {left}/*c*/+/*d*/{right};",
+            f"echo {left}; // c\\necho {right};",
+            f"echo {left}; # c\\necho {right};",
+            f"echo ({left}/*c*/+{right});",
+        ]))
     echo_arguments = list(ECHO_ARGUMENT_PROGRAMS)
     for _ in range(64):
         left = rng.randrange(-10000, 10001)
@@ -872,7 +903,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + absent_kind + multi_statements
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + multi_statements
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -890,6 +921,11 @@ def main():
             )
 
     invalid = [
+        b"<?php echo 1; /* unterminated",
+        b"<?php echo 1; /*/",
+        b"<?php echo 1; /* never closes\\n",
+        b"<?php echo 1; #[A] echo 2;",
+        b"<?php echo 1; // ?>trailing",
         b"<?php print;",
         b"<?php echo 1; print 2,3;",
         b"<?php echo 1; echo 2,;",
@@ -1263,7 +1299,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/absent-kind-predicates differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/absent-kind-predicates differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

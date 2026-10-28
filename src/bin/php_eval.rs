@@ -127,9 +127,39 @@ impl<'a> Parser<'a> {
         self.source.get(self.offset).copied()
     }
 
+    // PHP 8.4 treats comments as whitespace between tokens. Leave an
+    // unterminated block opener untouched so the parser rejects it rather
+    // than silently accepting a truncated program after earlier output.
     fn skip_space(&mut self) {
-        while self.peek().is_some_and(|b| b.is_ascii_whitespace()) {
-            self.offset += 1;
+        loop {
+            while self.peek().is_some_and(|b| b.is_ascii_whitespace()) {
+                self.offset += 1;
+            }
+            let rest = &self.source[self.offset..];
+            let slash_comment = rest.starts_with(b"//");
+            // PHP 8 attributes start with #[, not a hash-line comment.
+            let hash_comment = rest.starts_with(b"#") && !rest.starts_with(b"#[");
+            if slash_comment || hash_comment {
+                self.offset += if slash_comment { 2 } else { 1 };
+                while let Some(byte) = self.peek() {
+                    if byte == b'\n'
+                        || byte == b'\r'
+                        || self.source[self.offset..].starts_with(b"?>")
+                    {
+                        break;
+                    }
+                    self.offset += 1;
+                }
+                continue;
+            }
+            if rest.starts_with(b"/*") {
+                // Search after the opener: /*/ is NOT a closed PHP comment.
+                if let Some(end) = rest[2..].windows(2).position(|pair| pair == b"*/") {
+                    self.offset += end + 4;
+                    continue;
+                }
+            }
+            break;
         }
     }
 
@@ -3177,4 +3207,40 @@ mod tests {
         let large = format!("echo 1;{}", " ".repeat(MAX_SOURCE));
         assert_eq!(eval(&large), Err(EvalError::SourceTooLong));
     }
+    #[test]
+    fn php84_comments_as_lexical_whitespace_and_unclosed_block_rejection() {
+        for (program, value, output) in [
+            ("echo 1/*x*/+2;", Value::Int(3), "3"),
+            ("echo/*x*/ 1;", Value::Int(1), "1"),
+            ("echo 1; // comment\necho 2;", Value::Int(2), "12"),
+            ("echo 1; # comment\necho 2;", Value::Int(2), "12"),
+            ("echo 1; /* comment */ echo 2;", Value::Int(2), "12"),
+            ("$x/*c*/=/*c*/3; echo $x;", Value::Int(3), "3"),
+            ("echo (/*c*/1+2/*c*/);", Value::Int(3), "3"),
+            ("echo 1,/*c*/2;", Value::Int(2), "12"),
+            ("echo __LINE__; // hi\necho __LINE__;", Value::Int(2), "12"),
+            ("echo 1; // comment\r\necho 2;", Value::Int(2), "12"),
+            ("echo 1; // comment", Value::Int(1), "1"),
+            ("echo 1; # comment", Value::Int(1), "1"),
+            ("echo 1; /**/echo 2;", Value::Int(2), "12"),
+            ("echo 1; /* comment */", Value::Int(1), "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert_eq!(parser.evaluate(), Ok(value), "{program:?}");
+            assert_eq!(parser.output, output, "{program:?}");
+        }
+        for program in [
+            "echo 1; /* unterminated",
+            "echo 1; /*/",
+            "echo 1; /* never closes\n",
+            "echo 1; #[A] echo 2;",
+            "echo 1; // ?>trailing",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program:?}"
+            );
+        }
+    }
+
 }

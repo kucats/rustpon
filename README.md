@@ -644,6 +644,22 @@ integration, concurrency and resource fault campaigns, and independent
 security review.
 
 
+## PHP 8.4 lexical comments (research evaluator)
+
+The bounded `php_eval` lexer now treats `//`, `#` and `/* ... */`
+comments as whitespace between supported PHP tokens, including within
+arithmetic expressions, assignments, and between output statements.
+Line comments end at LF, CR, or a PHP closing tag; `#[` is reserved for
+unsupported PHP attributes rather than misread as a hash comment.
+Unterminated block comments (including the overlapping `/*/` sequence)
+fail closed without publishing buffered output. Source-size and work
+budgets still apply. This does not add general PHP lexical modes,
+string interpolation, attributes, or HTML-template output.
+
+Fixed and seeded comment-placement cases are compared byte-for-byte
+with the installed PHP 8.4 CLI, while malformed and unterminated
+comments are exercised as strict rejections.
+
 ## PHP 8.4 source-position magic constant (research evaluator)
 
 The bounded `php_eval` interpreter recognizes case-insensitive
