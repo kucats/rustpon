@@ -60,6 +60,19 @@ FLOAT_CLASSIFICATION_PROGRAMS = [
 ]
 
 
+CALLABLE_SCALAR_PROGRAMS = [
+    "echo is_callable(0);",
+    "echo IS_CALLABLE(-7);",
+    "echo Is_CaLlAbLe(true,true);",
+    "echo is_callable(false,0);",
+    "echo is_callable(null,false,);",
+    "echo is_callable(1,);",
+    "echo is_callable(1,true,);",
+    "echo is_callable(is_int(1),is_bool(false));",
+    "$x=42; echo is_callable($x),is_bool(is_callable($x,true));",
+]
+
+
 ABSENT_KIND_PROGRAMS = [
     f"echo {function}({argument});"
     for function in ABSENT_KIND_PREDICATES + ["Is_FlOaT"]
@@ -910,6 +923,11 @@ def main():
         function = rng.choice(ABSENT_KIND_PREDICATES)
         argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
         absent_kind.append(f"echo {function}({argument});")
+    callable_scalars = list(CALLABLE_SCALAR_PROGRAMS)
+    for _ in range(96):
+        argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
+        second = rng.choice(["", ",true", ",false", ",0", ",1", ",null", ",true,"])
+        callable_scalars.append(f"echo is_callable({argument}{second});")
     float_classification = list(FLOAT_CLASSIFICATION_PROGRAMS)
     for _ in range(96):
         function = rng.choice(["is_finite", "is_infinite", "is_nan"])
@@ -959,7 +977,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + multi_statements + empty_returns + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + multi_statements + empty_returns + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1006,6 +1024,14 @@ def main():
         b"<?php echo 1; /* never closes\n",
         b"<?php echo 1; #[A] echo 2;",
         b"<?php echo 1; // ?>trailing",
+        b"<?php echo is_callable();",
+        b"<?php echo is_callable(1,2,3);",
+        b"<?php echo is_callable(1,,);",
+        b"<?php echo is_callable(1,true,,);",
+        b"<?php echo is_callable(1,$missing);",
+        b"<?php echo is_callable(1,1/0);",
+        b"<?php echo is_callablex(1);",
+        b"<?php echo is_callable(1,2",
         b"<?php echo is_finite();",
         b"<?php echo is_finite(1,2);",
         b"<?php echo is_infinite(1,2);",
@@ -1411,7 +1437,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-return/terminal-exit/absent-kind-predicates differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
         f"{len(cases)} compatible cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
