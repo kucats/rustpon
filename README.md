@@ -1519,3 +1519,22 @@ side effects, invalid argument lists and excessive nesting. The Linux
 PHP 8.4 CLI oracle adds 60 deterministic fixed/seeded successful programs
 and six strict rejection cases. This is a small language-compatibility slice,
 not a Zend replacement or a production PHP runtime.
+
+## PHP 8.4 scalar strlen() compatibility slice
+
+The standalone `php_eval` research harness supports `strlen(value)` for
+its existing integer, boolean and null value tags. PHP 8.4 coerces these
+values to strings before counting bytes: `strlen(PHP_INT_MIN)` is 20,
+`strlen(true)` is 1, and `strlen(false)` and `strlen(null)` are 0.
+Calls accept an optional trailing comma, and the function name is
+ASCII-case-insensitive. Arguments are evaluated exactly once in order,
+including nested `var_dump()` side effects. The existing source, work,
+recursion and output bounds remain in effect; invalid arity and unsupported
+expressions fail closed without publishing partial stdout.
+
+This slice does not add PHP string values, Unicode/string encodings, or
+general-purpose string handling. The Linux PHP 8.4 CLI differential suite
+checks fixed and seeded scalar conversions byte-for-byte and separately
+checks `ArgumentCountError` for invalid arity. `strlen(null)` may emit a
+PHP deprecation diagnostic on stderr under other PHP error-reporting
+settings; the differential oracle compares successful stdout.
