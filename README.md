@@ -760,6 +760,25 @@ The PHP CLI differential suite compares missing, existing, redefined and
 multiple-variable unsets, including generated programs and malformed input.
 This does not model PHP destructors, references or request-scoped superglobals.
 
+## PHP 8.4 predefined integer constants (research evaluator)
+
+The bounded `php_eval` CLI recognizes the exact, case-sensitive PHP
+constants `PHP_INT_MAX` (9223372036854775807), `PHP_INT_MIN`
+(-9223372036854775808), and `PHP_INT_SIZE` (8) on its explicit 64-bit
+PHP ABI. The constants participate in arithmetic, comparisons, bitwise
+operations, assignments and builtin calls; `PHP_INT_MIN` also supplies
+the otherwise unrepresentable minimum signed integer directly.
+Names are matched as complete identifiers: `php_int_max` and
+`PHP_INT_MAXIMUM` are not accepted. Operations that PHP would promote
+to floating point, such as `PHP_INT_MAX+1` or `-PHP_INT_MIN`, remain
+unsupported and are rejected without output.
+
+The Rust regression checks exact boundaries and malformed names. The
+PHP 8.4 CLI differential suite compares fixed and seeded arithmetic,
+ordering, and variable-update programs against the installed PHP binary.
+These predefined constants do not imply general constant lookup,
+64-bit compatibility on a 32-bit host, or Zend integration.
+
 ## PHP 8.4 integer literal lexical compatibility
 
 The research-only `php_eval` interpreter recognizes bounded PHP 8.4
