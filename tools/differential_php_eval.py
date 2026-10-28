@@ -54,6 +54,22 @@ ABSENT_KIND_PROGRAMS = [
 ]
 
 
+# Multiple output statements may be interleaved with local assignments
+# and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
+MULTI_STATEMENT_PROGRAMS = [
+    "echo 1; echo 2;",
+    "EcHo true,false,null,42; PrInT 7;",
+    "$x=1; echo $x; $x+=2; print $x;",
+    "$x=1; echo $x; unset($x); echo isset($x);",
+    "$x=1; echo $x; $x=2;",
+    "$x=1;",
+    "echo 1; print 2; echo 3;",
+    "$x=null; echo is_null($x); ++$x; print $x;",
+    "$x=PHP_INT_MAX; echo $x; $x-=1; print $x;",
+    "echo __LINE__;\necho __LINE__;",
+]
+
+
 LINE_MAGIC_PROGRAMS = [
     "echo __LINE__;", "echo __line__;", "echo __LiNe__+1;",
     "echo (__LINE__*2);", "echo __LINE__,__LINE__;",
@@ -830,6 +846,13 @@ def main():
         function = rng.choice(ABSENT_KIND_PREDICATES)
         argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
         absent_kind.append(f"echo {function}({argument});")
+    multi_statements = list(MULTI_STATEMENT_PROGRAMS)
+    for _ in range(96):
+        first = rng.randrange(-10000, 10001)
+        delta = rng.randrange(-1000, 1001)
+        multi_statements.append(
+            f"$x={first}; echo $x; $x+=({delta}); print $x; echo is_int($x);"
+        )
     line_magic = list(LINE_MAGIC_PROGRAMS)
     for count in range(1, 33):
         newline = ["\\n", "\\r", "\\r\\n"][count % 3]
@@ -849,7 +872,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + absent_kind
+        + echo_arguments + integer_constants + line_magic + absent_kind + multi_statements
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -868,6 +891,12 @@ def main():
 
     invalid = [
         b"<?php print;",
+        b"<?php echo 1; print 2,3;",
+        b"<?php echo 1; echo 2,;",
+        b"<?php echo 1; echo 1/0;",
+        b"<?php echo 1; echo $missing;",
+        b"<?php echo 1; echo 2; unknown;",
+        b"<?php echo 1; ?> trailing",
         b"<?php print 1,2;",
         b"<?php echo 1,;",
         b"<?php echo 1,,2;",
@@ -877,7 +906,6 @@ def main():
         b"<?php echo 1,1/0;",
         b"<?php print 1+;",
         b"<?php printx 1;",
-        b"<?php print 1; echo 2;",
         b"<?php PRINT 1/0;",
         b"<?php print $missing;",
         b"<?php print 1;;",
@@ -1068,7 +1096,6 @@ def main():
         b"<?php $x=1; ++$x echo $x;",
         b"<?php $x=9223372036854775807; $x++; echo $x;",
         b"<?php $x=0-9223372036854775807-1; --$x; echo $x;",
-        b"<?php echo 1; echo 2;",
         b"<?php echo 9223372036854775807+1;",
         b"<?php echo " + b"(" * 33 + b"1" + b")" * 33 + b";",
         b"<?php echo " + b"+".join([b"1"] * 130) + b";",
