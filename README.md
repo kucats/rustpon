@@ -644,6 +644,23 @@ integration, concurrency and resource fault campaigns, and independent
 security review.
 
 
+## PHP 8.4 source-position magic constant (research evaluator)
+
+The bounded `php_eval` interpreter recognizes case-insensitive
+`__LINE__` as a signed integer at its token's source position. It counts
+CRLF as one line break and bare CR or LF as one break each, matching PHP 8.4
+CLI on the supported source forms. The magic constant works in arithmetic,
+assignments, nested expressions, and comma-separated final `echo` arguments.
+Longer identifiers such as `__LINE__suffix` are rejected rather than
+accepted as a magic-constant prefix. The existing 4096-byte source limit
+bounds source-position scanning; unsupported magic constants, string values,
+includes, file context and PHP compilation semantics are not implemented.
+
+The PHP CLI differential suite checks fixed and generated line-ending cases
+against the installed PHP 8.4 interpreter, including CR, LF, CRLF, mixed-case
+spelling, source-position changes and malformed identifier boundaries.
+This remains a standalone research evaluator, not a Zend compiler.
+
 ## Bounded scalar variables in the research PHP evaluator
 
 The `php_eval` binary now accepts up to 64 assignments to at most 32
