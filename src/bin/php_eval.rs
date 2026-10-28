@@ -1720,7 +1720,7 @@ mod tests {
             ("echo StRlEn(-9);", "2"),
             ("$x=-123; echo strlen($x++),$x;", "4-122"),
             ("echo is_int(strlen(null)),strlen(intval(false));", "11"),
-            ("echo strlen(var_dump(1));", "int(1)\\n0"),
+            ("echo strlen(var_dump(1));", "int(1)\n0"),
             ("echo strlen(strlen(-10));", "1"),
             ("echo strlen(1) ?>", "1"),
         ] {
