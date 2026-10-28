@@ -1330,7 +1330,10 @@ mod tests {
             "echo 1, $missing;",
             "echo 1, 1/0;",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
         // 60 short expressions are under the source/work budgets but would
         // produce more than the independent 1024-byte output quota.
