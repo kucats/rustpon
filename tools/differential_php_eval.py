@@ -729,6 +729,25 @@ COMPOUND_ASSIGNMENT_PROGRAMS = [
 ]
 
 
+EXPRESSION_STATEMENT_PROGRAMS = [
+    "1+2; echo 9;",
+    "(1+2)*3; echo 9;",
+    "true; false; null; echo 7;",
+    "abs(-3); echo 4;",
+    "intdiv(8,2); echo 4;",
+    "is_int(7); echo 1;",
+    "isset($missing); echo 1;",
+    "empty($missing); echo 1;",
+    "strlen(PHP_INT_MIN); echo 1;",
+    "(var_dump(7)+1); echo 2;",
+    "(print_r(7)+1); echo 2;",
+    "(var_export(7)+1); echo 2;",
+    "1+2 ?>",
+    "1+2 ?>\\r\\n",
+    "42;",
+]
+
+
 ASSIGNMENT_PROGRAMS = [
     "$x=7; echo $x;",
     "$x=7; $x=$x+2; echo $x*3;",
@@ -1177,8 +1196,16 @@ def main():
         number = rng.randrange(-9223372036854775807, 9223372036854775808)
         strlen_scalars.append(f"echo strlen({number});")
         strlen_scalars.append(f"$x={number}; echo strlen($x++),$x;")
+    expression_statements = list(EXPRESSION_STATEMENT_PROGRAMS)
+    for _ in range(64):
+        left = rng.randrange(-10000, 10001)
+        right = rng.randrange(-10000, 10001)
+        expression_statements.append(
+            f"({left}+({right})); echo {left}+({right});"
+        )
     cases = (
-        [f"echo {expr};" for expr in expressions]
+        expression_statements
+        + [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
@@ -1232,6 +1259,14 @@ def main():
             )
 
     invalid = [
+        b"<?php 1/0;",
+        b"<?php echo 1; 1/0;",
+        b"<?php 1+;",
+        b"<?php 1+2 ?>raw",
+        b"<?php 1+2 ?>\\n\\n",
+        b"<?php nonexistent(1);",
+        b"<?php (1+2;",
+        b"<?php 1+2 3;",
         b"<?php echo var_dump();",
         b"<?php echo var_dump(1,,2);",
         b"<?php echo var_dump(1); echo $missing;",
