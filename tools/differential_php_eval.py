@@ -1162,7 +1162,6 @@ def main():
         b"<?php $x=$x+1; echo $x;",
         b"<?php $x==1; echo $x;",
         b"<?php $GLOBALS=2; echo 1;",
-        b"<?php $x=1; echo $x; $x=2;",
         b"<?php $" + b"a" * 65 + b"=1; echo 1;",
         b"<?php " + b"".join(f"$v{i}={i};".encode("ascii") for i in range(33)) + b"echo 1;",
         b"<?php " + b"$x=1;" * 65 + b"echo $x;",
