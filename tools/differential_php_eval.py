@@ -41,6 +41,19 @@ INTEGER_CONSTANT_PROGRAMS = [
 ]
 
 
+# For this bounded int/bool/null VM, PHP 8.4 predicates for other
+# runtime value kinds must return false without coercing their arguments.
+ABSENT_KIND_PREDICATES = [
+    "is_float", "is_double", "is_string", "is_array", "is_object",
+    "is_resource", "is_iterable", "is_countable",
+]
+ABSENT_KIND_PROGRAMS = [
+    f"echo {function}({argument});"
+    for function in ABSENT_KIND_PREDICATES + ["Is_FlOaT"]
+    for argument in ["0", "-7", "true", "false", "null", "(1<2)", "PHP_INT_MIN", "intval(true)"]
+]
+
+
 LINE_MAGIC_PROGRAMS = [
     "echo __LINE__;", "echo __line__;", "echo __LiNe__+1;",
     "echo (__LINE__*2);", "echo __LINE__,__LINE__;",
@@ -812,6 +825,11 @@ def main():
         integer_constants.append(f"echo (PHP_INT_MAX-({offset}))>(PHP_INT_MIN+({offset}));")
     # Probe PHP's line accounting for bare CR, bare LF, and CRLF across
     # different token positions, not just a single hard-coded line number.
+    absent_kind = list(ABSENT_KIND_PROGRAMS)
+    for _ in range(96):
+        function = rng.choice(ABSENT_KIND_PREDICATES)
+        argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
+        absent_kind.append(f"echo {function}({argument});")
     line_magic = list(LINE_MAGIC_PROGRAMS)
     for count in range(1, 33):
         newline = ["\\n", "\\r", "\\r\\n"][count % 3]
@@ -831,7 +849,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic
+        + echo_arguments + integer_constants + line_magic + absent_kind
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1126,6 +1144,12 @@ def main():
     # complete identifiers; overflowing operations promote to unsupported
     # floating-point values in PHP and must fail closed here.
     invalid.extend([
+        b"<?php echo is_float();",
+        b"<?php echo is_float(1,2);",
+        b"<?php echo is_countable(1,2);",
+        b"<?php echo is_floaty(1);",
+        b"<?php echo is_real(1);",
+        b"<?php echo is_iterable($missing);",
         b"<?php echo __LINE__suffix;",
         b"<?php echo __LINE___;",
         b"<?php echo __LINE__();",
@@ -1213,7 +1237,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/absent-kind-predicates differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
