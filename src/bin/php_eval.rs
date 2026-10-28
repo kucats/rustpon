@@ -4,7 +4,7 @@
 //! Supported grammar: empty statements, terminal top-level return/exit/die, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! scalar var_dump() statements with byte-exact PHP CLI output, and
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen()/var_export() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
+//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen()/var_export()/print_r() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -876,6 +876,15 @@ impl<'a> Parser<'a> {
                 }
             }
             if remaining
+                .get(..b"print_r".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"print_r"))
+                && !remaining
+                    .get(b"print_r".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_print_r(depth);
+            }
+            if remaining
                 .get(..b"var_export".len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"var_export"))
                 && !remaining
@@ -1487,6 +1496,43 @@ impl<'a> Parser<'a> {
         Ok(Value::Null)
     }
 
+    // PHP 8.4 print_r() prints scalar int/bool/null using the same
+    // conversion as echo, but returns bool(true). Evaluate the optional
+    // return flag before emitting anything; return=true yields a PHP
+    // string, which this bounded value model deliberately cannot store.
+    fn builtin_print_r(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"print_r".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let value = self.bitwise_or(depth + 1)?;
+        if self.consume(b',') {
+            if !self.consume(b')') {
+                let return_string = self.bitwise_or(depth + 1)?.as_bool();
+                self.close_builtin_call()?;
+                if return_string {
+                    return Err(EvalError::Syntax);
+                }
+            }
+        } else if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        self.append_output(value)?;
+        Ok(Value::Bool(true))
+    }
+
+    fn print_r_statement(&mut self) -> Result<(), EvalError> {
+        self.builtin_print_r(0)?;
+        if !self.consume(b';') && !self.terminal_close_tag()? {
+            return Err(EvalError::Syntax);
+        }
+        Ok(())
+    }
+
     fn export_statement(&mut self) -> Result<(), EvalError> {
         self.builtin_var_export(0)?;
         if !self.consume(b';') && !self.terminal_close_tag()? {
@@ -1673,6 +1719,17 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if remaining
+                .get(..b"print_r".len())
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"print_r"))
+                && !remaining
+                    .get(b"print_r".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                self.print_r_statement()?;
+                had_statement = true;
+                continue;
+            }
+            if remaining
                 .get(..b"var_export".len())
                 .is_some_and(|word| word.eq_ignore_ascii_case(b"var_export"))
                 && !remaining
@@ -1772,6 +1829,56 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_print_r_scalar_output_return_tag_and_order() {
+        for (program, expected) in [
+            ("print_r(0);", "0"),
+            ("print_r(-7);", "-7"),
+            ("print_r(true); print_r(false); print_r(null);", "1"),
+            ("print_r(PHP_INT_MIN);", "-9223372036854775808"),
+            ("PrInT_R(1,);", "1"),
+            ("print_r(2,false,);", "2"),
+            ("print_r(3,0);", "3"),
+            ("echo is_bool(print_r(12));", "121"),
+            ("echo 1,print_r(2),3;", "1213"),
+            ("print_r(print_r(false));", "1"),
+            ("print_r(1,var_dump(false));", "bool(false)\\n1"),
+            ("print_r(1); var_dump(true);", "1bool(true)\\n"),
+            ("print_r(1) ?>", "1"),
+            ("$x=1; print_r($x++); print_r($x);", "12"),
+            ("echo is_int(print_r(5));", "5"),
+            ("echo print_r(print_r(7));", "711"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_print_r_rejects_unsupported_strings_and_invalid_calls() {
+        for program in [
+            "print_r();",
+            "print_r(1,2,3);",
+            "print_r(1,,);",
+            "print_r(1,true);",
+            "print_r(1,1);",
+            "print_r(1); echo $missing;",
+            "print_r(1/0);",
+            "print_rx(1);",
+            "print_r(1",
+            "print_r(1); print_r(1,true);",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program:?}");
+        }
+        // The cumulative 1,024-byte output cap includes nested print_r
+        // output. It is enforced even when every scalar is individually small.
+        let program = format!("echo {};", "print_r(1)," .repeat(300) + "0");
+        let mut parser = Parser::new(program.as_bytes());
+        assert!(parser.evaluate().is_err());
     }
 
     #[test]
