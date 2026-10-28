@@ -1106,6 +1106,19 @@ semantics remain outside this research-only subset. In particular,
 `is_numeric()` recognizes supported integers but has no numeric-string or
 floating-point support; `is_scalar(null)` is false.
 
+### PHP 8.4 finite/NaN/infinite predicates (research evaluator)
+
+The bounded `php_eval` evaluator additionally accepts case-insensitive
+`is_finite()`, `is_infinite()`, and `is_nan()` with exactly one argument.
+For its existing integer, boolean and null values, PHP 8.4 coerces the
+argument to a finite numeric value: `is_finite()` returns `true`,
+while `is_infinite()` and `is_nan()` return `false`. These calls
+return PHP boolean values and retain the existing depth/work limits.
+Floating-point values (including `INF` and `NAN`), numeric strings,
+and PHP's warning/deprecation emission are not modeled. The PHP 8.4
+CLI differential suite covers fixed and seeded cases, mixed-case names,
+nested calls and strict rejection of unsupported arity.
+
 ### PHP 8.4 scalar `(int)` and `(bool)` casts (research)
 
 The bounded `php_eval` interpreter now recognizes PHP 8.4's
