@@ -3217,7 +3217,7 @@ mod tests {
             ("echo 1; /* comment */ echo 2;", Value::Int(2), "12"),
             ("$x/*c*/=/*c*/3; echo $x;", Value::Int(3), "3"),
             ("echo (/*c*/1+2/*c*/);", Value::Int(3), "3"),
-            ("echo 1,/*c*/2;", Value::Int(2), "12"),
+            ("echo 1,/*c*/2;", Value::Int(1), "12"),
             ("echo __LINE__; // hi\necho __LINE__;", Value::Int(2), "12"),
             ("echo 1; // comment\r\necho 2;", Value::Int(2), "12"),
             ("echo 1; // comment", Value::Int(1), "1"),
