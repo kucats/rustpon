@@ -36,6 +36,7 @@ enum EvalError {
     UnknownVariable,
     VariableLimit,
     AssignmentLimit,
+    AllocationFailure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1378,9 +1379,20 @@ impl<'a> Parser<'a> {
         if !self.consume(b'(') {
             return Err(EvalError::Syntax);
         }
+        // PHP evaluates every argument before the outer var_dump() emits
+        // its values. Nested var_dump() calls therefore emit their output
+        // first, while the outer call later dumps each returned null.
+        // Retain only a bounded scalar vector and fail on allocation error.
+        let mut arguments = Vec::new();
         loop {
+            if arguments.len() >= MAX_WORK {
+                return Err(EvalError::WorkLimit);
+            }
             let value = self.bitwise_or(depth + 1)?;
-            self.append_dump_output(value)?;
+            arguments
+                .try_reserve(1)
+                .map_err(|_| EvalError::AllocationFailure)?;
+            arguments.push(value);
             if self.consume(b')') {
                 break;
             }
@@ -1391,6 +1403,9 @@ impl<'a> Parser<'a> {
             if self.consume(b')') {
                 break;
             }
+        }
+        for value in arguments {
+            self.append_dump_output(value)?;
         }
         Ok(Value::Null)
     }
