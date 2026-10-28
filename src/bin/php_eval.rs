@@ -1675,7 +1675,7 @@ mod tests {
             ("return 1;", "", Value::Int(1)),
             ("return;", "", Value::Null),
             ("return/*c*/ 1;", "", Value::Int(1)),
-            ("echo 1; return; ?> ", "1", Value::Null),
+            ("echo 1; return; ?>\n", "1", Value::Null),
         ] {
             let mut parser = Parser::new(program.as_bytes());
             assert_eq!(parser.evaluate(), Ok(returned), "{program}");
