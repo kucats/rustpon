@@ -79,6 +79,24 @@ EMPTY_RETURN_PROGRAMS = [
     "return/*c*/ 1;", "echo 1; return; ?> ",
 ]
 
+# PHP 8.4 exit/die terminate CLI execution with an 8-bit status.
+# The evaluator intentionally rejects source following a terminal exit
+# until unreachable statements can be validated without execution.
+EXIT_ZERO_PROGRAMS = [
+    "exit;", "die;", "echo 1; exit();", "echo 1; exit(0);",
+    "echo 1; die(256);", "echo 1; exit(false);",
+    "echo 1; exit(null);", "echo 1; exit(PHP_INT_MIN);",
+    "echo 1; die ?>",
+]
+EXIT_NONZERO_PROGRAMS = [
+    "echo 1; EXIT(2);", "echo 1; die(257);",
+    "echo 1; exit(-1);", "echo 1; exit(true);",
+    "echo 1; exit(1+2);", "echo 1; exit(PHP_INT_MAX);",
+    "echo 1; die(1,);", "echo 1; exit(2) ?>",
+    "echo 1; exit(2); /*c*/",
+]
+
+
 # Multiple output statements may be interleaved with local assignments
 # and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
 MULTI_STATEMENT_PROGRAMS = [
@@ -941,7 +959,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + multi_statements + empty_returns
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + multi_statements + empty_returns + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -958,7 +976,31 @@ def main():
                 file=sys.stderr,
             )
 
+    # Exit status is part of the CLI observable behavior, not merely stdout.
+    # Keep nonzero exit programs separate from the ordinary success corpus.
+    for index, program in enumerate(EXIT_NONZERO_PROGRAMS):
+        code = ("<?php " + program).encode("ascii")
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode == 0 or php.returncode != rust.returncode or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL exit_status={index} program={program!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
     invalid = [
+        b"<?php echo 1; exit(1,2);",
+        b"<?php echo 1; exit(1/0);",
+        b"<?php echo 1; exit($missing);",
+        b"<?php echo 1; exit(0); echo 2;",
+        b"<?php echo 1; exit(0); /* unterminated",
+        b"<?php echo 1; exit 3;",
+        b"<?php echo 1; exit(1",
+        b"<?php echo 1; diex(1);",
         b"<?php echo 1; /* unterminated",
         b"<?php echo 1; /*/",
         b"<?php echo 1; /* never closes\n",
@@ -1369,8 +1411,8 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-return/absent-kind-predicates differential: "
-        f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-return/terminal-exit/absent-kind-predicates differential: "
+        f"{len(cases)} compatible cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
         f"{len(intdiv_errors)} PHP intdiv runtime-error rejections, {failures} failures"
