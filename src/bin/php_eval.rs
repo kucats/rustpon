@@ -1334,7 +1334,6 @@ impl<'a> Parser<'a> {
             last_value = value;
             had_statement = true;
         }
-
     }
 }
 
@@ -1377,7 +1376,11 @@ mod tests {
             ("echo 1; echo 2;", "12", Value::Int(2)),
             ("EcHo true,false,null,42; PrInT 7;", "1427", Value::Int(7)),
             ("$x=1; echo $x; $x+=2; print $x;", "13", Value::Int(3)),
-            ("$x=1; echo $x; unset($x); echo isset($x);", "1", Value::Bool(false)),
+            (
+                "$x=1; echo $x; unset($x); echo isset($x);",
+                "1",
+                Value::Bool(false),
+            ),
             ("$x=1; echo $x; $x=2;", "1", Value::Int(1)),
             ("$x=1;", "", Value::Null),
             ("", "", Value::Null),
@@ -1395,7 +1398,10 @@ mod tests {
             "echo 1; echo 2; unknown;",
             "echo 1; ?> trailing",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
         // The cap applies to the entire program, not each echo separately.
         let oversized = "echo 9223372036854775807;".repeat(60);
