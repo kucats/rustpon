@@ -92,6 +92,27 @@ CALLABLE_SCALAR_PROGRAMS = [
 ]
 
 
+# PHP 8.4 strlen() stringifies the scalar value before counting bytes.
+# The bounded VM currently represents only int/bool/null (no strings).
+STRLEN_SCALAR_PROGRAMS = [
+    "echo strlen(0);",
+    "echo strlen(-123);",
+    "echo strlen(PHP_INT_MIN);",
+    "echo strlen(PHP_INT_MAX);",
+    "echo strlen(true);",
+    "echo strlen(false);",
+    "echo strlen(null);",
+    "echo strlen((bool)0);",
+    "echo strlen(1,);",
+    "echo StRlEn(-9);",
+    "$x=-123; echo strlen($x++),$x;",
+    "echo is_int(strlen(null)),strlen(intval(false));",
+    "echo strlen(var_dump(1));",
+    "echo strlen(strlen(-10));",
+    "echo strlen(1) ?>",
+]
+
+
 ABSENT_KIND_PROGRAMS = [
     f"echo {function}({argument});"
     for function in ABSENT_KIND_PREDICATES + ["Is_FlOaT"]
@@ -1077,6 +1098,11 @@ def main():
         dump_expressions.append(
             f"$x={first}; echo is_null(var_dump($x, {second},));"
         )
+    strlen_scalars = list(STRLEN_SCALAR_PROGRAMS)
+    for _ in range(48):
+        number = rng.randrange(-9223372036854775807, 9223372036854775808)
+        strlen_scalars.append(f"echo strlen({number});")
+        strlen_scalars.append(f"$x={number}; echo strlen($x++),$x;")
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
@@ -1084,7 +1110,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1187,6 +1213,14 @@ def main():
         b"<?php echo is_callable(1,1/0);",
         b"<?php echo is_callablex(1);",
         b"<?php echo is_callable(1,2",
+        b"<?php echo strlen();",
+        b"<?php echo strlen(1,2);",
+        b"<?php echo strlen(1,,);",
+        b"<?php echo strlenx(1);",
+        b"<?php echo strlen($missing);",
+        b"<?php echo strlen(1/0);",
+        b"<?php echo strlen(1); echo $missing;",
+        b"<?php echo strlen(1,2",
         b"<?php echo is_finite();",
         b"<?php echo is_finite(1,2);",
         b"<?php echo is_infinite(1,2);",
@@ -1548,6 +1582,24 @@ def main():
                 file=sys.stderr,
             )
 
+    # The PHP 8.4 oracle must report the same argument-count failure class
+    # for missing/excess strlen() arguments; Rust rejects before publishing.
+    for index, code in enumerate([
+        b"<?php echo strlen();",
+        b"<?php echo strlen(1,2);",
+        b"<?php echo strlen(1,2,);",
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"ArgumentCountError" not in php.stderr
+                or php.stdout or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL strlen_arg_count={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
     # PHP 8.4 raises TypeError for bitwise not applied to booleans.
     # Unlike arbitrary unsupported syntax, these are verified on both runtimes.
     type_errors = [
@@ -1613,7 +1665,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
