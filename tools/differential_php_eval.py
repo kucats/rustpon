@@ -37,6 +37,21 @@ TERMINAL_PRINT_PROGRAMS = [
 ]
 
 
+ECHO_ARGUMENT_PROGRAMS = [
+    "echo 1,2,3;", "ECHO true,false,null,-7;",
+    "echo (1+2),3*4;", "echo (1),2;",
+    "echo null,false,0;", "echo is_int(1),is_bool(true),is_null(null);",
+    "$x=7; echo $x,($x<3),is_int($x);",
+    "$x=null; echo $x,is_null($x),boolval($x);",
+    "$x=3; $x+=4; echo $x,$x*2,($x===7);",
+    "echo 9223372036854775807,0-9223372036854775807-1;",
+    "echo (int)true,(bool)0,(int)null;",
+    "echo intdiv(9,3),abs(-7),min(1,2);",
+    "echo 1, 2, 3, 4, 5;",
+    "echo (1<<2),(8>>1),(1<=>2);",
+]
+
+
 LOGICAL_NOT_PROGRAMS = [
     "echo !true;", "echo !false;", "echo !0;", "echo !1;",
     "echo !-1;", "echo !!true;", "echo !!false;",
@@ -728,6 +743,14 @@ def main():
         expression = f"{function}({','.join(operands)})"
         extrema_programs.append(f"echo {expression};")
         extrema_programs.append(f"echo is_bool({expression});")
+    echo_arguments = list(ECHO_ARGUMENT_PROGRAMS)
+    for _ in range(64):
+        left = rng.randrange(-10000, 10001)
+        right = rng.randrange(-10000, 10001)
+        extra = rng.randrange(-100, 101)
+        echo_arguments.append(
+            f"$x={left}; echo $x,({right}<0),({extra}*2);"
+        )
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
@@ -735,6 +758,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + TERMINAL_PRINT_PROGRAMS
+        + echo_arguments
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -754,6 +778,12 @@ def main():
     invalid = [
         b"<?php print;",
         b"<?php print 1,2;",
+        b"<?php echo 1,;",
+        b"<?php echo 1,,2;",
+        b"<?php echo (1,2);",
+        b"<?php echo 1,2,;",
+        b"<?php echo 1,$missing;",
+        b"<?php echo 1,1/0;",
         b"<?php print 1+;",
         b"<?php printx 1;",
         b"<?php print 1; echo 2;",
@@ -1086,7 +1116,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/terminal-print differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/terminal-print/echo-argument-list differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

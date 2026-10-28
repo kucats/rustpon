@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: one final case-insensitive echo/print statement, bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement-only ++/--, and unsets followed by one echo;
+//! Supported grammar: one final case-insensitive echo (with comma-separated arguments) or print statement, bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement-only ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -11,6 +11,7 @@
 use std::io::{self, Read, Write};
 
 const MAX_SOURCE: usize = 4096;
+const MAX_OUTPUT: usize = 1024;
 const MAX_DEPTH: usize = 32;
 const MAX_WORK: usize = 256;
 const MAX_VARIABLES: usize = 32;
@@ -20,6 +21,7 @@ const MAX_VARIABLE_BYTES: usize = 64;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EvalError {
     SourceTooLong,
+    OutputLimit,
     Syntax,
     TrailingInput,
     Overflow,
@@ -104,6 +106,7 @@ struct Parser<'a> {
     source: &'a [u8],
     offset: usize,
     work: usize,
+    output: String,
     bindings: Vec<(&'a [u8], Value)>,
     assignments: usize,
 }
@@ -114,6 +117,7 @@ impl<'a> Parser<'a> {
             source,
             offset: 0,
             work: 0,
+            output: String::new(),
             bindings: Vec::new(),
             assignments: 0,
         }
@@ -1118,6 +1122,15 @@ impl<'a> Parser<'a> {
         Ok(lhs)
     }
 
+    fn append_output(&mut self, value: Value) -> Result<(), EvalError> {
+        let rendered = value.echo();
+        if self.output.len().saturating_add(rendered.len()) > MAX_OUTPUT {
+            return Err(EvalError::OutputLimit);
+        }
+        self.output.push_str(&rendered);
+        Ok(())
+    }
+
     fn evaluate(&mut self) -> Result<Value, EvalError> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
@@ -1160,16 +1173,16 @@ impl<'a> Parser<'a> {
         // supported only as the final output statement. In particular,
         // print's expression return value is not exposed.
         let remaining = &self.source[self.offset..];
-        let keyword_len = if remaining
+        let (keyword_len, is_echo) = if remaining
             .get(..4)
             .is_some_and(|word| word.eq_ignore_ascii_case(b"echo"))
         {
-            4
+            (4, true)
         } else if remaining
             .get(..5)
             .is_some_and(|word| word.eq_ignore_ascii_case(b"print"))
         {
-            5
+            (5, false)
         } else {
             return Err(EvalError::Syntax);
         };
@@ -1181,6 +1194,16 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         let value = self.bitwise_or(0)?;
+        self.append_output(value)?;
+        if is_echo {
+            // Each argument is a separate expression; print has no comma list.
+            // Keep bytes private until the entire program has been validated.
+            while self.consume(b',') {
+                self.charge()?;
+                let argument = self.bitwise_or(0)?;
+                self.append_output(argument)?;
+            }
+        }
         if !self.consume(b';') {
             return Err(EvalError::Syntax);
         }
@@ -1202,12 +1225,12 @@ fn run() -> Result<(), String> {
         .take((MAX_SOURCE + 1) as u64)
         .read_to_end(&mut source)
         .map_err(|error| error.to_string())?;
-    let value = Parser::new(&source)
+    let mut parser = Parser::new(&source);
+    parser
         .evaluate()
         .map_err(|error| format!("unsupported PHP expression: {error:?}"))?;
-    // PHP echo emits "1" for true and zero bytes for false.
     // No output is published before the entire program has been accepted.
-    let output = value.echo();
+    let output = parser.output;
     io::stdout()
         .lock()
         .write_all(output.as_bytes())
@@ -1281,6 +1304,41 @@ mod tests {
                 "{program}"
             );
         }
+    }
+
+    #[test]
+    fn php84_terminal_echo_argument_list_and_output_quota() {
+        for (program, expected) in [
+            ("echo 1,2,3;", "123"),
+            ("ECHO true,false,null,-7;", "1-7"),
+            ("echo (1+2), 3*4;", "312"),
+            ("echo (1),2;", "12"),
+            ("$x=7; echo $x, ($x<3), is_int($x);", "71"),
+            ("echo null, false, 0;", "0"),
+            ("print (true);", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program}");
+            assert_eq!(parser.output, expected, "{program}");
+        }
+        for program in [
+            "echo 1,;",
+            "echo 1,,2;",
+            "echo (1,2);",
+            "echo 1,2,;",
+            "print 1,2;",
+            "echo 1, $missing;",
+            "echo 1, 1/0;",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+        }
+        // 60 short expressions are under the source/work budgets but would
+        // produce more than the independent 1024-byte output quota.
+        let program = format!("echo {};", vec!["2**62"; 60].join(","));
+        assert_eq!(
+            Parser::new(program.as_bytes()).evaluate(),
+            Err(EvalError::OutputLimit)
+        );
     }
 
     #[test]

@@ -675,12 +675,19 @@ statement as an alternative to `echo expression;`, including the parenthesized
 form `print(expression);`. Both keywords are case-insensitive, matching PHP
 8.4. The interpreter evaluates the existing integer/boolean/null subset and
 writes its bytes only after the complete program passes validation. PHP
-`print` returns integer 1 when used as an expression; that form, comma-separated
-`echo` arguments, and additional output statements remain unsupported.
-Malformed expressions, unknown variables, and resource-limit failures produce
-no stdout. The differential suite checks both keywords against real PHP 8.4
-CLI, including mixed-case spelling, scalar conversions, prior assignments,
-and rejection boundaries.
+`print` returns integer 1 when used as an expression; that form and
+additional output statements remain unsupported. Terminal `echo` accepts
+comma-separated scalar expressions (for example, `echo 1, true, null, 2;`),
+concatenating their PHP 8.4 string representations without separators. `print`
+still accepts exactly one expression. A separate 1024-byte output quota
+prevents unbounded output accumulation; the source and evaluation-work limits
+also apply to each argument. Malformed expressions, unknown variables, quota
+failures, and later-argument evaluation errors produce no stdout, even when
+an earlier argument was valid. PHP itself can emit partial output before a
+runtime exception; this fail-closed prototype intentionally does not.
+The differential suite checks both keywords against real PHP 8.4 CLI,
+including mixed-case spelling, scalar conversions, prior assignments,
+comma lists, and rejection boundaries.
 
 ### PHP 8.4 statement-level increment/decrement (research)
 
