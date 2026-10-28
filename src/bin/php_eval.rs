@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: one final case-insensitive echo (with comma-separated arguments) or print statement, bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement-only ++/--, and unsets followed by one echo;
+//! Supported grammar: one final case-insensitive echo (with comma-separated arguments) or print statement, bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -681,6 +681,24 @@ impl<'a> Parser<'a> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
+        self.skip_space();
+        // Prefix updates bind before exponentiation in PHP 8.4:
+        // ++$x**2 means (++$x)**2. Only simple local lvalues are supported.
+        if self.source[self.offset..].starts_with(b"++")
+            || self.source[self.offset..].starts_with(b"--")
+        {
+            let increment = self.source[self.offset..].starts_with(b"++");
+            self.offset += 2;
+            self.charge()?;
+            let name = self.variable_name()?;
+            self.update_variable(name, increment)?;
+            return self
+                .bindings
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| *value)
+                .ok_or(EvalError::UnknownVariable);
+        }
         if self.consume(b'(') {
             let value = self.bitwise_or(depth + 1)?;
             if !self.consume(b')') {
@@ -689,11 +707,23 @@ impl<'a> Parser<'a> {
             Ok(value)
         } else if self.peek() == Some(b'$') {
             let name = self.variable_name()?;
-            self.bindings
+            let old_value = self
+                .bindings
                 .iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| *value)
-                .ok_or(EvalError::UnknownVariable)
+                .ok_or(EvalError::UnknownVariable)?;
+            // Postfix updates return the original tagged value. The next
+            // expression/echo argument sees the updated binding.
+            self.skip_space();
+            if self.source[self.offset..].starts_with(b"++")
+                || self.source[self.offset..].starts_with(b"--")
+            {
+                let increment = self.source[self.offset..].starts_with(b"++");
+                self.offset += 2;
+                self.update_variable(name, increment)?;
+            }
+            Ok(old_value)
         } else {
             self.skip_space();
             let remaining = &self.source[self.offset..];
@@ -861,13 +891,8 @@ impl<'a> Parser<'a> {
             return Err(EvalError::DepthLimit);
         }
         self.skip_space();
-        // ++ and -- are PHP lexer tokens, never a pair of unary signs.
-        // Expression-level side effects are not yet implemented.
-        if self.source[self.offset..].starts_with(b"++")
-            || self.source[self.offset..].starts_with(b"--")
-        {
-            return Err(EvalError::Syntax);
-        }
+        // ++/-- are handled as lvalue updates in primary(), including
+        // exponentiation and parenthesized scalar expression contexts.
         if let Some(value) = self.scalar_cast(depth)? {
             return Ok(value);
         }
@@ -1431,8 +1456,6 @@ mod tests {
         }
         for (program, error) in [
             ("++$x; echo 1;", EvalError::UnknownVariable),
-            ("$x=1; $x++; echo ++$x;", EvalError::Syntax),
-            ("$x=1; echo $x++;", EvalError::Syntax),
             ("echo 1++2;", EvalError::Syntax),
             ("echo 1--2;", EvalError::Syntax),
             ("$x=1; $x+++; echo $x;", EvalError::Syntax),
@@ -1452,6 +1475,66 @@ mod tests {
                 "{program}"
             );
         }
+    }
+
+    #[test]
+    fn php84_increment_decrement_expressions_preserve_value_and_order() {
+        for (program, expected_output) in [
+            ("$x=2; echo ++$x;", "3"),
+            ("$x=2; echo $x++;", "2"),
+            ("$x=2; echo ++$x, $x++, $x;", "334"),
+            ("$x=2; echo $x++ + $x++;", "5"),
+            ("$x=2; echo ++$x * 3;", "9"),
+            ("$x=2; echo $x++**2;", "4"),
+            ("$x=2; echo ++$x**2;", "9"),
+            ("$x=2; echo 2**$x++;", "4"),
+            ("$x=2; echo -$x++;", "-2"),
+            ("$x=2; echo ++$x + 1;", "4"),
+            ("$x=2; echo $x++ + 1;", "3"),
+            ("$x=2; echo ($x++) + (++$x);", "6"),
+            ("$x=2; echo ($x++) + ($x--);", "5"),
+            ("$x=2; echo is_int($x++);", "1"),
+            ("$x=2; echo ($x++)===2;", "1"),
+            ("$x=2; echo abs(++$x);", "3"),
+            ("$x=2; echo $x+++2;", "4"),
+            ("$x=2; echo $x---2;", "0"),
+            ("$x=2; print $x++;", "2"),
+            ("$x=true; echo $x++,is_bool($x);", "11"),
+            ("$x=null; echo $x++,is_int($x);", "1"),
+            ("$x=null; echo ++$x,is_int($x);", "11"),
+            ("$x=null; echo --$x,is_null($x);", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program}");
+            assert_eq!(parser.output, expected_output, "{program}");
+        }
+        for (program, expected_error) in [
+            ("echo ++$missing;", EvalError::UnknownVariable),
+            ("echo $missing++;", EvalError::UnknownVariable),
+            ("$x=1; echo ++($x);", EvalError::Syntax),
+            ("$x=1; echo ($x)++;", EvalError::Syntax),
+            ("$x=1; echo ++$x++;", EvalError::Syntax),
+            ("$x=1; echo ($x++)++;", EvalError::Syntax),
+            (
+                "$x=9223372036854775807; echo $x++;",
+                EvalError::UnsupportedFloat,
+            ),
+            (
+                "$x=0-9223372036854775807-1; echo --$x;",
+                EvalError::UnsupportedFloat,
+            ),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(expected_error),
+                "{program}"
+            );
+        }
+        // No stdout escapes if a later argument overflows after an earlier
+        // successful update. Internal output remains uncommitted.
+        let mut parser = Parser::new(b"$x=9223372036854775807; echo 1,$x++;");
+        assert_eq!(parser.evaluate(), Err(EvalError::UnsupportedFloat));
+        assert_eq!(parser.output, "1");
     }
 
     #[test]
