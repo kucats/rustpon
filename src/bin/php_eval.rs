@@ -896,6 +896,13 @@ impl<'a> Parser<'a> {
         if let Some(value) = self.scalar_cast(depth)? {
             return Ok(value);
         }
+        // PHP lexes ++ and -- atomically. Do not consume their first byte
+        // as unary + or -; primary() validates the following simple lvalue.
+        if self.source[self.offset..].starts_with(b"++")
+            || self.source[self.offset..].starts_with(b"--")
+        {
+            return self.power(depth);
+        }
         if self.consume(b'+') {
             self.charge()?;
             Ok(Value::Int(self.unary(depth + 1)?.as_int()))
