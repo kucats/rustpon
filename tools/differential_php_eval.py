@@ -60,6 +60,25 @@ FLOAT_CLASSIFICATION_PROGRAMS = [
 ]
 
 
+# PHP 8.4 permits a trailing comma in scalar function calls, including
+# multi-argument builtins. empty() is a language construct and rejects it.
+BUILTIN_TRAILING_COMMA_PROGRAMS = [
+    "echo intdiv(9,3,);", "echo intdiv(-9,3, /* c */);",
+    "echo abs(-7,);", "echo abs(null,);",
+    "echo min(3,2,);", "echo min(true,1,);",
+    "echo min(1,1,);", "echo min(3,2,1,);",
+    "echo max(false,0,);", "echo max(1,2,3,);",
+    "echo is_int(1,);", "echo IS_BOOL(false,);",
+    "echo is_null(null,);", "echo is_scalar(true,);",
+    "echo is_numeric(1,);", "echo is_finite(null,);",
+    "echo is_infinite(1,);", "echo is_nan(0,);",
+    "echo is_float(1,);", "echo boolval(1,);",
+    "echo boolval(null,);", "echo intval(true,);",
+    "echo intval(10,);", "echo intval(10,2,);",
+    "echo intval(false,-1,);", "echo is_int(intval(1,),);",
+]
+
+
 CALLABLE_SCALAR_PROGRAMS = [
     "echo is_callable(0);",
     "echo IS_CALLABLE(-7);",
@@ -939,6 +958,19 @@ def main():
         argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
         second = rng.choice(["", ",true", ",false", ",0", ",1", ",null", ",true,"])
         callable_scalars.append(f"echo is_callable({argument}{second});")
+    builtin_trailing_commas = list(BUILTIN_TRAILING_COMMA_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        divisor = rng.randrange(1, 100)
+        function = rng.choice([
+            "abs", "is_int", "is_bool", "is_null", "is_scalar",
+            "is_numeric", "is_finite", "is_nan", "boolval", "intval",
+        ])
+        builtin_trailing_commas.append(f"echo {function}({value},);")
+        builtin_trailing_commas.append(f"echo intdiv({value},{divisor},);")
+        builtin_trailing_commas.append(f"echo min({value},{other},);")
+        builtin_trailing_commas.append(f"echo max({value},{other},);")
     float_classification = list(FLOAT_CLASSIFICATION_PROGRAMS)
     for _ in range(96):
         function = rng.choice(["is_finite", "is_infinite", "is_nan"])
@@ -988,7 +1020,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + multi_statements + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + builtin_trailing_commas + multi_statements + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1044,6 +1076,15 @@ def main():
         b"<?php echo 1; /* never closes\n",
         b"<?php echo 1; #[A] echo 2;",
         b"<?php echo 1; // ?>trailing",
+        b"<?php echo intdiv(9,3,,);",
+        b"<?php echo intdiv(9,);",
+        b"<?php echo abs(1,,);",
+        b"<?php echo min(1,2,,);",
+        b"<?php echo max(1,2,,);",
+        b"<?php echo is_int(1,,);",
+        b"<?php echo boolval(1,,);",
+        b"<?php echo intval(1,2,,);",
+        b"<?php echo empty(1,);",
         b"<?php echo is_callable();",
         b"<?php echo is_callable(1,2,3);",
         b"<?php echo is_callable(1,,);",

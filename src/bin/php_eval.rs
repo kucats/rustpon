@@ -176,6 +176,23 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // PHP 8.4 permits one trailing comma in ordinary function calls, but
+    // not in the empty() language construct. Apply this only after the
+    // builtin has parsed its required arguments.
+    fn close_builtin_call(&mut self) -> Result<(), EvalError> {
+        if self.consume(b',') {
+            if self.consume(b')') {
+                Ok(())
+            } else {
+                Err(EvalError::Syntax)
+            }
+        } else if self.consume(b')') {
+            Ok(())
+        } else {
+            Err(EvalError::Syntax)
+        }
+    }
+
     // A PHP closing tag terminates the current statement. PHP consumes one
     // immediately following LF, CR, or CRLF. Other bytes are raw template
     // output, which this bounded evaluator cannot represent: reject them
@@ -504,9 +521,7 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         let denominator = self.bitwise_or(depth + 1)?.as_int();
-        if !self.consume(b')') {
-            return Err(EvalError::Syntax);
-        }
+        self.close_builtin_call()?;
         if denominator == 0 {
             return Err(EvalError::DivisionByZero);
         }
@@ -528,9 +543,7 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         let value = self.bitwise_or(depth + 1)?.as_int();
-        if !self.consume(b')') {
-            return Err(EvalError::Syntax);
-        }
+        self.close_builtin_call()?;
         value
             .checked_abs()
             .map(Value::Int)
@@ -572,7 +585,14 @@ impl<'a> Parser<'a> {
             if (minimum && right < left) || (!minimum && right > left) {
                 selected = candidate;
             }
-            if self.consume(b')') {
+            let finished = if self.consume(b')') {
+                true
+            } else if self.consume(b',') {
+                self.consume(b')')
+            } else {
+                return Err(EvalError::Syntax);
+            };
+            if finished {
                 // PHP 8.4's direct two-argument min() fast path selects
                 // the second operand on equality. Three-or-more arguments
                 // use the ordinary first-on-tie reduction instead.
@@ -583,9 +603,6 @@ impl<'a> Parser<'a> {
                     }
                 }
                 return Ok(selected);
-            }
-            if !self.consume(b',') {
-                return Err(EvalError::Syntax);
             }
         }
     }
@@ -622,8 +639,8 @@ impl<'a> Parser<'a> {
             } else if !self.consume(b')') {
                 return Err(EvalError::Syntax);
             }
-        } else if !self.consume(b')') {
-            return Err(EvalError::Syntax);
+        } else {
+            self.close_builtin_call()?;
         }
         // PHP's predicates inspect the original tag, not the numeric or
         // truthiness conversion used by operators. Numeric strings/floats
@@ -688,14 +705,15 @@ impl<'a> Parser<'a> {
         }
         let value = self.bitwise_or(depth + 1)?;
         if !boolean && self.consume(b',') {
-            // The second argument is evaluated (including any errors), even
-            // though PHP ignores the base for int/bool input. Parsing it
-            // through the ordinary grammar preserves depth and work limits.
+            // intval(value,) is valid PHP 8.4 syntax. With a second
+            // argument, evaluate the base even though integer/bool/null
+            // conversion ignores it, preserving error and work behavior.
+            if self.consume(b')') {
+                return Ok(Value::Int(value.as_int()));
+            }
             let _base = self.bitwise_or(depth + 1)?.as_int();
         }
-        if !self.consume(b')') {
-            return Err(EvalError::Syntax);
-        }
+        self.close_builtin_call()?;
         Ok(if boolean {
             Value::Bool(value.as_bool())
         } else {
@@ -1535,6 +1553,60 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_trailing_commas_in_scalar_builtin_calls() {
+        for (program, expected) in [
+            ("echo intdiv(9,3,);", Value::Int(3)),
+            ("echo intdiv(-9,3, /* c */);", Value::Int(-3)),
+            ("echo abs(-7,);", Value::Int(7)),
+            ("echo abs(null,);", Value::Int(0)),
+            ("echo min(3,2,);", Value::Int(2)),
+            ("echo min(true,1,);", Value::Int(1)),
+            ("echo min(1,1,);", Value::Int(1)),
+            ("echo min(3,2,1,);", Value::Int(1)),
+            ("echo max(false,0,);", Value::Bool(false)),
+            ("echo max(1,2,3,);", Value::Int(3)),
+            ("echo is_int(1,);", Value::Bool(true)),
+            ("echo IS_BOOL(false,);", Value::Bool(true)),
+            ("echo is_null(null,);", Value::Bool(true)),
+            ("echo is_scalar(true,);", Value::Bool(true)),
+            ("echo is_numeric(1,);", Value::Bool(true)),
+            ("echo is_finite(null,);", Value::Bool(true)),
+            ("echo is_infinite(1,);", Value::Bool(false)),
+            ("echo is_nan(0,);", Value::Bool(false)),
+            ("echo is_float(1,);", Value::Bool(false)),
+            ("echo boolval(1,);", Value::Bool(true)),
+            ("echo boolval(null,);", Value::Bool(false)),
+            ("echo intval(true,);", Value::Int(1)),
+            ("echo intval(10,);", Value::Int(10)),
+            ("echo intval(10,2,);", Value::Int(10)),
+            ("echo intval(false,-1,);", Value::Int(0)),
+            ("echo is_int(intval(1,),);", Value::Bool(true)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo intdiv(9,3,,);",
+            "echo intdiv(9,);",
+            "echo abs(1,,);",
+            "echo min(1,2,,);",
+            "echo max(1,2,,);",
+            "echo is_int(1,,);",
+            "echo boolval(1,,);",
+            "echo intval(1,2,,);",
+            "echo empty(1,);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
     }
 
     #[test]

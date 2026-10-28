@@ -1459,3 +1459,14 @@ research evaluator has no HTML/template-output mode. The differential corpus
 checks accepted output byte-for-byte against PHP 8.4 CLI and verifies PHP's
 observable template bytes for rejected cases. This does not implement
 mixed PHP/HTML scripts or PHP's complete closing-tag grammar.
+
+### PHP 8.4 trailing commas in scalar builtins (research evaluator)
+
+The bounded `php_eval` interpreter accepts a single trailing comma in
+supported scalar builtin calls, including `intdiv()`, `abs()`, `min()`,
+`max()`, the type predicates, `boolval()`, and `intval()`. Both one- and
+two-argument `intval()` forms are supported. `min()` retains PHP's special
+two-argument tie behavior with a trailing comma. Repeated commas, missing
+required arguments, and a trailing comma in the `empty()` language construct
+still fail closed. Fixed and seeded programs are compared byte-for-byte with
+PHP 8.4 CLI; this does not add general function calls or a PHP VM.
