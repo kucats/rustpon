@@ -176,6 +176,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // A PHP closing tag terminates the current statement. PHP consumes one
+    // immediately following LF, CR, or CRLF. Other bytes are raw template
+    // output, which this bounded evaluator cannot represent: reject them
+    // rather than silently dropping observable output.
+    fn terminal_close_tag(&mut self) -> Result<bool, EvalError> {
+        self.skip_space();
+        if !self.source[self.offset..].starts_with(b"?>") {
+            return Ok(false);
+        }
+        self.offset += 2;
+        let trailing = &self.source[self.offset..];
+        if trailing.is_empty() || trailing == b"\n" || trailing == b"\r" || trailing == b"\r\n" {
+            self.offset = self.source.len();
+            Ok(true)
+        } else {
+            Err(EvalError::TrailingInput)
+        }
+    }
+
     fn charge(&mut self) -> Result<(), EvalError> {
         self.work += 1;
         if self.work > MAX_WORK {
@@ -1324,14 +1343,8 @@ impl<'a> Parser<'a> {
             if self.offset == self.source.len() {
                 return Ok(last_value);
             }
-            if self.source[self.offset..].starts_with(b"?>") {
-                self.offset += 2;
-                self.skip_space();
-                return if self.offset == self.source.len() {
-                    Ok(last_value)
-                } else {
-                    Err(EvalError::TrailingInput)
-                };
+            if self.terminal_close_tag()? {
+                return Ok(last_value);
             }
             // PHP 8.4 permits empty statements between supported statements.
             // Charge each one to prevent unbounded no-op loops.
@@ -1362,11 +1375,7 @@ impl<'a> Parser<'a> {
                     }
                     value
                 };
-                self.skip_space();
-                if self.source[self.offset..].starts_with(b"?>") {
-                    self.offset += 2;
-                    self.skip_space();
-                }
+                self.terminal_close_tag()?;
                 return if self.offset == self.source.len() {
                     Ok(value)
                 } else {
@@ -1413,11 +1422,7 @@ impl<'a> Parser<'a> {
                 if !self.consume(b';') && !self.source[self.offset..].starts_with(b"?>") {
                     return Err(EvalError::Syntax);
                 }
-                self.skip_space();
-                if self.source[self.offset..].starts_with(b"?>") {
-                    self.offset += 2;
-                    self.skip_space();
-                }
+                self.terminal_close_tag()?;
                 if self.offset != self.source.len() {
                     return Err(EvalError::TrailingInput);
                 }
@@ -1485,7 +1490,7 @@ impl<'a> Parser<'a> {
                     self.append_output(argument)?;
                 }
             }
-            if !self.consume(b';') {
+            if !self.consume(b';') && !self.terminal_close_tag()? {
                 return Err(EvalError::Syntax);
             }
             last_value = value;
@@ -1530,6 +1535,43 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_closing_tag_terminates_echo_print_and_preserves_template_output() {
+        for (program, output) in [
+            ("echo 1 ?>", "1"),
+            ("print 2 ?>", "2"),
+            ("echo 1,2 ?>", "12"),
+            ("echo 1 /*c*/ ?>", "1"),
+            ("echo 1 ?>\n", "1"),
+            ("echo 1 ?>\r", "1"),
+            ("echo 1 ?>\r\n", "1"),
+            ("echo 1; ?>", "1"),
+            ("echo 1; print 2 ?>", "12"),
+            ("echo 1; // hi\n ?>", "1"),
+            ("echo 1; return 2 ?>", "1"),
+            ("echo 1; exit(0) ?>", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, output, "{program:?}");
+        }
+        for program in [
+            "echo 1 ?> ",
+            "echo 1 ?>text",
+            "echo 1 ?>\n\n",
+            "echo 1; ?>\r\r",
+            "print 2 ?>\t",
+            "return 1; ?> ",
+            "exit(0); ?>trailing",
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(EvalError::TrailingInput),
+                "{program:?}"
+            );
+        }
     }
 
     #[test]
