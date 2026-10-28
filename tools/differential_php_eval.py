@@ -110,6 +110,17 @@ EXIT_NONZERO_PROGRAMS = [
 ]
 
 
+# PHP closing tags can terminate echo/print without a semicolon, and PHP
+# consumes one immediately following CR, LF or CRLF.
+TERMINAL_CLOSE_TAG_PROGRAMS = [
+    "echo 1 ?>", "print 2 ?>", "echo 1,2 ?>",
+    "echo 1 /*c*/ ?>", "echo 1 ?>\n", "echo 1 ?>\r",
+    "echo 1 ?>\r\n", "echo 1; ?>",
+    "echo 1; print 2 ?>", "echo 1; // hi\n ?>",
+    "echo 1; return 2 ?>", "echo 1; exit(0) ?>",
+]
+
+
 # Multiple output statements may be interleaved with local assignments
 # and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
 MULTI_STATEMENT_PROGRAMS = [
@@ -977,7 +988,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + multi_statements + empty_returns + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + multi_statements + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1011,6 +1022,15 @@ def main():
             )
 
     invalid = [
+        # The evaluator deliberately rejects raw template bytes following a
+        # close tag instead of silently discarding PHP's observable output.
+        b"<?php echo 1 ?> ",
+        b"<?php echo 1 ?>text",
+        b"<?php echo 1 ?>\n\n",
+        b"<?php echo 1; ?>\r\r",
+        b"<?php print 2 ?>\t",
+        b"<?php return 1; ?> ",
+        b"<?php exit(0); ?>trailing",
         b"<?php echo 1; exit(1,2);",
         b"<?php echo 1; exit(1/0);",
         b"<?php echo 1; exit($missing);",
@@ -1356,6 +1376,24 @@ def main():
                 file=sys.stderr,
             )
 
+    # These rejected programs are valid PHP 8.4: PHP emits raw template
+    # bytes after the closing tag, which the Rust subset cannot represent.
+    for index, (code, expected) in enumerate([
+        (b"<?php echo 1 ?> ", b"1 "),
+        (b"<?php echo 1 ?>text", b"1text"),
+        (b"<?php echo 1 ?>\n\n", b"1\n"),
+        (b"<?php echo 1; ?>\r\r", b"1\r"),
+        (b"<?php print 2 ?>\t", b"2\t"),
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        if php.returncode != 0 or php.stdout != expected:
+            failures += 1
+            print(
+                f"FAIL close_tag_template={index} "
+                f"php={php.returncode}:{php.stdout[:80]!r} expected={expected!r}",
+                file=sys.stderr,
+            )
+
     # PHP 8.4 rejects unterminated block comments at compile time,
     # including when an earlier echo could otherwise produce output.
     for index, code in enumerate([
@@ -1437,7 +1475,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
         f"{len(cases)} compatible cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
