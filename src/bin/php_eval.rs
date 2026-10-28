@@ -349,7 +349,7 @@ impl<'a> Parser<'a> {
         self.offset += 2;
         self.charge()?;
         let name = self.variable_name()?;
-        if !self.consume(b';') {
+        if !self.consume(b';') && !self.terminal_close_tag()? {
             return Err(EvalError::Syntax);
         }
         self.update_variable(name, increment)
@@ -369,7 +369,7 @@ impl<'a> Parser<'a> {
         {
             let increment = self.source[self.offset..].starts_with(b"++");
             self.offset += 2;
-            if !self.consume(b';') {
+            if !self.consume(b';') && !self.terminal_close_tag()? {
                 return Err(EvalError::Syntax);
             }
             return self.update_variable(name, increment);
@@ -417,7 +417,7 @@ impl<'a> Parser<'a> {
         };
         self.charge()?;
         let value = self.bitwise_or(0)?;
-        if !self.consume(b';') {
+        if !self.consume(b';') && !self.terminal_close_tag()? {
             return Err(EvalError::Syntax);
         }
         let value = if let Some(op) = compound_op {
@@ -500,7 +500,7 @@ impl<'a> Parser<'a> {
                 break;
             }
         }
-        if !self.consume(b';') {
+        if !self.consume(b';') && !self.terminal_close_tag()? {
             return Err(EvalError::Syntax);
         }
         Ok(())
@@ -1829,6 +1829,49 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_terminal_close_tag_ends_variable_mutations_and_unset() {
+        // The closing tag is a statement terminator even when the last
+        // statement does not emit output. Earlier output is still retained.
+        for (program, expected) in [
+            ("<?php $x=1 ?>", ""),
+            ("<?php echo 7; $x=1 ?>", "7"),
+            ("<?php echo 7; $x=1 ?>\\r\\n", "7"),
+            ("<?php echo 7; $x=1; $x+=2 ?>", "7"),
+            ("<?php echo 7; $x=1; $x*=3 ?>", "7"),
+            ("<?php echo 7; $x=1; $x++ ?>", "7"),
+            ("<?php echo 7; $x=1; ++$x ?>", "7"),
+            ("<?php echo 7; $x=1; $x-- ?>", "7"),
+            ("<?php echo 7; $x=1; --$x ?>", "7"),
+            ("<?php echo 7; $x=1; unset($x) ?>", "7"),
+            ("<?php echo 7; unset($missing,) ?>", "7"),
+            ("<?php echo 7; $x=true; $x=(int)$x ?>", "7"),
+            ("<?php echo 7; $x=1; $x>>=1 ?>", "7"),
+            ("<?php echo 7; $x=1; // comment\\n$x=2 ?>", "7"),
+            ("<?php echo 7; $x=1; $x += 2 ?>\\r", "7"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_terminal_close_tag_rejects_raw_template_and_bad_mutations() {
+        for program in [
+            "<?php echo 7; $x= ?>",
+            "<?php echo 7; $x=1 ?>raw",
+            "<?php echo 7; $x=1 ?>\\n\\n",
+            "<?php echo 7; $x=1; $x+=2 ?> ",
+            "<?php echo 7; $x=1; $x++ ?>raw",
+            "<?php echo 7; $x=1; ++$x ?>raw",
+            "<?php echo 7; unset($x) ?>raw",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program:?}");
+        }
     }
 
     #[test]
