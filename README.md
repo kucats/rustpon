@@ -1047,14 +1047,20 @@ function definitions/calls remain unsupported.
 The bounded `php_eval` evaluator implements case-insensitive `is_int()`
 (and its PHP aliases `is_integer()`, `is_long()`), `is_bool()`, `is_null()`,
 `is_scalar()`, and `is_numeric()` for its supported scalar types.
-Each takes exactly one supported integer/boolean/null expression, inspects the
-actual `Value` tag without coercing it, and returns a PHP boolean.
+It also accepts `is_float()` (alias `is_double()`), `is_string()`,
+`is_array()`, `is_object()`, `is_resource()`, `is_iterable()`, and
+`is_countable()`. These return `false` for every supported int/bool/null
+value, matching PHP 8.4; the evaluator cannot construct the other value
+kinds yet. Each predicate takes exactly one supported expression, inspects
+the actual `Value` tag without coercing it, and returns a PHP boolean.
 For example, `is_int(true)` is false, `is_int(true+0)` is true, and
 `is_bool(is_int(1))` is true. Existing source/work/depth limits apply to
 nested calls. Missing/extra arguments, unknown functions and unknown
 variables fail closed without output. The PHP 8.4 CLI differential suite
-checks fixed type boundaries, nested expressions and seeded values.
-Strings, floats, arrays, references, user functions and general Zend type
+checks fixed type boundaries, nested expressions and seeded values,
+including 72 fixed and 96 seeded absent-kind predicate calls. Unsupported
+arity and unknown function names are rejected. Strings, floats, arrays,
+references, user functions and general Zend type
 semantics remain outside this research-only subset. In particular,
 `is_numeric()` recognizes supported integers but has no numeric-string or
 floating-point support; `is_scalar(null)` is false.
