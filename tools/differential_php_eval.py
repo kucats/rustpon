@@ -193,6 +193,25 @@ VAR_EXPORT_SCALAR_PROGRAMS = [
 ]
 
 
+
+# print_r() echoes scalar int/bool/null values, returns bool(true), and
+# evaluates the optional $return flag before emitting. return=true produces
+# a string, which this bounded evaluator deliberately rejects.
+PRINT_R_SCALAR_PROGRAMS = [
+    "print_r(0);", "print_r(-7);", "print_r(true);",
+    "print_r(false);", "print_r(null);", "print_r(PHP_INT_MIN);",
+    "print_r(PHP_INT_MAX);", "PrInT_R(1,);",
+    "print_r(2,false,);", "print_r(3,0);",
+    "print_r(1); print_r(true);",
+    "echo is_bool(print_r(12));", "echo 1,print_r(2),3;",
+    "print_r(print_r(false));", "print_r(1,var_dump(false));",
+    "print_r(1); var_dump(true);", "print_r(1) ?>",
+    "$x=1; print_r($x++); print_r($x);",
+    "echo is_int(print_r(5));", "echo print_r(print_r(7));",
+    "print_r(null,false);", "echo print_r(1,false);",
+]
+
+
 VAR_DUMP_PROGRAMS = [
     "var_dump(0);",
     "var_dump(1, -1, true, false, null);",
@@ -1109,6 +1128,14 @@ def main():
         number = rng.randrange(-9223372036854775807, 9223372036854775808)
         export_scalars.append(f"var_export({number});")
         export_scalars.append(f"$x={number}; var_export($x); echo is_null(var_export(false));")
+    print_r_scalars = list(PRINT_R_SCALAR_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        print_r_scalars.append(f"$x={value}; print_r($x++); print_r($x);")
+        print_r_scalars.append(
+            f"echo is_bool(print_r({value},false)),print_r({other},false);"
+        )
     dump_programs = list(VAR_DUMP_PROGRAMS)
     for _ in range(64):
         first = rng.randrange(-10000, 10001)
@@ -1135,7 +1162,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1555,6 +1582,16 @@ def main():
         b"<?php echo -PHP_INT_MIN;",
     ])
     invalid.extend([
+        b"<?php print_r();",
+        b"<?php print_r(1,2,3);",
+        b"<?php print_r(1,,);",
+        b"<?php print_r(1,true);",  # valid PHP, unsupported string return
+        b"<?php print_r(1,1);",     # valid PHP, unsupported string return
+        b"<?php print_r(1,2,);",   # valid PHP, unsupported string return
+        b"<?php print_r(1); echo $missing;",
+        b"<?php print_r(1/0);",
+        b"<?php print_rx(1);",
+        b"<?php print_r(1); print_r(1,true);",
         b"<?php var_export();",
         b"<?php var_export(1,2,3);",
         b"<?php var_export(1,,);",
@@ -1612,6 +1649,23 @@ def main():
             print(
                 f"FAIL unterminated_comment={index} "
                 f"php={php.returncode}:{php.stdout[:80]!r}:{php.stderr[:120]!r}",
+                file=sys.stderr,
+            )
+
+    # print_r() requires one or two arguments in PHP 8.4. The Rust
+    # research evaluator rejects both arity errors without partial stdout.
+    for index, code in enumerate([
+        b"<?php print_r();",
+        b"<?php print_r(1,2,3);",
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"ArgumentCountError" not in php.stderr
+                or php.stdout or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL print_r_arg_count={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
                 file=sys.stderr,
             )
 
@@ -1698,7 +1752,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/print-r-scalar differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
