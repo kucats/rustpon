@@ -597,6 +597,12 @@ impl<'a> Parser<'a> {
             matches!(value, Value::Int(_) | Value::Bool(_))
         } else if name == b"is_numeric" {
             matches!(value, Value::Int(_))
+        } else if name == b"is_finite" {
+            // PHP 8.4 coerces int/bool/null to finite numeric values.
+            // No float, numeric string, INF or NAN exists in this VM.
+            true
+        } else if name == b"is_infinite" || name == b"is_nan" {
+            false
         } else if [
             b"is_float".as_slice(),
             b"is_double".as_slice(),
@@ -826,6 +832,9 @@ impl<'a> Parser<'a> {
                 b"is_null".as_slice(),
                 b"is_scalar".as_slice(),
                 b"is_numeric".as_slice(),
+                b"is_finite".as_slice(),
+                b"is_infinite".as_slice(),
+                b"is_nan".as_slice(),
                 b"is_float".as_slice(),
                 b"is_double".as_slice(),
                 b"is_string".as_slice(),
@@ -1439,6 +1448,52 @@ mod tests {
             Parser::new(oversized.as_bytes()).evaluate(),
             Err(EvalError::OutputLimit)
         );
+    }
+
+    #[test]
+    fn php84_finite_infinite_nan_scalar_predicates() {
+        for (function, expected) in [
+            ("is_finite", Value::Bool(true)),
+            ("IS_FINITE", Value::Bool(true)),
+            ("is_infinite", Value::Bool(false)),
+            ("Is_InFiNiTe", Value::Bool(false)),
+            ("is_nan", Value::Bool(false)),
+            ("IS_NAN", Value::Bool(false)),
+        ] {
+            for argument in [
+                "0",
+                "-7",
+                "true",
+                "false",
+                "null",
+                "PHP_INT_MIN",
+                "PHP_INT_MAX",
+                "intval(true)",
+                "1<2",
+            ] {
+                let program = format!("echo {function}({argument});");
+                assert_eq!(
+                    Parser::new(program.as_bytes()).evaluate(),
+                    Ok(expected),
+                    "{program}"
+                );
+            }
+        }
+        for program in [
+            "echo is_finite();",
+            "echo is_finite(1,2);",
+            "echo is_infinite(1,2);",
+            "echo is_nan();",
+            "echo is_nan(1,2);",
+            "echo is_finiteness(1);",
+            "echo is_nanny(1);",
+            "echo is_nan($missing);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
     }
 
     #[test]
