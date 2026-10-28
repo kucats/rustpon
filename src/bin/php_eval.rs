@@ -1587,7 +1587,6 @@ impl<'a> Parser<'a> {
         // flush earlier output before a runtime error; this bounded research
         // evaluator deliberately fails the entire request instead.
         let mut last_value = Value::Null;
-        let mut had_statement = false;
         loop {
             self.skip_space();
             if implicit_echo {
@@ -1600,7 +1599,6 @@ impl<'a> Parser<'a> {
                     return Err(EvalError::Syntax);
                 }
                 last_value = value;
-                had_statement = true;
                 continue;
             }
             if self.offset == self.source.len() {
@@ -1613,7 +1611,6 @@ impl<'a> Parser<'a> {
             // Charge each one to prevent unbounded no-op loops.
             if self.consume(b';') {
                 self.charge()?;
-                had_statement = true;
                 continue;
             }
             // Terminal top-level return ends CLI script execution. Until a
@@ -1698,12 +1695,10 @@ impl<'a> Parser<'a> {
                 || self.source[self.offset..].starts_with(b"--")
             {
                 self.prefix_update_statement()?;
-                had_statement = true;
                 continue;
             }
             if self.peek() == Some(b'$') {
                 self.assignment()?;
-                had_statement = true;
                 continue;
             }
             let remaining = &self.source[self.offset..];
@@ -1715,7 +1710,6 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 self.unset_statement()?;
-                had_statement = true;
                 continue;
             }
             if remaining
@@ -1726,7 +1720,6 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 self.print_r_statement()?;
-                had_statement = true;
                 continue;
             }
             if remaining
@@ -1737,7 +1730,6 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 self.export_statement()?;
-                had_statement = true;
                 continue;
             }
             if remaining
@@ -1748,7 +1740,6 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 self.dump_statement()?;
-                had_statement = true;
                 continue;
             }
             // echo and print are case-insensitive PHP language constructs.
@@ -1772,7 +1763,6 @@ impl<'a> Parser<'a> {
                 if !self.consume(b';') && !self.terminal_close_tag()? {
                     return Err(EvalError::Syntax);
                 }
-                had_statement = true;
                 continue;
             };
             self.offset += keyword_len;
@@ -1793,7 +1783,6 @@ impl<'a> Parser<'a> {
                 return Err(EvalError::Syntax);
             }
             last_value = value;
-            had_statement = true;
         }
     }
 }
