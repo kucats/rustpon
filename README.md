@@ -661,11 +661,36 @@ against the installed PHP 8.4 interpreter, including CR, LF, CRLF, mixed-case
 spelling, source-position changes and malformed identifier boundaries.
 This remains a standalone research evaluator, not a Zend compiler.
 
+## PHP 8.4 ordered output and local statement execution (research evaluator)
+
+The bounded `php_eval` CLI accepts multiple `echo` and `print` statements,
+interleaved with local assignments, `unset()`, and scalar increment/decrement.
+The interpreter evaluates statements in source order, so subsequent expressions
+observe earlier variable changes. A program with no output statement succeeds
+with empty stdout. Mixed-case output keywords and comma-separated `echo`
+arguments retain their existing PHP 8.4 behavior.
+
+```sh
+printf '%s' '<?php $x=1; echo $x; $x+=2; print $x;' |
+  cargo run --offline --locked --bin php_eval
+# stdout: 13
+```
+
+The 1024-byte output quota is **cumulative** across all output statements.
+No bytes are published until the complete program succeeds, including later
+syntax, division-by-zero and resource-limit checks. PHP CLI can emit earlier
+bytes before a runtime exception; rustpon intentionally rejects the whole
+program instead. Only the existing bounded scalar expression grammar and
+simple local variables are supported: arbitrary PHP control flow, user-defined
+functions, arrays, strings, Zend execution and SAPI integration are not.
+The PHP 8.4 CLI differential suite compares fixed and generated interleaved
+statements byte-for-byte and separately tests malformed later statements.
+
 ## Bounded scalar variables in the research PHP evaluator
 
 The `php_eval` binary now accepts up to 64 assignments to at most 32
-case-sensitive, ASCII-named local integer/boolean variables before its one final
-`echo` or `print` statement. Expressions can read previously initialized variables,
+case-sensitive, ASCII-named local integer/boolean variables, interleaved
+with `echo` and `print` statements. Expressions can read previously initialized variables,
 use integer unary `+`/`-`, parentheses and `+`/`-`/`*`, and reassign
 existing variables. Each name is capped at 64 bytes, while the existing source,
 AST-depth-equivalent recursion, and work budgets remain active. Unknown
@@ -687,13 +712,13 @@ interpreter has no file/network access and is not connected to the FFI layer.
 
 ### PHP 8.4 terminal print and case-insensitive echo (research)
 
-The bounded `php_eval` CLI now accepts a single final `print expression;`
-statement as an alternative to `echo expression;`, including the parenthesized
+The bounded `php_eval` CLI accepts `print expression;`
+statements alongside `echo expression;`, including the parenthesized
 form `print(expression);`. Both keywords are case-insensitive, matching PHP
 8.4. The interpreter evaluates the existing integer/boolean/null subset and
 writes its bytes only after the complete program passes validation. PHP
-`print` returns integer 1 when used as an expression; that form and
-additional output statements remain unsupported. Terminal `echo` accepts
+`print` returns integer 1 when used as an expression; that form remains
+unsupported. Terminal `echo` accepts
 comma-separated scalar expressions (for example, `echo 1, true, null, 2;`),
 concatenating their PHP 8.4 string representations without separators. `print`
 still accepts exactly one expression. A separate 1024-byte output quota
@@ -765,8 +790,8 @@ general PHP assignment engine or a Zend/SAPI integration.
 ### PHP 8.4 `unset()` local-variable lifecycle (research)
 
 The bounded `php_eval` interpreter accepts case-insensitive
-`unset($name)`, `unset($a,$b,)`, and interleaved assignments before the
-final `echo`. Removing a defined variable makes subsequent `isset()`
+`unset($name)`, `unset($a,$b,)`, and interleaved assignments and output
+statements. Removing a defined variable makes subsequent `isset()`
 false and `empty()` true; removing an undefined variable succeeds. A
 subsequent assignment can reuse the freed binding slot, while the cumulative
 64-assignment, source-byte and work quotas still apply. Only simple ASCII
