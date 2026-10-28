@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: empty statements, terminal top-level return, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
+//! Supported grammar: empty statements, terminal top-level return/exit/die, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -109,6 +109,8 @@ struct Parser<'a> {
     output: String,
     bindings: Vec<(&'a [u8], Value)>,
     assignments: usize,
+    // PHP CLI exit()/die() status, kept separate from the last expression.
+    exit_status: Option<i32>,
 }
 
 impl<'a> Parser<'a> {
@@ -120,6 +122,7 @@ impl<'a> Parser<'a> {
             output: String::new(),
             bindings: Vec::new(),
             assignments: 0,
+            exit_status: None,
         }
     }
 
@@ -1348,6 +1351,59 @@ impl<'a> Parser<'a> {
                     Err(EvalError::TrailingInput)
                 };
             }
+            // PHP 8.4 exit/die are termination constructs. This subset
+            // accepts no argument or one int/bool/null expression; string
+            // messages are not representable in the bounded value model.
+            // As with terminal return, unreachable source is rejected until
+            // a separate syntax-only pass can validate it.
+            let remaining = &self.source[self.offset..];
+            let exit_keyword = [b"exit".as_slice(), b"die".as_slice()]
+                .into_iter()
+                .find(|word| {
+                    remaining
+                        .get(..word.len())
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(word))
+                        && !remaining
+                            .get(word.len())
+                            .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                });
+            if let Some(keyword) = exit_keyword {
+                self.offset += keyword.len();
+                self.charge()?;
+                let value = if self.consume(b'(') {
+                    if self.consume(b')') {
+                        Value::Null
+                    } else {
+                        let value = self.bitwise_or(0)?;
+                        // PHP 8.4 allows a single trailing comma.
+                        if self.consume(b',') {
+                            if !self.consume(b')') {
+                                return Err(EvalError::Syntax);
+                            }
+                        } else if !self.consume(b')') {
+                            return Err(EvalError::Syntax);
+                        }
+                        value
+                    }
+                } else {
+                    Value::Null
+                };
+                if !self.consume(b';') && !self.source[self.offset..].starts_with(b"?>") {
+                    return Err(EvalError::Syntax);
+                }
+                self.skip_space();
+                if self.source[self.offset..].starts_with(b"?>") {
+                    self.offset += 2;
+                    self.skip_space();
+                }
+                if self.offset != self.source.len() {
+                    return Err(EvalError::TrailingInput);
+                }
+                // Unix PHP CLI exit status uses the low eight bits, including
+                // for negative and >255 signed integers.
+                self.exit_status = Some(i32::from(value.as_int() as u8));
+                return Ok(value);
+            }
             if self.source[self.offset..].starts_with(b"++")
                 || self.source[self.offset..].starts_with(b"--")
             {
@@ -1427,11 +1483,16 @@ fn run() -> Result<(), String> {
         .evaluate()
         .map_err(|error| format!("unsupported PHP expression: {error:?}"))?;
     // No output is published before the entire program has been accepted.
+    let exit_status = parser.exit_status;
     let output = parser.output;
     io::stdout()
         .lock()
         .write_all(output.as_bytes())
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+    if let Some(status) = exit_status {
+        std::process::exit(status);
+    }
+    Ok(())
 }
 
 fn main() {
@@ -1447,6 +1508,49 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_terminal_exit_and_die_statuses() {
+        for (program, output, status) in [
+            ("exit;", "", 0),
+            ("die;", "", 0),
+            ("echo 1; exit();", "1", 0),
+            ("echo 1; exit(0);", "1", 0),
+            ("echo 1; die(256);", "1", 0),
+            ("echo 1; exit(false);", "1", 0),
+            ("echo 1; exit(null);", "1", 0),
+            ("echo 1; EXIT(2);", "1", 2),
+            ("echo 1; die(257);", "1", 1),
+            ("echo 1; exit(-1);", "1", 255),
+            ("echo 1; exit(true);", "1", 1),
+            ("echo 1; exit(1+2);", "1", 3),
+            ("echo 1; exit(PHP_INT_MAX);", "1", 255),
+            ("echo 1; exit(PHP_INT_MIN);", "1", 0),
+            ("echo 1; die(1,);", "1", 1),
+            ("echo 1; exit(2) ?>", "1", 2),
+            ("echo 1; die ?>", "1", 0),
+            ("echo 1; exit(2); /*c*/", "1", 2),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program}");
+            assert_eq!(parser.output, output, "{program}");
+            assert_eq!(parser.exit_status, Some(status), "{program}");
+        }
+        for program in [
+            "echo 1; exit(1,2);",
+            "echo 1; exit(1/0);",
+            "echo 1; exit($missing);",
+            "echo 1; exit(0); echo 2;",
+            "echo 1; exit(0); /* unterminated",
+            "echo 1; exit 3;",
+            "echo 1; exit(1",
+            "echo 1; diex(1);",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program}");
+            assert_eq!(parser.exit_status, None, "{program}");
+        }
     }
 
     #[test]
