@@ -802,6 +802,39 @@ impl<'a> Parser<'a> {
                     return self.builtin_scalar_conversion(depth, name, boolean);
                 }
             }
+            // PHP 8.4 magic constants are case-insensitive. __LINE__ is
+            // resolved at the token's source position (not evaluation time).
+            // CRLF is one line break; bare CR and bare LF each count as one.
+            // The 4096-byte source cap bounds this position scan.
+            let magic = b"__LINE__";
+            if remaining
+                .get(..magic.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(magic))
+                && !remaining
+                    .get(magic.len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                let mut line = 1_i64;
+                let mut previous_cr = false;
+                for &byte in &self.source[..self.offset] {
+                    match byte {
+                        b'\r' => {
+                            line += 1;
+                            previous_cr = true;
+                        }
+                        b'\n' => {
+                            if !previous_cr {
+                                line += 1;
+                            }
+                            previous_cr = false;
+                        }
+                        _ => previous_cr = false,
+                    }
+                }
+                self.offset += magic.len();
+                self.charge()?;
+                return Ok(Value::Int(line));
+            }
             // PHP's built-in integer constants are case-sensitive, unlike
             // true/false/null and function names. Resolve them as atomic
             // identifiers so PHP_INT_MAX_suffix is never accepted as a prefix.
@@ -1301,6 +1334,35 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_line_magic_constant_tracks_source_lines() {
+        for (program, expected) in [
+            ("echo __LINE__;", 1),
+            ("echo __line__;", 1),
+            ("echo __LiNe__+1;", 2),
+            ("echo (__LINE__*2);", 2),
+            ("<?php\necho __LINE__;", 2),
+            ("<?php\recho __LINE__;", 2),
+            ("<?php\r\necho __LINE__;", 2),
+            ("<?php\n\r\necho __LINE__;", 3),
+            ("<?php $x=__LINE__;\necho $x+__LINE__;", 3),
+            ("<?php\n\necho __LINE__+__line__;", 6),
+        ] {
+            assert_eq!(eval(program), Ok(expected), "{program:?}");
+        }
+        let mut parser = Parser::new(b"<?php echo __LINE__,\r\n__line__,\n__LINE__;");
+        assert_eq!(parser.evaluate(), Ok(Value::Int(3)));
+        assert_eq!(parser.output, "123");
+        for invalid in [
+            "echo __LINE__suffix;",
+            "echo __LINE___;",
+            "echo __LINE__();",
+            "echo __LINE__+__LINE__suffix;",
+        ] {
+            assert_eq!(eval(invalid), Err(EvalError::Syntax), "{invalid}");
+        }
     }
 
     #[test]
