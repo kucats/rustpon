@@ -567,6 +567,22 @@ impl<'a> Parser<'a> {
             matches!(value, Value::Int(_) | Value::Bool(_))
         } else if name == b"is_numeric" {
             matches!(value, Value::Int(_))
+        } else if [
+            b"is_float".as_slice(),
+            b"is_double".as_slice(),
+            b"is_string".as_slice(),
+            b"is_array".as_slice(),
+            b"is_object".as_slice(),
+            b"is_resource".as_slice(),
+            b"is_iterable".as_slice(),
+            b"is_countable".as_slice(),
+        ]
+        .contains(&name)
+        {
+            // No float/string/array/object/resource values exist in this
+            // bounded scalar VM. All these predicates are false for its
+            // int/bool/null values, matching PHP 8.4 without coercion.
+            false
         } else {
             return Err(EvalError::Syntax);
         };
@@ -780,6 +796,14 @@ impl<'a> Parser<'a> {
                 b"is_null".as_slice(),
                 b"is_scalar".as_slice(),
                 b"is_numeric".as_slice(),
+                b"is_float".as_slice(),
+                b"is_double".as_slice(),
+                b"is_string".as_slice(),
+                b"is_array".as_slice(),
+                b"is_object".as_slice(),
+                b"is_resource".as_slice(),
+                b"is_iterable".as_slice(),
+                b"is_countable".as_slice(),
             ] {
                 if remaining
                     .get(..name.len())
@@ -1334,6 +1358,52 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_type_predicates_for_absent_value_kinds() {
+        for function in [
+            "is_float",
+            "is_double",
+            "is_string",
+            "is_array",
+            "is_object",
+            "is_resource",
+            "is_iterable",
+            "is_countable",
+            "Is_FlOaT",
+        ] {
+            for argument in [
+                "0",
+                "-7",
+                "true",
+                "false",
+                "null",
+                "(1<2)",
+                "PHP_INT_MIN",
+                "intval(true)",
+            ] {
+                let program = format!("echo {function}({argument});");
+                assert_eq!(
+                    Parser::new(program.as_bytes()).evaluate(),
+                    Ok(Value::Bool(false)),
+                    "{program}"
+                );
+            }
+        }
+        for program in [
+            "echo is_float();",
+            "echo is_float(1,2);",
+            "echo is_countable(1,2);",
+            "echo is_floaty(1);",
+            "echo is_real(1);",
+            "echo is_iterable($missing);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
     }
 
     #[test]
