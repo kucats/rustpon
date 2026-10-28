@@ -1502,3 +1502,20 @@ A short echo still requires a semicolon or closing tag; unsupported raw
 template output and unreachable code after `exit` remain rejected.
 This does not implement general mixed HTML/PHP templates or short `<?`
 tags. Output is committed only after the complete supported program succeeds.
+
+### PHP 8.4 expression-level `var_dump()` (research evaluator)
+
+The bounded `php_eval` interpreter now accepts `var_dump()` inside scalar
+expressions, as well as its existing statement form. PHP 8.4 evaluates the
+arguments left to right, emits each scalar's typed representation, and returns
+`null`; the interpreter models that return tag so nested calls and
+`is_null(var_dump(...))` behave consistently. Both forms share the same
+argument parser, depth/work accounting, and cumulative 1,024-byte output
+budget. Failed programs do not publish staged output. No strings, arrays,
+objects, references, or arbitrary user-defined function calls are supported.
+
+Rust regression tests cover nested calls, evaluation order, variable
+side effects, invalid argument lists and excessive nesting. The Linux
+PHP 8.4 CLI oracle adds 60 deterministic fixed/seeded successful programs
+and six strict rejection cases. This is a small language-compatibility slice,
+not a Zend replacement or a production PHP runtime.
