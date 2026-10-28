@@ -23,6 +23,24 @@ FIXED = [
 ]
 
 
+INTEGER_CONSTANT_PROGRAMS = [
+    "echo PHP_INT_MAX;", "echo PHP_INT_MIN;", "echo PHP_INT_SIZE;",
+    "echo PHP_INT_MAX+0;", "echo PHP_INT_MIN+1;",
+    "echo PHP_INT_MIN/2;", "echo PHP_INT_MIN%-1;",
+    "echo PHP_INT_MAX>>63;", "echo PHP_INT_MIN>>63;",
+    "echo ~PHP_INT_MIN;", "echo PHP_INT_MIN<=>PHP_INT_MAX;",
+    "echo PHP_INT_SIZE*8;", "echo (PHP_INT_MIN+PHP_INT_MAX);",
+    "echo PHP_INT_MAX===9223372036854775807;",
+    "echo PHP_INT_MIN===(-9223372036854775807-1);",
+    "echo PHP_INT_MIN<(0-9223372036854775807);",
+    "echo is_int(PHP_INT_MIN);",
+    "$x=PHP_INT_MAX; $x>>=63; echo $x;",
+    "$x=PHP_INT_MIN; $x%=3; echo $x;",
+    "$x=PHP_INT_MIN; echo $x+1;",
+    "$x=PHP_INT_SIZE; $x*=8; echo $x;",
+]
+
+
 TERMINAL_PRINT_PROGRAMS = [
     "print 0;", "print 42;", "print -1;", "PRINT (true);",
     "PrInT false;", "print null;", "print (int)true;",
@@ -743,6 +761,12 @@ def main():
         expression = f"{function}({','.join(operands)})"
         extrema_programs.append(f"echo {expression};")
         extrema_programs.append(f"echo is_bool({expression});")
+    integer_constants = list(INTEGER_CONSTANT_PROGRAMS)
+    for _ in range(96):
+        offset = rng.randrange(0, 100_001)
+        integer_constants.append(f"echo PHP_INT_MAX-({offset});")
+        integer_constants.append(f"echo PHP_INT_MIN+({offset});")
+        integer_constants.append(f"echo (PHP_INT_MAX-({offset}))>(PHP_INT_MIN+({offset}));")
     echo_arguments = list(ECHO_ARGUMENT_PROGRAMS)
     for _ in range(64):
         left = rng.randrange(-10000, 10001)
@@ -758,7 +782,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments
+        + echo_arguments + integer_constants
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1042,6 +1066,19 @@ def main():
         b"<?php " + b"".join(f"$v{i}={i};".encode("ascii") for i in range(33)) + b"echo 1;",
         b"<?php " + b"$x=1;" * 65 + b"echo $x;",
     ]
+    # PHP's predefined integer constants are case-sensitive and must be
+    # complete identifiers; overflowing operations promote to unsupported
+    # floating-point values in PHP and must fail closed here.
+    invalid.extend([
+        b"<?php echo php_int_max;",
+        b"<?php echo Php_Int_Min;",
+        b"<?php echo PHP_INT_MAXIMUM;",
+        b"<?php echo PHP_INT_MIN_suffix;",
+        b"<?php echo PHP_INT_SIZE_suffix;",
+        b"<?php echo PHP_INT_MAX+1;",
+        b"<?php echo PHP_INT_MIN-1;",
+        b"<?php echo -PHP_INT_MIN;",
+    ])
     for index, code in enumerate(invalid):
         rust = execute([str(args.rust_bin)], code)
         if rust.returncode == 0 or rust.stdout:
@@ -1116,7 +1153,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/terminal-print/echo-argument-list differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/terminal-print/echo-argument-list differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
