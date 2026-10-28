@@ -173,6 +173,18 @@ OPEN_TAG_PROGRAMS = [
 ]
 
 
+VAR_EXPORT_SCALAR_PROGRAMS = [
+    "var_export(0);", "var_export(-7);", "var_export(PHP_INT_MIN);",
+    "var_export(PHP_INT_MAX);", "var_export(true);", "var_export(false);",
+    "var_export(null);", "VaR_ExPoRt(1,);", "var_export(2,false,);",
+    "var_export(3,0);", "var_export(1); var_export(true);",
+    "echo is_null(var_export(12));", "echo 1,var_export(2),3;",
+    "var_export(var_export(false));", "var_export(1,var_dump(false));",
+    "var_export(1); var_dump(true);", "var_export(1) ?>",
+    "$x=1; var_export($x++); var_export($x);",
+]
+
+
 VAR_DUMP_PROGRAMS = [
     "var_dump(0);",
     "var_dump(1, -1, true, false, null);",
@@ -1084,6 +1096,11 @@ def main():
         echo_arguments.append(
             f"$x={left}; echo $x,({right}<0),({extra}*2);"
         )
+    export_scalars = list(VAR_EXPORT_SCALAR_PROGRAMS)
+    for _ in range(64):
+        number = rng.randrange(-9223372036854775807, 9223372036854775808)
+        export_scalars.append(f"var_export({number});")
+        export_scalars.append(f"$x={number}; var_export($x); echo is_null(var_export(false));")
     dump_programs = list(VAR_DUMP_PROGRAMS)
     for _ in range(64):
         first = rng.randrange(-10000, 10001)
@@ -1110,7 +1127,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1530,6 +1547,14 @@ def main():
         b"<?php echo -PHP_INT_MIN;",
     ])
     invalid.extend([
+        b"<?php var_export();",
+        b"<?php var_export(1,2,3);",
+        b"<?php var_export(1,,);",
+        b"<?php var_export(1,true);",  # valid PHP, unsupported string return
+        b"<?php var_export(1,1);",     # valid PHP, unsupported string return
+        b"<?php var_export(1); echo $missing;",
+        b"<?php var_export(1/0);",
+        b"<?php var_exportx(1);",
         b"<?php var_dump();",
         b"<?php var_dump(,1);",
         b"<?php var_dump(1,,2);",
@@ -1665,7 +1690,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

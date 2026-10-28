@@ -4,7 +4,7 @@
 //! Supported grammar: empty statements, terminal top-level return/exit/die, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! scalar var_dump() statements with byte-exact PHP CLI output, and
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
+//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen()/var_export() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -876,6 +876,15 @@ impl<'a> Parser<'a> {
                 }
             }
             if remaining
+                .get(..b"var_export".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"var_export"))
+                && !remaining
+                    .get(b"var_export".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_var_export(depth);
+            }
+            if remaining
                 .get(..b"var_dump".len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"var_dump"))
                 && !remaining
@@ -1437,6 +1446,51 @@ impl<'a> Parser<'a> {
         Ok(Value::Null)
     }
 
+    // PHP 8.4 var_export() prints scalar source literals without a newline.
+    // The optional $return flag is evaluated in order; true returns a PHP
+    // string, deliberately unsupported by this bounded scalar VM.
+    fn builtin_var_export(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"var_export".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let value = self.bitwise_or(depth + 1)?;
+        if self.consume(b',') {
+            if !self.consume(b')') {
+                let return_string = self.bitwise_or(depth + 1)?.as_bool();
+                self.close_builtin_call()?;
+                if return_string {
+                    return Err(EvalError::Syntax);
+                }
+            }
+        } else if !self.consume(b')') {
+            return Err(EvalError::Syntax);
+        }
+        let rendered = match value {
+            Value::Int(number) => number.to_string(),
+            Value::Bool(true) => "true".to_owned(),
+            Value::Bool(false) => "false".to_owned(),
+            Value::Null => "NULL".to_owned(),
+        };
+        if self.output.len().saturating_add(rendered.len()) > MAX_OUTPUT {
+            return Err(EvalError::OutputLimit);
+        }
+        self.output.push_str(&rendered);
+        Ok(Value::Null)
+    }
+
+    fn export_statement(&mut self) -> Result<(), EvalError> {
+        self.builtin_var_export(0)?;
+        if !self.consume(b';') && !self.terminal_close_tag()? {
+            return Err(EvalError::Syntax);
+        }
+        Ok(())
+    }
+
     fn dump_statement(&mut self) -> Result<(), EvalError> {
         self.builtin_var_dump(0)?;
         if !self.consume(b';') && !self.terminal_close_tag()? {
@@ -1615,6 +1669,17 @@ impl<'a> Parser<'a> {
                 continue;
             }
             if remaining
+                .get(..b"var_export".len())
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"var_export"))
+                && !remaining
+                    .get(b"var_export".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                self.export_statement()?;
+                had_statement = true;
+                continue;
+            }
+            if remaining
                 .get(..b"var_dump".len())
                 .is_some_and(|word| word.eq_ignore_ascii_case(b"var_dump"))
                 && !remaining
@@ -1703,6 +1768,47 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_var_export_scalar_output_and_expression_order() {
+        for (program, expected) in [
+            ("var_export(0);", "0"),
+            ("var_export(PHP_INT_MIN);", "-9223372036854775808"),
+            ("var_export(true); var_export(false);", "truefalse"),
+            ("var_export(null);", "NULL"),
+            ("VaR_ExPoRt(1,);", "1"),
+            ("var_export(2,false,);", "2"),
+            ("var_export(3,0);", "3"),
+            ("echo is_null(var_export(12));", "121"),
+            ("echo 1,var_export(2),3;", "123"),
+            ("var_export(var_export(false));", "falseNULL"),
+            ("var_export(1,var_dump(false));", "bool(false)\n1"),
+            ("var_export(1); var_dump(true);", "1bool(true)\n"),
+            ("var_export(1) ?>", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_var_export_rejects_unsupported_return_string_and_invalid_calls() {
+        for program in [
+            "var_export();",
+            "var_export(1,2,3);",
+            "var_export(1,,);",
+            "var_export(1,true);",
+            "var_export(1,1);",
+            "var_export(1,); echo $missing;",
+            "var_export(1/0);",
+            "var_exportx(1);",
+            "var_export(1",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program:?}");
+        }
     }
 
     #[test]

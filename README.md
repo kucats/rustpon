@@ -1538,3 +1538,15 @@ checks fixed and seeded scalar conversions byte-for-byte and separately
 checks `ArgumentCountError` for invalid arity. `strlen(null)` may emit a
 PHP deprecation diagnostic on stderr under other PHP error-reporting
 settings; the differential oracle compares successful stdout.
+
+## PHP 8.4 scalar `var_export()` (research CLI)
+
+The bounded `php_eval` CLI supports `var_export()` for integer, boolean
+and null expressions, with PHP 8.4's exact scalar literal output (`123`,
+`true`, `false`, `NULL`), no implicit newline, and a null return value.
+The optional `$return` flag is evaluated after the value; false emits
+output, while true is explicitly rejected because this VM does not yet
+represent PHP strings. Trailing commas, nested calls, work/depth limits
+and the cumulative 1,024-byte output cap apply. Output remains private
+until the complete program succeeds. Differential tests compare fixed
+and seeded scalar cases byte-for-byte against PHP 8.4 CLI.
