@@ -1559,3 +1559,23 @@ floating-point. The research evaluator now reproduces that byte sequence
 for the minimum integer from constants, variables, and arithmetic;
 `echo` and `var_dump` retain their distinct existing formatting.
 The Linux PHP CLI differential suite includes these boundary cases.
+
+## PHP 8.4 scalar `print_r()` (research CLI)
+
+The bounded `php_eval` interpreter accepts case-insensitive `print_r(value)`
+and `print_r(value, false)` for its existing integer, boolean, and null
+values, both as statements and nested expressions. PHP 8.4 emits the same
+scalar text as `echo` without a newline, then returns `bool(true)`; the
+return tag is retained for nested calls and type predicates. Arguments are
+evaluated in order, including nested `var_dump()` side effects. The optional
+trailing comma and final `?>` statement terminator are supported.
+
+A truthy `$return` flag is evaluated but rejected because PHP returns a
+string in that mode and the bounded VM has no string value type. Arrays,
+objects, and user-defined functions remain unsupported. Source, work,
+recursion, and the cumulative 1,024-byte output budget are enforced; failed
+programs never publish partial stdout. Rust regressions cover nested output,
+type tags, side effects, invalid arity, unsupported return strings, and output
+exhaustion. The PHP 8.4 CLI differential suite compares fixed and seeded
+scalar cases byte-for-byte and verifies the oracle's `ArgumentCountError`
+for invalid arity. No third-party dependencies are added.
