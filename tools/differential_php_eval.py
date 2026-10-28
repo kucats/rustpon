@@ -743,7 +743,7 @@ EXPRESSION_STATEMENT_PROGRAMS = [
     "(print_r(7)+1); echo 2;",
     "(var_export(7)+1); echo 2;",
     "1+2 ?>",
-    "1+2 ?>\\r\\n",
+    "1+2 ?>\r\n",
     "42;",
 ]
 
@@ -1263,7 +1263,7 @@ def main():
         b"<?php echo 1; 1/0;",
         b"<?php 1+;",
         b"<?php 1+2 ?>raw",
-        b"<?php 1+2 ?>\\n\\n",
+        b"<?php 1+2 ?>\n\n",
         b"<?php nonexistent(1);",
         b"<?php (1+2;",
         b"<?php 1+2 3;",
