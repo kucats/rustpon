@@ -182,6 +182,14 @@ VAR_EXPORT_SCALAR_PROGRAMS = [
     "var_export(var_export(false));", "var_export(1,var_dump(false));",
     "var_export(1); var_dump(true);", "var_export(1) ?>",
     "$x=1; var_export($x++); var_export($x);",
+    # PHP 8.4 exports the minimum signed integer as an arithmetic
+    # expression, not as a decimal literal that would parse as float.
+    "var_export(PHP_INT_MIN+1);",
+    "$x=PHP_INT_MIN; var_export($x);",
+    "var_export(0-9223372036854775807-1);",
+    "var_export(PHP_INT_MIN,false);",
+    "echo 1,var_export(PHP_INT_MIN),2;",
+    "var_export(PHP_INT_MIN); var_export(PHP_INT_MAX);",
 ]
 
 
