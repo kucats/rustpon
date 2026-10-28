@@ -735,6 +735,24 @@ named arguments and expression-level calls are not modeled. Runtime errors
 and unsupported syntax fail closed rather than reproducing PHP's partially
 flushed stdout.
 
+## PHP 8.4 discarded scalar expression statements (research evaluator)
+
+The bounded `php_eval` interpreter now executes standalone scalar expressions
+such as `1+2;`, `abs(-3);`, `isset($missing);`, and
+`(var_dump(7)+1);` without printing the expression's result. Side effects
+from supported nested calls still emit their PHP-compatible output in order.
+A final expression can end with `?>` instead of a semicolon, with the
+existing single-newline closing-tag rule. Expression parsing continues to
+enforce the source, depth, work and output quotas; malformed expressions,
+unsupported calls, and runtime errors reject the entire program before
+publishing buffered stdout. Simple variable-starting statements still follow
+the existing assignment/update grammar; general PHP expression statements,
+string values, and arbitrary calls are not yet implemented.
+
+The PHP 8.4 CLI differential corpus includes fixed examples, 64 seeded
+arithmetic statements, and strict rejection cases for malformed syntax,
+runtime errors, and trailing raw template bytes.
+
 ## PHP 8.4 ordered output and local statement execution (research evaluator)
 
 The bounded `php_eval` CLI accepts multiple `echo` and `print` statements,
