@@ -1447,3 +1447,15 @@ descriptor isolation. A Linux HTTP SAPI oracle independently checks the
 PHP 8.4 error-6 metadata and its precedence; write-error 7 remains covered
 by deterministic fault injection rather than a live SAPI fault oracle.
 This is a Rust-only compatibility model, not native PHP SAPI integration.
+
+### PHP 8.4 CLI terminal closing-tag subset
+
+The bounded `php_eval` harness accepts `?>` as the final terminator of
+`echo` and `print`, even without a preceding semicolon, and retains the
+existing terminal `return` / `exit` support. Like PHP 8.4, it consumes at
+most one immediately following LF, CR, or CRLF. Any further template bytes
+(including spaces) are rejected rather than silently discarded, since the
+research evaluator has no HTML/template-output mode. The differential corpus
+checks accepted output byte-for-byte against PHP 8.4 CLI and verifies PHP's
+observable template bytes for rejected cases. This does not implement
+mixed PHP/HTML scripts or PHP's complete closing-tag grammar.
