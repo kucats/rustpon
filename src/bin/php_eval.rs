@@ -4,7 +4,7 @@
 //! Supported grammar: empty statements, terminal top-level return/exit/die, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! scalar var_dump() statements with byte-exact PHP CLI output, and
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
+//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -723,6 +723,24 @@ impl<'a> Parser<'a> {
         })
     }
 
+    // PHP 8.4 strlen() coerces scalar int/bool/null to their string
+    // representations. This VM has no string values yet, so the existing
+    // bounded echo conversion gives the exact ASCII byte count for these
+    // three tags (including the minus sign and PHP_INT_MIN).
+    fn builtin_strlen(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"strlen".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let value = self.bitwise_or(depth + 1)?;
+        self.close_builtin_call()?;
+        Ok(Value::Int(value.echo().len() as i64))
+    }
+
     // isset() is a language construct: undefined and null variables
     // are not set. This subset accepts only simple variable names.
     fn isset_probe(&mut self, depth: usize) -> Result<Value, EvalError> {
@@ -926,6 +944,15 @@ impl<'a> Parser<'a> {
                 {
                     return self.builtin_type_predicate(depth, name);
                 }
+            }
+            if remaining
+                .get(..b"strlen".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"strlen"))
+                && !remaining
+                    .get(b"strlen".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_strlen(depth);
             }
             for (name, boolean) in [(b"boolval".as_slice(), true), (b"intval".as_slice(), false)] {
                 if remaining
@@ -1676,6 +1703,50 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_strlen_scalar_coercions_match_cli_bytes() {
+        for (program, expected) in [
+            ("echo strlen(0);", "1"),
+            ("echo strlen(-123);", "4"),
+            ("echo strlen(PHP_INT_MIN);", "20"),
+            ("echo strlen(PHP_INT_MAX);", "19"),
+            ("echo strlen(true);", "1"),
+            ("echo strlen(false);", "0"),
+            ("echo strlen(null);", "0"),
+            ("echo strlen((bool)0);", "0"),
+            ("echo strlen(1,);", "1"),
+            ("echo StRlEn(-9);", "2"),
+            ("$x=-123; echo strlen($x++),$x;", "4-122"),
+            ("echo is_int(strlen(null)),strlen(intval(false));", "11"),
+            ("echo strlen(var_dump(1));", "int(1)\\n0"),
+            ("echo strlen(strlen(-10));", "1"),
+            ("echo strlen(1) ?>", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_strlen_rejects_invalid_calls_and_discards_partial_output() {
+        for program in [
+            "echo strlen();",
+            "echo strlen(1,2);",
+            "echo strlen(1,,);",
+            "echo strlenx(1);",
+            "echo strlen(1",
+            "echo strlen($missing);",
+            "echo strlen(1/0);",
+            "echo strlen(1); echo $missing;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program:?}"
+            );
+        }
     }
 
     #[test]
