@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: one final case-insensitive echo (with comma-separated arguments) or print statement, bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
+//! Supported grammar: ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -1249,18 +1249,36 @@ impl<'a> Parser<'a> {
             if self.peek().is_some_and(|b| !b.is_ascii_whitespace()) {
                 return Err(EvalError::Syntax);
             }
-            self.skip_space();
         }
+        // Keep all output private until every statement succeeds. PHP may
+        // flush earlier output before a runtime error; this bounded research
+        // evaluator deliberately fails the entire request instead.
+        let mut last_value = Value::Null;
+        let mut had_statement = false;
         loop {
             self.skip_space();
+            if self.offset == self.source.len() {
+                return Ok(last_value);
+            }
+            if self.source[self.offset..].starts_with(b"?>") {
+                self.offset += 2;
+                self.skip_space();
+                return if self.offset == self.source.len() {
+                    Ok(last_value)
+                } else {
+                    Err(EvalError::TrailingInput)
+                };
+            }
             if self.source[self.offset..].starts_with(b"++")
                 || self.source[self.offset..].starts_with(b"--")
             {
                 self.prefix_update_statement()?;
+                had_statement = true;
                 continue;
             }
             if self.peek() == Some(b'$') {
                 self.assignment()?;
+                had_statement = true;
                 continue;
             }
             let remaining = &self.source[self.offset..];
@@ -1272,58 +1290,51 @@ impl<'a> Parser<'a> {
                     .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
             {
                 self.unset_statement()?;
+                had_statement = true;
                 continue;
             }
-            break;
-        }
-        // PHP 8.4 treats echo and print as case-insensitive language
-        // constructs. In this deliberately bounded interpreter they are
-        // supported only as the final output statement. In particular,
-        // print's expression return value is not exposed.
-        let remaining = &self.source[self.offset..];
-        let (keyword_len, is_echo) = if remaining
-            .get(..4)
-            .is_some_and(|word| word.eq_ignore_ascii_case(b"echo"))
-        {
-            (4, true)
-        } else if remaining
-            .get(..5)
-            .is_some_and(|word| word.eq_ignore_ascii_case(b"print"))
-        {
-            (5, false)
-        } else {
-            return Err(EvalError::Syntax);
-        };
-        self.offset += keyword_len;
-        if self
-            .peek()
-            .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            return Err(EvalError::Syntax);
-        }
-        let value = self.bitwise_or(0)?;
-        self.append_output(value)?;
-        if is_echo {
-            // Each argument is a separate expression; print has no comma list.
-            // Keep bytes private until the entire program has been validated.
-            while self.consume(b',') {
-                self.charge()?;
-                let argument = self.bitwise_or(0)?;
-                self.append_output(argument)?;
+            // echo and print are case-insensitive PHP language constructs.
+            // The output quota is cumulative across statements and arguments.
+            let (keyword_len, is_echo) = if remaining
+                .get(..4)
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"echo"))
+            {
+                (4, true)
+            } else if remaining
+                .get(..5)
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"print"))
+            {
+                (5, false)
+            } else {
+                return Err(if had_statement {
+                    EvalError::TrailingInput
+                } else {
+                    EvalError::Syntax
+                });
+            };
+            self.offset += keyword_len;
+            if self
+                .peek()
+                .is_some_and(|b| b.is_ascii_alphanumeric() || b == b'_')
+            {
+                return Err(EvalError::Syntax);
             }
+            let value = self.bitwise_or(0)?;
+            self.append_output(value)?;
+            if is_echo {
+                while self.consume(b',') {
+                    self.charge()?;
+                    let argument = self.bitwise_or(0)?;
+                    self.append_output(argument)?;
+                }
+            }
+            if !self.consume(b';') {
+                return Err(EvalError::Syntax);
+            }
+            last_value = value;
+            had_statement = true;
         }
-        if !self.consume(b';') {
-            return Err(EvalError::Syntax);
-        }
-        self.skip_space();
-        if self.source[self.offset..].starts_with(b"?>") {
-            self.offset += 2;
-            self.skip_space();
-        }
-        if self.offset != self.source.len() {
-            return Err(EvalError::TrailingInput);
-        }
-        Ok(value)
+
     }
 }
 
@@ -1358,6 +1369,40 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_interleaved_output_and_local_mutation() {
+        for (program, expected_output, last_value) in [
+            ("echo 1; echo 2;", "12", Value::Int(2)),
+            ("EcHo true,false,null,42; PrInT 7;", "1427", Value::Int(7)),
+            ("$x=1; echo $x; $x+=2; print $x;", "13", Value::Int(3)),
+            ("$x=1; echo $x; unset($x); echo isset($x);", "1", Value::Bool(false)),
+            ("$x=1; echo $x; $x=2;", "1", Value::Int(1)),
+            ("$x=1;", "", Value::Null),
+            ("", "", Value::Null),
+            ("echo 1; echo 2; ?>", "12", Value::Int(2)),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert_eq!(parser.evaluate(), Ok(last_value), "{program}");
+            assert_eq!(parser.output, expected_output, "{program}");
+        }
+        for program in [
+            "echo 1; print 2,3;",
+            "echo 1; echo 2,;",
+            "echo 1; echo 1/0;",
+            "echo 1; echo $missing;",
+            "echo 1; echo 2; unknown;",
+            "echo 1; ?> trailing",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+        }
+        // The cap applies to the entire program, not each echo separately.
+        let oversized = "echo 9223372036854775807;".repeat(60);
+        assert_eq!(
+            Parser::new(oversized.as_bytes()).evaluate(),
+            Err(EvalError::OutputLimit)
+        );
     }
 
     #[test]
@@ -3089,7 +3134,7 @@ mod tests {
         assert_eq!(eval("$x=$x+1; echo $x;"), Err(EvalError::UnknownVariable));
         assert_eq!(eval("$x==1; echo $x;"), Err(EvalError::Syntax));
         assert_eq!(eval("$GLOBALS=1; echo 1;"), Err(EvalError::Syntax));
-        assert_eq!(eval("$x=1; echo $x; $x=2;"), Err(EvalError::TrailingInput));
+        assert_eq!(eval("$x=1; echo $x; $x=2;"), Ok(1));
         let long_name = format!("$a{}=1; echo 1;", "a".repeat(64));
         assert_eq!(eval(&long_name), Err(EvalError::VariableLimit));
         let too_many = format!(
@@ -3109,7 +3154,7 @@ mod tests {
         assert_eq!(eval("echo 1+;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1--2;"), Err(EvalError::Syntax));
         assert_eq!(eval("echo 1++2;"), Err(EvalError::Syntax));
-        assert_eq!(eval("echo 1; echo 2;"), Err(EvalError::TrailingInput));
+        assert_eq!(eval("echo 1; echo 2;"), Ok(2));
         assert_eq!(
             eval("echo 9223372036854775807+1;"),
             Err(EvalError::Overflow)
