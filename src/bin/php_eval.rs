@@ -1471,6 +1471,10 @@ impl<'a> Parser<'a> {
             return Err(EvalError::Syntax);
         }
         let rendered = match value {
+            // PHP 8.4 emits this expression for the minimum signed integer:
+            // a standalone decimal literal of magnitude 2^63 is parsed as
+            // a float by PHP. Preserve the byte-exact, re-evaluable form.
+            Value::Int(i64::MIN) => "-9223372036854775807-1".to_owned(),
             Value::Int(number) => number.to_string(),
             Value::Bool(true) => "true".to_owned(),
             Value::Bool(false) => "false".to_owned(),
@@ -1774,7 +1778,13 @@ mod tests {
     fn php84_var_export_scalar_output_and_expression_order() {
         for (program, expected) in [
             ("var_export(0);", "0"),
-            ("var_export(PHP_INT_MIN);", "-9223372036854775808"),
+            ("var_export(PHP_INT_MIN);", "-9223372036854775807-1"),
+            ("var_export(PHP_INT_MIN+1);", "-9223372036854775807"),
+            ("var_export(PHP_INT_MAX);", "9223372036854775807"),
+            ("$x=PHP_INT_MIN; var_export($x);", "-9223372036854775807-1"),
+            ("var_export(0-9223372036854775807-1);", "-9223372036854775807-1"),
+            ("var_export(PHP_INT_MIN,false);", "-9223372036854775807-1"),
+            ("echo 1,var_export(PHP_INT_MIN),2;", "1-9223372036854775807-12"),
             ("var_export(true); var_export(false);", "truefalse"),
             ("var_export(null);", "NULL"),
             ("VaR_ExPoRt(1,);", "1"),
