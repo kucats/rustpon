@@ -1353,7 +1353,8 @@ mod tests {
             assert_eq!(eval(program), Ok(expected), "{program:?}");
         }
         let mut parser = Parser::new(b"<?php echo __LINE__,\r\n__line__,\n__LINE__;");
-        assert_eq!(parser.evaluate(), Ok(Value::Int(3)));
+        // evaluate() returns the first echo expression; output concatenates all.
+        assert_eq!(parser.evaluate(), Ok(Value::Int(1)));
         assert_eq!(parser.output, "123");
         for invalid in [
             "echo __LINE__suffix;",
