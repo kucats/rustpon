@@ -884,8 +884,8 @@ def main():
         right = rng.randrange(0, 100)
         comments.append(rng.choice([
             f"echo {left}/*c*/+/*d*/{right};",
-            f"echo {left}; // c\\necho {right};",
-            f"echo {left}; # c\\necho {right};",
+            f"echo {left}; // c\necho {right};",
+            f"echo {left}; # c\necho {right};",
             f"echo ({left}/*c*/+{right});",
         ]))
     echo_arguments = list(ECHO_ARGUMENT_PROGRAMS)
@@ -923,7 +923,7 @@ def main():
     invalid = [
         b"<?php echo 1; /* unterminated",
         b"<?php echo 1; /*/",
-        b"<?php echo 1; /* never closes\\n",
+        b"<?php echo 1; /* never closes\n",
         b"<?php echo 1; #[A] echo 2;",
         b"<?php echo 1; // ?>trailing",
         b"<?php print;",
@@ -1231,6 +1231,22 @@ def main():
             failures += 1
             print(
                 f"FAIL invalid={index}: status={rust.returncode} stdout={rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    # PHP 8.4 rejects unterminated block comments at compile time,
+    # including when an earlier echo could otherwise produce output.
+    for index, code in enumerate([
+        b"<?php echo 1; /* unterminated",
+        b"<?php echo 1; /*/",
+        b"<?php echo 1; /* never closes\n",
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        if php.returncode == 0 or b"Unterminated comment" not in php.stderr or php.stdout:
+            failures += 1
+            print(
+                f"FAIL unterminated_comment={index} "
+                f"php={php.returncode}:{php.stdout[:80]!r}:{php.stderr[:120]!r}",
                 file=sys.stderr,
             )
 
