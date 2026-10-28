@@ -1,7 +1,7 @@
 //! Research-only, bounded PHP integer-expression evaluator.
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
-//! Supported grammar: bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=) and unsets followed by one echo;
+//! Supported grammar: bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement-only ++/--, and unsets followed by one echo;
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -238,6 +238,48 @@ impl<'a> Parser<'a> {
         Ok(name)
     }
 
+    // PHP 8.4 changes the value in place for statement-level ++/--.
+    // Boolean updates leave the boolean tag unchanged; null increments to
+    // integer one but does not decrement. Integer overflow promotes to float
+    // in PHP, which is deliberately outside this bounded scalar VM.
+    fn update_variable(&mut self, name: &[u8], increment: bool) -> Result<(), EvalError> {
+        self.charge()?;
+        let (_, value) = self
+            .bindings
+            .iter_mut()
+            .find(|(key, _)| *key == name)
+            .ok_or(EvalError::UnknownVariable)?;
+        *value = match *value {
+            Value::Int(number) => Value::Int(
+                if increment {
+                    number.checked_add(1)
+                } else {
+                    number.checked_sub(1)
+                }
+                .ok_or(EvalError::UnsupportedFloat)?,
+            ),
+            Value::Bool(boolean) => Value::Bool(boolean),
+            Value::Null if increment => Value::Int(1),
+            Value::Null => Value::Null,
+        };
+        Ok(())
+    }
+
+    fn prefix_update_statement(&mut self) -> Result<(), EvalError> {
+        self.assignments += 1;
+        if self.assignments > MAX_ASSIGNMENTS {
+            return Err(EvalError::AssignmentLimit);
+        }
+        let increment = self.source[self.offset..].starts_with(b"++");
+        self.offset += 2;
+        self.charge()?;
+        let name = self.variable_name()?;
+        if !self.consume(b';') {
+            return Err(EvalError::Syntax);
+        }
+        self.update_variable(name, increment)
+    }
+
     fn assignment(&mut self) -> Result<(), EvalError> {
         self.assignments += 1;
         if self.assignments > MAX_ASSIGNMENTS {
@@ -245,6 +287,18 @@ impl<'a> Parser<'a> {
         }
         let name = self.variable_name()?;
         self.skip_space();
+        // Postfix updates are supported as standalone statements, not as
+        // expressions. A malformed suffix cannot mutate a published value.
+        if self.source[self.offset..].starts_with(b"++")
+            || self.source[self.offset..].starts_with(b"--")
+        {
+            let increment = self.source[self.offset..].starts_with(b"++");
+            self.offset += 2;
+            if !self.consume(b';') {
+                return Err(EvalError::Syntax);
+            }
+            return self.update_variable(name, increment);
+        }
         // Compound assignment is a single PHP token: whitespace between
         // the operator and '=' must not be accepted. The RHS is evaluated
         // before the existing binding is updated.
@@ -783,6 +837,14 @@ impl<'a> Parser<'a> {
         if depth > MAX_DEPTH {
             return Err(EvalError::DepthLimit);
         }
+        self.skip_space();
+        // ++ and -- are PHP lexer tokens, never a pair of unary signs.
+        // Expression-level side effects are not yet implemented.
+        if self.source[self.offset..].starts_with(b"++")
+            || self.source[self.offset..].starts_with(b"--")
+        {
+            return Err(EvalError::Syntax);
+        }
         if let Some(value) = self.scalar_cast(depth)? {
             return Ok(value);
         }
@@ -898,6 +960,11 @@ impl<'a> Parser<'a> {
         let mut lhs = self.multiplicative(depth)?;
         loop {
             self.skip_space();
+            if self.source[self.offset..].starts_with(b"++")
+                || self.source[self.offset..].starts_with(b"--")
+            {
+                return Err(EvalError::Syntax);
+            }
             let op = match self.peek() {
                 Some(b'+' | b'-') => self.peek().unwrap(),
                 _ => break,
@@ -1055,16 +1122,6 @@ impl<'a> Parser<'a> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
         }
-        // PHP lexes adjacent ++ and -- as increment/decrement tokens,
-        // not as two independent arithmetic signs. This slice has no
-        // variables or increment/decrement semantics, so reject both.
-        if self
-            .source
-            .windows(2)
-            .any(|pair| pair == b"++" || pair == b"--")
-        {
-            return Err(EvalError::Syntax);
-        }
         self.skip_space();
         if self.source[self.offset..].starts_with(b"<?php") {
             self.offset += 5;
@@ -1075,6 +1132,12 @@ impl<'a> Parser<'a> {
         }
         loop {
             self.skip_space();
+            if self.source[self.offset..].starts_with(b"++")
+                || self.source[self.offset..].starts_with(b"--")
+            {
+                self.prefix_update_statement()?;
+                continue;
+            }
             if self.peek() == Some(b'$') {
                 self.assignment()?;
                 continue;
@@ -1149,6 +1212,54 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_statement_increment_decrement_and_boundaries() {
+        for (program, expected) in [
+            ("$x=1; ++$x; echo $x;", Value::Int(2)),
+            ("$x=1; $x++; echo $x;", Value::Int(2)),
+            ("$x=1; -- $x; echo $x;", Value::Int(0)),
+            ("$x=1; $x --; echo $x;", Value::Int(0)),
+            ("$x=-3; $x++; ++$x; echo $x;", Value::Int(-1)),
+            ("$x=0; $x--; echo $x;", Value::Int(-1)),
+            ("$x=true; $x++; echo is_bool($x);", Value::Bool(true)),
+            ("$x=false; --$x; echo is_bool($x);", Value::Bool(true)),
+            ("$x=null; $x++; echo is_int($x);", Value::Bool(true)),
+            ("$x=null; --$x; echo is_null($x);", Value::Bool(true)),
+            ("$x=null; ++$x; echo $x;", Value::Int(1)),
+            ("$x=1; ++$x; $x+=3; echo $x;", Value::Int(5)),
+            ("$x=1; unset($x); $x=3; $x--; echo $x;", Value::Int(2)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for (program, error) in [
+            ("++$x; echo 1;", EvalError::UnknownVariable),
+            ("$x=1; $x++; echo ++$x;", EvalError::Syntax),
+            ("$x=1; echo $x++;", EvalError::Syntax),
+            ("echo 1++2;", EvalError::Syntax),
+            ("echo 1--2;", EvalError::Syntax),
+            ("$x=1; $x+++; echo $x;", EvalError::Syntax),
+            ("$x=1; ++$x echo $x;", EvalError::Syntax),
+            (
+                "$x=9223372036854775807; $x++; echo $x;",
+                EvalError::UnsupportedFloat,
+            ),
+            (
+                "$x=0-9223372036854775807-1; --$x; echo $x;",
+                EvalError::UnsupportedFloat,
+            ),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(error),
+                "{program}"
+            );
+        }
     }
 
     #[test]

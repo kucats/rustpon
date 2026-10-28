@@ -668,6 +668,25 @@ types, superglobals, arbitrary statements, or Zend/SAPI execution. The
 interpreter has no file/network access and is not connected to the FFI layer.
 
 
+### PHP 8.4 statement-level increment/decrement (research)
+
+The bounded `php_eval` interpreter accepts prefix `++$x;`/`--$x;` and
+postfix `$x++;`/`$x--;` as standalone statements for initialized scalar
+variables. Integer values change by one; PHP 8.4 leaves booleans unchanged,
+converts incremented null to integer one, and leaves decremented null as null.
+The usual assignment-count, work and variable limits apply. Overflow that
+PHP promotes to float, undefined-variable warning paths, and increment or
+decrement *expressions* are deliberately rejected without output.
+
+```sh
+printf '%s' '<?php $x=null; ++$x; $x++; echo $x;' |
+  cargo run --offline --locked --bin php_eval
+# stdout: 2
+```
+
+The differential suite compares both token placements, mixed scalar tags,
+boundary values, repeated updates, and malformed syntax with PHP 8.4 CLI.
+
 ### PHP 8.4 scalar compound assignments (research)
 
 The standalone `php_eval` interpreter accepts `$x += expression;`,

@@ -134,6 +134,25 @@ VARIABLE_PROBE_PROGRAMS = [
 ]
 
 
+INCREMENT_PROGRAMS = [
+    "$x=1; ++$x; echo $x;",
+    "$x=1; $x++; echo $x;",
+    "$x=1; -- $x; echo $x;",
+    "$x=1; $x --; echo $x;",
+    "$x=-3; $x++; ++$x; echo $x;",
+    "$x=0; $x--; echo $x;",
+    "$x=true; $x++; echo is_bool($x);",
+    "$x=false; --$x; echo is_bool($x);",
+    "$x=null; $x++; echo is_int($x);",
+    "$x=null; --$x; echo is_null($x);",
+    "$x=null; ++$x; echo $x;",
+    "$x=1; ++$x; $x+=3; echo $x;",
+    "$x=1; unset($x); $x=3; $x--; echo $x;",
+    "$x=9223372036854775807; --$x; echo $x;",
+    "$x=0-9223372036854775807-1; ++$x; echo $x;",
+]
+
+
 UNSET_PROGRAMS = [
     "$x=1; unset($x); echo isset($x);",
     "$x=1; unset($x); echo empty($x);",
@@ -625,6 +644,15 @@ def main():
         )
         variable_probes.append(f"$x={value}; echo empty($x);")
         variable_probes.append(f"$x={value}; echo isset($x,$missing);")
+    increments = list(INCREMENT_PROGRAMS)
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        amount = rng.randrange(1, 5)
+        op = rng.choice(["++", "--"])
+        placement = rng.choice(["prefix", "postfix"])
+        update = f"{op}$x;" if placement == "prefix" else f"$x{op};"
+        increments.append(f"$x={start}; " + update * amount + " echo $x;")
+        increments.append(f"$x={start}; " + update * amount + " echo is_int($x);")
     unset_programs = list(UNSET_PROGRAMS)
     for _ in range(64):
         value = rng.randrange(-100000, 100001)
@@ -692,7 +720,7 @@ def main():
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
-        + unset_programs + compound_assignments
+        + unset_programs + compound_assignments + increments
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -881,6 +909,13 @@ def main():
         b"<?php echo 1+;",
         b"<?php echo 1--2;",
         b"<?php echo 1++2;",
+        b"<?php ++$x; echo 1;",
+        b"<?php $x=1; echo ++$x;",
+        b"<?php $x=1; echo $x++;",
+        b"<?php $x=1; $x+++; echo $x;",
+        b"<?php $x=1; ++$x echo $x;",
+        b"<?php $x=9223372036854775807; $x++; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; --$x; echo $x;",
         b"<?php echo 1; echo 2;",
         b"<?php echo 9223372036854775807+1;",
         b"<?php echo " + b"(" * 33 + b"1" + b")" * 33 + b";",
@@ -1027,7 +1062,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle differential: "
+        f"PHP CLI integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
