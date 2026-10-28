@@ -41,6 +41,18 @@ INTEGER_CONSTANT_PROGRAMS = [
 ]
 
 
+LINE_MAGIC_PROGRAMS = [
+    "echo __LINE__;", "echo __line__;", "echo __LiNe__+1;",
+    "echo (__LINE__*2);", "echo __LINE__,__LINE__;",
+    "\necho __LINE__;", "\recho __LINE__;", "\r\necho __LINE__;",
+    "\n\r\necho __LINE__;", "\n\necho __LINE__+__line__;",
+    "$x=__LINE__;\necho $x+__LINE__;",
+    "echo __LINE__,\r\n__line__,\n__LINE__;",
+    "echo is_int(__LINE__),(__LINE__===1);",
+    "print __LINE__;",
+]
+
+
 TERMINAL_PRINT_PROGRAMS = [
     "print 0;", "print 42;", "print -1;", "PRINT (true);",
     "PrInT false;", "print null;", "print (int)true;",
@@ -798,6 +810,12 @@ def main():
         integer_constants.append(f"echo PHP_INT_MAX-({offset});")
         integer_constants.append(f"echo PHP_INT_MIN+({offset});")
         integer_constants.append(f"echo (PHP_INT_MAX-({offset}))>(PHP_INT_MIN+({offset}));")
+    # Probe PHP's line accounting for bare CR, bare LF, and CRLF across
+    # different token positions, not just a single hard-coded line number.
+    line_magic = list(LINE_MAGIC_PROGRAMS)
+    for count in range(1, 33):
+        newline = ["\\n", "\\r", "\\r\\n"][count % 3]
+        line_magic.append(newline.encode("ascii").decode("unicode_escape") * count + "echo __LINE__;")
     echo_arguments = list(ECHO_ARGUMENT_PROGRAMS)
     for _ in range(64):
         left = rng.randrange(-10000, 10001)
@@ -813,7 +831,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants
+        + echo_arguments + integer_constants + line_magic
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1108,6 +1126,10 @@ def main():
     # complete identifiers; overflowing operations promote to unsupported
     # floating-point values in PHP and must fail closed here.
     invalid.extend([
+        b"<?php echo __LINE__suffix;",
+        b"<?php echo __LINE___;",
+        b"<?php echo __LINE__();",
+        b"<?php echo __LINE__+__LINE__suffix;",
         b"<?php echo php_int_max;",
         b"<?php echo Php_Int_Min;",
         b"<?php echo PHP_INT_MAXIMUM;",
