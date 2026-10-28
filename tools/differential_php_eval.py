@@ -161,6 +161,28 @@ TERMINAL_CLOSE_TAG_PROGRAMS = [
 ]
 
 
+# PHP 8.4 also uses ?> as the statement terminator for assignments,
+# compound assignments, standalone increment/decrement and unset().
+# The bounded VM rejects subsequent template bytes instead of dropping them.
+TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS = [
+    "$x=1 ?>",
+    "echo 7; $x=1 ?>",
+    "echo 7; $x=1 ?>\\r\\n",
+    "echo 7; $x=1; $x+=2 ?>",
+    "echo 7; $x=1; $x*=3 ?>",
+    "echo 7; $x=1; $x++ ?>",
+    "echo 7; $x=1; ++$x ?>",
+    "echo 7; $x=1; $x-- ?>",
+    "echo 7; $x=1; --$x ?>",
+    "echo 7; $x=1; unset($x) ?>",
+    "echo 7; unset($missing,) ?>",
+    "echo 7; $x=true; $x=(int)$x ?>",
+    "echo 7; $x=1; $x>>=1 ?>",
+    "echo 7; $x=1; // comment\\n$x=2 ?>",
+    "echo 7; $x=1; $x += 2 ?>\\r",
+]
+
+
 # PHP 8.4 recognizes ASCII-case-insensitive <?php and <?= as a leading
 # implicit echo. These inputs must be sent as-is, without prepending <?php.
 OPEN_TAG_PROGRAMS = [
@@ -1162,7 +1184,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1230,6 +1252,13 @@ def main():
         # close tag instead of silently discarding PHP's observable output.
         b"<?php echo 1 ?> ",
         b"<?php echo 1 ?>text",
+        b"<?php echo 7; $x= ?>",
+        b"<?php echo 7; $x=1 ?>raw",
+        b"<?php echo 7; $x=1 ?>\\n\\n",
+        b"<?php echo 7; $x=1; $x+=2 ?> ",
+        b"<?php echo 7; $x=1; $x++ ?>raw",
+        b"<?php echo 7; $x=1; ++$x ?>raw",
+        b"<?php echo 7; unset($x) ?>raw",
         b"<?php echo 1 ?>\n\n",
         b"<?php echo 1; ?>\r\r",
         b"<?php print 2 ?>\t",
