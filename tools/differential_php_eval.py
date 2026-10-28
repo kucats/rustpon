@@ -89,7 +89,7 @@ EMPTY_RETURN_PROGRAMS = [
     "echo 1; return;", "echo 1; return 42;",
     "echo 1; ReTuRn (2+3);", "echo 1; return null;",
     "echo 1; return 2 ?>", "return 1;", "return;",
-    "return/*c*/ 1;", "echo 1; return; ?> ",
+    "return/*c*/ 1;", "echo 1; return; ?>\n",
 ]
 
 # PHP 8.4 exit/die terminate CLI execution with an 8-bit status.
