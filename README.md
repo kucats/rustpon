@@ -1147,6 +1147,21 @@ semantics remain outside this research-only subset. In particular,
 `is_numeric()` recognizes supported integers but has no numeric-string or
 floating-point support; `is_scalar(null)` is false.
 
+### PHP 8.4 scalar `is_callable()` (research evaluator)
+
+The bounded `php_eval` interpreter now recognizes case-insensitive
+`is_callable(value[, syntax_only])` for its existing integer, boolean and
+null values. All return `false`, matching PHP 8.4: none of these values
+represent a callable, including when `syntax_only` is true. The optional
+second argument is evaluated and coerced to boolean, including its runtime
+errors, even if the first argument cannot be callable. One trailing comma
+after the first or second argument is accepted. Calls preserve existing
+depth/work limits and fail without publishing buffered output on errors.
+The third by-reference `callable_name` output parameter, callable strings,
+arrays, objects and function invocation remain unsupported. PHP 8.4 CLI
+differential tests cover fixed and 96 seeded calls, argument order,
+mixed-case names, nested predicates and malformed/unsupported arity.
+
 ### PHP 8.4 finite/NaN/infinite predicates (research evaluator)
 
 The bounded `php_eval` evaluator additionally accepts case-insensitive
