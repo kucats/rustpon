@@ -1782,9 +1782,15 @@ mod tests {
             ("var_export(PHP_INT_MIN+1);", "-9223372036854775807"),
             ("var_export(PHP_INT_MAX);", "9223372036854775807"),
             ("$x=PHP_INT_MIN; var_export($x);", "-9223372036854775807-1"),
-            ("var_export(0-9223372036854775807-1);", "-9223372036854775807-1"),
+            (
+                "var_export(0-9223372036854775807-1);",
+                "-9223372036854775807-1",
+            ),
             ("var_export(PHP_INT_MIN,false);", "-9223372036854775807-1"),
-            ("echo 1,var_export(PHP_INT_MIN),2;", "1-9223372036854775807-12"),
+            (
+                "echo 1,var_export(PHP_INT_MIN),2;",
+                "1-9223372036854775807-12",
+            ),
             ("var_export(true); var_export(false);", "truefalse"),
             ("var_export(null);", "NULL"),
             ("VaR_ExPoRt(1,);", "1"),
