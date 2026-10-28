@@ -698,6 +698,26 @@ exhaustion and rejected trailing code; the PHP CLI differential suite compares
 fixed and seeded accepted programs with PHP 8.4. No general control-flow,
 function-return stack or Zend execution lifecycle is implied.
 
+## PHP 8.4 terminal exit/die and CLI status (research evaluator)
+
+The standalone `php_eval` CLI recognizes case-insensitive `exit` and `die`
+as terminal statements, with no argument (`exit;`, `exit();`) or one
+bounded int/bool/null expression (`exit(257);`, `die(true);`). PHP 8.4
+allows a single trailing argument comma. The expression's signed 64-bit
+integer value determines the Unix process status modulo 256; `exit(-1)`
+returns status 255 and `exit(256)` returns status 0. The evaluator flushes
+previously buffered stdout before exiting with that status.
+
+Only terminal use is supported. Although real PHP can execute `exit`
+before later valid statements, this research parser rejects all source after
+`exit`/`die` (except whitespace/comments and an optional closing PHP
+tag), because it has no syntax-only pass for unreachable code. Invalid
+expressions, unclosed comments, and unsupported string exit messages fail
+closed with no stdout. The CLI differential suite checks stdout **and**
+process status against PHP 8.4, including negative and out-of-range exit
+values. This is not a complete PHP termination, shutdown-handler, or
+exception-lifecycle implementation.
+
 ## PHP 8.4 ordered output and local statement execution (research evaluator)
 
 The bounded `php_eval` CLI accepts multiple `echo` and `print` statements,
