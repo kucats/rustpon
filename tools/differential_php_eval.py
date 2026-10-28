@@ -47,6 +47,19 @@ ABSENT_KIND_PREDICATES = [
     "is_float", "is_double", "is_string", "is_array", "is_object",
     "is_resource", "is_iterable", "is_countable",
 ]
+# PHP 8.4 coerces the supported int/bool/null values to finite numbers.
+# No float, NAN, INF or numeric string is representable by this evaluator.
+FLOAT_CLASSIFICATION_PROGRAMS = [
+    f"echo {function}({argument});"
+    for function in ["is_finite", "IS_FINITE", "is_infinite", "Is_InFiNiTe", "is_nan", "IS_NAN"]
+    for argument in ["0", "-7", "true", "false", "null", "PHP_INT_MIN", "PHP_INT_MAX", "intval(true)", "(1<2)"]
+] + [
+    "$x=null; echo is_finite($x),is_nan($x),is_infinite($x);",
+    "$x=true; echo is_finite($x),is_nan($x),is_infinite($x);",
+    "echo is_bool(is_finite(0)),is_bool(is_nan(0));",
+]
+
+
 ABSENT_KIND_PROGRAMS = [
     f"echo {function}({argument});"
     for function in ABSENT_KIND_PREDICATES + ["Is_FlOaT"]
@@ -867,6 +880,11 @@ def main():
         function = rng.choice(ABSENT_KIND_PREDICATES)
         argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
         absent_kind.append(f"echo {function}({argument});")
+    float_classification = list(FLOAT_CLASSIFICATION_PROGRAMS)
+    for _ in range(96):
+        function = rng.choice(["is_finite", "is_infinite", "is_nan"])
+        argument = rng.choice(["true", "false", "null", str(rng.randrange(-100000, 100001)), "is_int(1)"])
+        float_classification.append(f"echo {function}({argument});")
     multi_statements = list(MULTI_STATEMENT_PROGRAMS)
     for _ in range(96):
         first = rng.randrange(-10000, 10001)
@@ -903,7 +921,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + multi_statements
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + multi_statements
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -926,6 +944,14 @@ def main():
         b"<?php echo 1; /* never closes\n",
         b"<?php echo 1; #[A] echo 2;",
         b"<?php echo 1; // ?>trailing",
+        b"<?php echo is_finite();",
+        b"<?php echo is_finite(1,2);",
+        b"<?php echo is_infinite(1,2);",
+        b"<?php echo is_nan();",
+        b"<?php echo is_nan(1,2);",
+        b"<?php echo is_finiteness(1);",
+        b"<?php echo is_nanny(1);",
+        b"<?php echo is_nan($missing);",
         b"<?php print;",
         b"<?php echo 1; print 2,3;",
         b"<?php echo 1; echo 2,;",
