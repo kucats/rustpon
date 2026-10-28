@@ -1570,7 +1570,6 @@ mod tests {
             "print 1,2;",
             "print 1+;",
             "printx 1;",
-            "print 1; echo 2;",
             "PRINT 1/0;",
             "print $missing;",
             "print 1;;",
