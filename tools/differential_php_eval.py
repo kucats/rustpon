@@ -200,6 +200,25 @@ INCREMENT_PROGRAMS = [
 ]
 
 
+INCREMENT_EXPRESSION_PROGRAMS = [
+    "$x=2; echo ++$x;", "$x=2; echo $x++;",
+    "$x=2; echo ++$x, $x++, $x;",
+    "$x=2; echo $x++ + $x++;",
+    "$x=2; echo ++$x * 3;", "$x=2; echo $x++**2;",
+    "$x=2; echo ++$x**2;", "$x=2; echo 2**$x++;",
+    "$x=2; echo -$x++;", "$x=2; echo ++$x + 1;",
+    "$x=2; echo $x++ + 1;", "$x=2; echo ($x++) + (++$x);",
+    "$x=2; echo ($x++) + ($x--);",
+    "$x=2; echo is_int($x++);", "$x=2; echo ($x++)===2;",
+    "$x=2; echo abs(++$x);", "$x=2; echo $x+++2;",
+    "$x=2; echo $x---2;", "$x=2; print $x++;",
+    "$x=true; echo $x++,is_bool($x);",
+    "$x=null; echo $x++,is_int($x);",
+    "$x=null; echo ++$x,is_int($x);",
+    "$x=null; echo --$x,is_null($x);",
+]
+
+
 UNSET_PROGRAMS = [
     "$x=1; unset($x); echo isset($x);",
     "$x=1; unset($x); echo empty($x);",
@@ -700,6 +719,18 @@ def main():
         update = f"{op}$x;" if placement == "prefix" else f"$x{op};"
         increments.append(f"$x={start}; " + update * amount + " echo $x;")
         increments.append(f"$x={start}; " + update * amount + " echo is_int($x);")
+    increment_expressions = list(INCREMENT_EXPRESSION_PROGRAMS)
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        op = rng.choice(["++", "--"])
+        if rng.randrange(2):
+            increment_expressions.append(
+                f"$x={start}; echo $x{op},$x,$x{op};"
+            )
+        else:
+            increment_expressions.append(
+                f"$x={start}; echo {op}$x,($x+3),is_int($x);"
+            )
     unset_programs = list(UNSET_PROGRAMS)
     for _ in range(64):
         value = rng.randrange(-100000, 100001)
@@ -781,7 +812,7 @@ def main():
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
-        + unset_programs + compound_assignments + increments + TERMINAL_PRINT_PROGRAMS
+        + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
         + echo_arguments + integer_constants
     )
     failures = 0
@@ -988,8 +1019,15 @@ def main():
         b"<?php echo 1--2;",
         b"<?php echo 1++2;",
         b"<?php ++$x; echo 1;",
-        b"<?php $x=1; echo ++$x;",
-        b"<?php $x=1; echo $x++;",
+        b"<?php echo ++$missing;",
+        b"<?php echo $missing++;",
+        b"<?php $x=1; echo ++($x);",
+        b"<?php $x=1; echo ($x)++;",
+        b"<?php $x=1; echo ++$x++;",
+        b"<?php $x=1; echo ($x++)++;",
+        b"<?php $x=9223372036854775807; echo $x++;",
+        b"<?php $x=0-9223372036854775807-1; echo --$x;",
+        b"<?php $x=9223372036854775807; echo 1,$x++;",
         b"<?php $x=1; $x+++; echo $x;",
         b"<?php $x=1; ++$x echo $x;",
         b"<?php $x=9223372036854775807; $x++; echo $x;",
@@ -1153,7 +1191,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/terminal-print/echo-argument-list differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list differential: "
         f"{len(cases)} compatible cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
