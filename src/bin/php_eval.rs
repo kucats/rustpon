@@ -772,6 +772,25 @@ impl<'a> Parser<'a> {
                     return self.builtin_scalar_conversion(depth, name, boolean);
                 }
             }
+            // PHP's built-in integer constants are case-sensitive, unlike
+            // true/false/null and function names. Resolve them as atomic
+            // identifiers so PHP_INT_MAX_suffix is never accepted as a prefix.
+            // This interpreter explicitly models the 64-bit PHP 8.4 ABI.
+            for (name, value) in [
+                (b"PHP_INT_MAX".as_slice(), Value::Int(i64::MAX)),
+                (b"PHP_INT_MIN".as_slice(), Value::Int(i64::MIN)),
+                (b"PHP_INT_SIZE".as_slice(), Value::Int(8)),
+            ] {
+                if remaining.starts_with(name)
+                    && !remaining
+                        .get(name.len())
+                        .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+                {
+                    self.offset += name.len();
+                    self.charge()?;
+                    return Ok(value);
+                }
+            }
             for (literal, value) in [
                 (b"true".as_slice(), Value::Bool(true)),
                 (b"false".as_slice(), Value::Bool(false)),
@@ -1250,6 +1269,49 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_platform_integer_constants_and_boundaries() {
+        for (program, expected) in [
+            ("echo PHP_INT_MAX;", Value::Int(i64::MAX)),
+            ("echo PHP_INT_MIN;", Value::Int(i64::MIN)),
+            ("echo PHP_INT_SIZE;", Value::Int(8)),
+            ("echo PHP_INT_MAX+0;", Value::Int(i64::MAX)),
+            ("echo PHP_INT_MIN+1;", Value::Int(i64::MIN + 1)),
+            ("echo PHP_INT_MIN/2;", Value::Int(i64::MIN / 2)),
+            ("echo PHP_INT_MIN%-1;", Value::Int(0)),
+            ("echo PHP_INT_MAX>>63;", Value::Int(0)),
+            ("echo PHP_INT_MIN>>63;", Value::Int(-1)),
+            ("echo ~PHP_INT_MIN;", Value::Int(i64::MAX)),
+            ("echo PHP_INT_MIN<=>PHP_INT_MAX;", Value::Int(-1)),
+            ("echo PHP_INT_SIZE*8;", Value::Int(64)),
+            ("echo (PHP_INT_MIN+PHP_INT_MAX);", Value::Int(-1)),
+            ("echo is_int(PHP_INT_MIN);", Value::Bool(true)),
+            ("echo PHP_INT_MAX===9223372036854775807;", Value::Bool(true)),
+            ("$x=PHP_INT_MAX; $x>>=63; echo $x;", Value::Int(0)),
+            ("$x=PHP_INT_MIN; $x%=3; echo $x;", Value::Int(-2)),
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Ok(expected),
+                "{program}"
+            );
+        }
+        for program in [
+            "echo php_int_max;",
+            "echo PHP_INT_MAXIMUM;",
+            "echo PHP_INT_MIN_suffix;",
+            "echo PHP_INT_SIZE_suffix;",
+            "echo -PHP_INT_MIN;",
+            "echo PHP_INT_MAX+1;",
+            "echo PHP_INT_MIN-1;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
+        }
     }
 
     #[test]
