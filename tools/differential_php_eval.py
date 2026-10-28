@@ -167,7 +167,7 @@ TERMINAL_CLOSE_TAG_PROGRAMS = [
 TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS = [
     "$x=1 ?>",
     "echo 7; $x=1 ?>",
-    "echo 7; $x=1 ?>\\r\\n",
+    "echo 7; $x=1 ?>\r\n",
     "echo 7; $x=1; $x+=2 ?>",
     "echo 7; $x=1; $x*=3 ?>",
     "echo 7; $x=1; $x++ ?>",
@@ -178,8 +178,8 @@ TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS = [
     "echo 7; unset($missing,) ?>",
     "echo 7; $x=true; $x=(int)$x ?>",
     "echo 7; $x=1; $x>>=1 ?>",
-    "echo 7; $x=1; // comment\\n$x=2 ?>",
-    "echo 7; $x=1; $x += 2 ?>\\r",
+    "echo 7; $x=1; // comment\n$x=2 ?>",
+    "echo 7; $x=1; $x += 2 ?>\r",
 ]
 
 
