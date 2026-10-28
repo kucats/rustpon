@@ -2,6 +2,7 @@
 //!
 //! This is the first standalone language execution slice, NOT a PHP VM.
 //! Supported grammar: empty statements, terminal top-level return/exit/die, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
+//! scalar var_dump() statements with byte-exact PHP CLI output, and
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
 //! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
@@ -1340,6 +1341,51 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    // PHP 8.4 var_dump() renders supported scalar types with their tags,
+    // independently of echo's scalar-to-string coercions. Stage all bytes
+    // privately until the entire bounded program has succeeded.
+    fn append_dump_output(&mut self, value: Value) -> Result<(), EvalError> {
+        let rendered = match value {
+            Value::Int(number) => format!("int({number})\n"),
+            Value::Bool(boolean) => format!("bool({boolean})\n"),
+            Value::Null => "NULL\n".to_owned(),
+        };
+        if self.output.len().saturating_add(rendered.len()) > MAX_OUTPUT {
+            return Err(EvalError::OutputLimit);
+        }
+        self.output.push_str(&rendered);
+        Ok(())
+    }
+
+    // Statement-only var_dump(): arguments are evaluated left-to-right.
+    // Arrays, objects, references, named arguments and expression-level
+    // function calls remain outside this bounded language subset.
+    fn dump_statement(&mut self) -> Result<(), EvalError> {
+        self.offset += b"var_dump".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        loop {
+            let value = self.bitwise_or(0)?;
+            self.append_dump_output(value)?;
+            if self.consume(b')') {
+                break;
+            }
+            if !self.consume(b',') {
+                return Err(EvalError::Syntax);
+            }
+            // PHP 8.4 permits one trailing comma but requires an argument.
+            if self.consume(b')') {
+                break;
+            }
+        }
+        if !self.consume(b';') && !self.terminal_close_tag()? {
+            return Err(EvalError::Syntax);
+        }
+        Ok(())
+    }
+
     // Shared by an explicit echo statement and PHP's <?= opening tag.
     // All arguments are evaluated in order and staged until full success.
     fn echo_arguments(&mut self) -> Result<Value, EvalError> {
@@ -1509,6 +1555,17 @@ impl<'a> Parser<'a> {
                 had_statement = true;
                 continue;
             }
+            if remaining
+                .get(..b"var_dump".len())
+                .is_some_and(|word| word.eq_ignore_ascii_case(b"var_dump"))
+                && !remaining
+                    .get(b"var_dump".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                self.dump_statement()?;
+                had_statement = true;
+                continue;
+            }
             // echo and print are case-insensitive PHP language constructs.
             // The output quota is cumulative across statements and arguments.
             let (keyword_len, is_echo) = if remaining
@@ -1587,6 +1644,56 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_var_dump_scalar_statements_match_cli_output() {
+        for (program, expected) in [
+            ("var_dump(0);", "int(0)\n"),
+            (
+                "var_dump(1, -1, true, false, null);",
+                "int(1)\nint(-1)\nbool(true)\nbool(false)\nNULL\n",
+            ),
+            (
+                "VaR_DuMp(PHP_INT_MIN, PHP_INT_MAX,);",
+                "int(-9223372036854775808)\nint(9223372036854775807)\n",
+            ),
+            ("var_dump(1+2, is_null(null));", "int(3)\nbool(true)\n"),
+            ("$x=1; var_dump($x++, ++$x, $x);", "int(1)\nint(3)\nint(3)\n"),
+            ("echo 1; var_dump(2); print 3;", "1int(2)\n3"),
+            ("var_dump(null) ?>", "NULL\n"),
+            ("var_dump(1); // comment\nvar_dump(2);", "int(1)\nint(2)\n"),
+            ("var_dump(__LINE__);", "int(1)\n"),
+            ("var_dump((bool)0,(int)true);", "bool(false)\nint(1)\n"),
+            ("var_dump(1); exit(0);", "int(1)\n"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_var_dump_rejects_invalid_calls_and_output_exhaustion() {
+        for program in [
+            "var_dump();",
+            "var_dump(,1);",
+            "var_dump(1,,2);",
+            "var_dump(1,2",
+            "var_dump(1); var_dump($missing);",
+            "var_dump(1); echo 1/0;",
+            "var_dumpx(1);",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program:?}"
+            );
+        }
+        let excessive = format!("var_dump({});", vec!["PHP_INT_MAX"; 48].join(","));
+        assert_eq!(
+            Parser::new(excessive.as_bytes()).evaluate(),
+            Err(EvalError::OutputLimit)
+        );
     }
 
     #[test]

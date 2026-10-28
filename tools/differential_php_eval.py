@@ -152,6 +152,25 @@ OPEN_TAG_PROGRAMS = [
 ]
 
 
+VAR_DUMP_PROGRAMS = [
+    "var_dump(0);",
+    "var_dump(1, -1, true, false, null);",
+    "VaR_DuMp(PHP_INT_MIN, PHP_INT_MAX,);",
+    "var_dump(1+2, is_null(null));",
+    "$x=1; var_dump($x++, ++$x, $x);",
+    "echo 1; var_dump(2); print 3;",
+    "var_dump(0,);",
+    "var_dump(1); var_dump(2);",
+    "var_dump(intdiv(9,3), abs(-7), (1<2));",
+    "var_dump(null) ?>",
+    "var_dump(1); // comment\nvar_dump(2);",
+    "var_dump(__LINE__);",
+    "var_dump((bool)0,(int)true);",
+    "var_dump(is_callable(null), is_finite(0));",
+    "var_dump(1); exit(0);",
+]
+
+
 # Multiple output statements may be interleaved with local assignments
 # and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
 MULTI_STATEMENT_PROGRAMS = [
@@ -1025,6 +1044,13 @@ def main():
         echo_arguments.append(
             f"$x={left}; echo $x,({right}<0),({extra}*2);"
         )
+    dump_programs = list(VAR_DUMP_PROGRAMS)
+    for _ in range(64):
+        first = rng.randrange(-10000, 10001)
+        delta = rng.randrange(-1000, 1001)
+        dump_programs.append(
+            f"$x={first}; var_dump($x, $x+({delta}), $x++, $x);"
+        )
     cases = (
         [f"echo {expr};" for expr in expressions]
         + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
@@ -1032,7 +1058,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + builtin_trailing_commas + multi_statements + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + builtin_trailing_commas + multi_statements + dump_programs + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1437,6 +1463,16 @@ def main():
         b"<?php echo PHP_INT_MIN-1;",
         b"<?php echo -PHP_INT_MIN;",
     ])
+    invalid.extend([
+        b"<?php var_dump();",
+        b"<?php var_dump(,1);",
+        b"<?php var_dump(1,,2);",
+        b"<?php var_dump(1,2",
+        b"<?php var_dump(1); var_dump($missing);",
+        b"<?php var_dump(1); echo 1/0;",
+        b"<?php var_dumpx(1);",
+        b"<?php var_dump(" + b",".join([b"PHP_INT_MAX"] * 48) + b");",
+    ])
     for index, code in enumerate(invalid):
         rust = execute([str(args.rust_bin)], code)
         if rust.returncode == 0 or rust.stdout:
@@ -1545,7 +1581,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

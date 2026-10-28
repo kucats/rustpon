@@ -718,6 +718,23 @@ process status against PHP 8.4, including negative and out-of-range exit
 values. This is not a complete PHP termination, shutdown-handler, or
 exception-lifecycle implementation.
 
+## PHP 8.4 scalar var_dump() statements (research evaluator)
+
+The bounded `php_eval` CLI supports case-insensitive, statement-only
+`var_dump(value[, ...]);` for integer, boolean and null expressions. It
+emits PHP 8.4's exact scalar type tags and newline-delimited output
+(`int(...)`, `bool(true/false)`, `NULL`), without echo-style coercion.
+Arguments are evaluated in source order, including supported local variable
+updates; one trailing comma and a terminal `?>` are accepted. The 1,024-byte
+cumulative output budget applies across `echo`, `print` and `var_dump`,
+and no output is published if a later statement fails. The differential
+suite checks fixed and seeded byte-for-byte cases against the PHP 8.4 CLI.
+
+This is not general `var_dump` support: arrays, strings, objects, references,
+named arguments and expression-level calls are not modeled. Runtime errors
+and unsupported syntax fail closed rather than reproducing PHP's partially
+flushed stdout.
+
 ## PHP 8.4 ordered output and local statement execution (research evaluator)
 
 The bounded `php_eval` CLI accepts multiple `echo` and `print` statements,
