@@ -1340,12 +1340,35 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    // Shared by an explicit echo statement and PHP's <?= opening tag.
+    // All arguments are evaluated in order and staged until full success.
+    fn echo_arguments(&mut self) -> Result<Value, EvalError> {
+        let value = self.bitwise_or(0)?;
+        self.append_output(value)?;
+        while self.consume(b',') {
+            self.charge()?;
+            let argument = self.bitwise_or(0)?;
+            self.append_output(argument)?;
+        }
+        Ok(value)
+    }
+
     fn evaluate(&mut self) -> Result<Value, EvalError> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
         }
         self.skip_space();
-        if self.source[self.offset..].starts_with(b"<?php") {
+        // PHP 8.4 recognizes the long opening tag without regard to ASCII
+        // case, and <?= starts an implicit echo statement. Do not accept
+        // raw template bytes outside these supported entry points.
+        let mut implicit_echo = false;
+        if self.source[self.offset..].starts_with(b"<?=") {
+            self.offset += 3;
+            implicit_echo = true;
+        } else if self.source[self.offset..]
+            .get(..5)
+            .is_some_and(|tag| tag.eq_ignore_ascii_case(b"<?php"))
+        {
             self.offset += 5;
             if self.peek().is_some_and(|b| !b.is_ascii_whitespace()) {
                 return Err(EvalError::Syntax);
@@ -1358,6 +1381,19 @@ impl<'a> Parser<'a> {
         let mut had_statement = false;
         loop {
             self.skip_space();
+            if implicit_echo {
+                // <?= is exactly one leading echo statement. It may have
+                // multiple arguments and can be followed by ordinary PHP
+                // statements after a semicolon, as in PHP 8.4 CLI.
+                implicit_echo = false;
+                let value = self.echo_arguments()?;
+                if !self.consume(b';') && !self.terminal_close_tag()? {
+                    return Err(EvalError::Syntax);
+                }
+                last_value = value;
+                had_statement = true;
+                continue;
+            }
             if self.offset == self.source.len() {
                 return Ok(last_value);
             }
@@ -1499,15 +1535,13 @@ impl<'a> Parser<'a> {
             {
                 return Err(EvalError::Syntax);
             }
-            let value = self.bitwise_or(0)?;
-            self.append_output(value)?;
-            if is_echo {
-                while self.consume(b',') {
-                    self.charge()?;
-                    let argument = self.bitwise_or(0)?;
-                    self.append_output(argument)?;
-                }
-            }
+            let value = if is_echo {
+                self.echo_arguments()?
+            } else {
+                let value = self.bitwise_or(0)?;
+                self.append_output(value)?;
+                value
+            };
             if !self.consume(b';') && !self.terminal_close_tag()? {
                 return Err(EvalError::Syntax);
             }
@@ -1553,6 +1587,48 @@ mod tests {
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
+    }
+
+    #[test]
+    fn php84_short_echo_and_case_insensitive_opening_tag() {
+        for (program, expected) in [
+            ("<?PHP echo 7;", "7"),
+            ("<?pHp echo 7;", "7"),
+            ("<?PHP\necho 1;", "1"),
+            ("<?PHP echo 1 ?>", "1"),
+            ("<?PHP", ""),
+            ("<?= 1 ?>", "1"),
+            ("<?= 1;", "1"),
+            ("<?= 1,2 ?>", "12"),
+            ("<?= 1; echo 2; ?>", "12"),
+            ("<?= 1 /*c*/ + 2 ?>", "3"),
+            ("<?= __LINE__ ?>", "1"),
+            ("<?= true,false,null,42 ?>", "142"),
+            ("<?= 1 ?>\r\n", "1"),
+            ("<?= 1; return 0;", "1"),
+            ("<?= 1; exit(0);", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+        for program in [
+            "<?=",
+            "<?= ?>",
+            "<?= 1",
+            "<?= ;",
+            "<?= 1, ?>",
+            "<?= 1 ?>trailing",
+            "<?= 1 ?>\n\n",
+            "<?= 1; /* unterminated",
+            "<?= 1; exit(0); echo 2;",
+            "<?PHPecho 7;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program:?}"
+            );
+        }
     }
 
     #[test]

@@ -140,6 +140,18 @@ TERMINAL_CLOSE_TAG_PROGRAMS = [
 ]
 
 
+# PHP 8.4 recognizes ASCII-case-insensitive <?php and <?= as a leading
+# implicit echo. These inputs must be sent as-is, without prepending <?php.
+OPEN_TAG_PROGRAMS = [
+    "<?PHP echo 7;", "<?pHp echo 7;", "<?PHP\necho 1;",
+    "<?PHP echo 1 ?>", "<?PHP", "<?= 1 ?>", "<?= 1;",
+    "<?= 1,2 ?>", "<?= 1; echo 2; ?>",
+    "<?= 1 /*c*/ + 2 ?>", "<?= __LINE__ ?>",
+    "<?= true,false,null,42 ?>", "<?= 1 ?>\r\n",
+    "<?= 1; return 0;", "<?= 1; exit(0);",
+]
+
+
 # Multiple output statements may be interleaved with local assignments
 # and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
 MULTI_STATEMENT_PROGRAMS = [
@@ -1037,6 +1049,20 @@ def main():
                 file=sys.stderr,
             )
 
+    for index, program in enumerate(OPEN_TAG_PROGRAMS):
+        code = program.encode("ascii")
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL opening_tag={index} program={program!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
     # Exit status is part of the CLI observable behavior, not merely stdout.
     # Keep nonzero exit programs separate from the ordinary success corpus.
     for index, program in enumerate(EXIT_NONZERO_PROGRAMS):
@@ -1054,6 +1080,16 @@ def main():
             )
 
     invalid = [
+        b"<?=",
+        b"<?= ?>",
+        b"<?= 1",
+        b"<?= ;",
+        b"<?= 1, ?>",
+        b"<?= 1 ?>trailing",
+        b"<?= 1 ?>\n\n",
+        b"<?= 1; /* unterminated",
+        b"<?= 1; exit(0); echo 2;",
+        b"<?PHPecho 7;",
         # The evaluator deliberately rejects raw template bytes following a
         # close tag instead of silently discarding PHP's observable output.
         b"<?php echo 1 ?> ",
@@ -1510,7 +1546,7 @@ def main():
 
     print(
         f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar differential: "
-        f"{len(cases)} compatible cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
+        f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
         f"{len(intdiv_errors)} PHP intdiv runtime-error rejections, {failures} failures"

@@ -1470,3 +1470,18 @@ two-argument tie behavior with a trailing comma. Repeated commas, missing
 required arguments, and a trailing comma in the `empty()` language construct
 still fail closed. Fixed and seeded programs are compared byte-for-byte with
 PHP 8.4 CLI; this does not add general function calls or a PHP VM.
+
+### PHP 8.4 opening tags and short echo (research evaluator)
+
+The bounded `php_eval` CLI recognizes the case-insensitive `<?php` long
+opening tag and the `<?=` short-echo tag. Short echo evaluates an ordered
+comma-separated expression list and can continue with normal supported
+statements after a semicolon. Like explicit `echo`, the closing `?>` tag
+may terminate the statement without a semicolon. The PHP 8.4 CLI differential
+suite compares the output bytes of these tag forms, including mixed-case
+long tags, comments, magic line numbers, and subsequent statements.
+
+A short echo still requires a semicolon or closing tag; unsupported raw
+template output and unreachable code after `exit` remain rejected.
+This does not implement general mixed HTML/PHP templates or short `<?`
+tags. Output is committed only after the complete supported program succeeds.
