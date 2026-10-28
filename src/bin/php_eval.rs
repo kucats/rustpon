@@ -589,16 +589,18 @@ impl<'a> Parser<'a> {
             // trailing comma. Both arguments are evaluated even when the
             // first value cannot be callable. The third by-reference output
             // parameter is outside this bounded scalar evaluator.
-            if self.consume(b',') && !self.consume(b')') {
-                let _syntax_only = self.bitwise_or(depth + 1)?.as_bool();
-                if self.consume(b',') {
-                    if !self.consume(b')') {
+            if self.consume(b',') {
+                if !self.consume(b')') {
+                    let _syntax_only = self.bitwise_or(depth + 1)?.as_bool();
+                    if self.consume(b',') {
+                        if !self.consume(b')') {
+                            return Err(EvalError::Syntax);
+                        }
+                    } else if !self.consume(b')') {
                         return Err(EvalError::Syntax);
                     }
-                } else if !self.consume(b')') {
-                    return Err(EvalError::Syntax);
                 }
-            } else if self.source[self.offset.saturating_sub(1)] != b')' {
+            } else if !self.consume(b')') {
                 return Err(EvalError::Syntax);
             }
         } else if !self.consume(b')') {
