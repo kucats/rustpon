@@ -1838,7 +1838,7 @@ mod tests {
         for (program, expected) in [
             ("<?php $x=1 ?>", ""),
             ("<?php echo 7; $x=1 ?>", "7"),
-            ("<?php echo 7; $x=1 ?>\\r\\n", "7"),
+            ("<?php echo 7; $x=1 ?>\r\n", "7"),
             ("<?php echo 7; $x=1; $x+=2 ?>", "7"),
             ("<?php echo 7; $x=1; $x*=3 ?>", "7"),
             ("<?php echo 7; $x=1; $x++ ?>", "7"),
@@ -1849,8 +1849,8 @@ mod tests {
             ("<?php echo 7; unset($missing,) ?>", "7"),
             ("<?php echo 7; $x=true; $x=(int)$x ?>", "7"),
             ("<?php echo 7; $x=1; $x>>=1 ?>", "7"),
-            ("<?php echo 7; $x=1; // comment\\n$x=2 ?>", "7"),
-            ("<?php echo 7; $x=1; $x += 2 ?>\\r", "7"),
+            ("<?php echo 7; $x=1; // comment\n$x=2 ?>", "7"),
+            ("<?php echo 7; $x=1; $x += 2 ?>\r", "7"),
         ] {
             let mut parser = Parser::new(program.as_bytes());
             assert!(parser.evaluate().is_ok(), "{program:?}");
@@ -1863,7 +1863,7 @@ mod tests {
         for program in [
             "<?php echo 7; $x= ?>",
             "<?php echo 7; $x=1 ?>raw",
-            "<?php echo 7; $x=1 ?>\\n\\n",
+            "<?php echo 7; $x=1 ?>\n\n",
             "<?php echo 7; $x=1; $x+=2 ?> ",
             "<?php echo 7; $x=1; $x++ ?>raw",
             "<?php echo 7; $x=1; ++$x ?>raw",
