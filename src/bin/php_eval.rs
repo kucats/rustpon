@@ -1659,7 +1659,10 @@ mod tests {
                 "int(-9223372036854775808)\nint(9223372036854775807)\n",
             ),
             ("var_dump(1+2, is_null(null));", "int(3)\nbool(true)\n"),
-            ("$x=1; var_dump($x++, ++$x, $x);", "int(1)\nint(3)\nint(3)\n"),
+            (
+                "$x=1; var_dump($x++, ++$x, $x);",
+                "int(1)\nint(3)\nint(3)\n",
+            ),
             ("echo 1; var_dump(2); print 3;", "1int(2)\n3"),
             ("var_dump(null) ?>", "NULL\n"),
             ("var_dump(1); // comment\nvar_dump(2);", "int(1)\nint(2)\n"),
