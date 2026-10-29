@@ -2284,3 +2284,71 @@ fn post_unlink_permission_relaxation_is_rejected() {
     drop(file);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_rejects_permission_and_length_tampering_before_output() {
+    let spool = Spool::new();
+    let mut request = parse(&body(&[(FILE, b"xyz")]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let mut output = Vec::new();
+
+    assert_eq!(upload.copy_to(&mut output).unwrap(), 3);
+    assert_eq!(output, b"xyz");
+    output.clear();
+
+    let file = upload.file.as_ref().unwrap();
+    assert_eq!(file.metadata().unwrap().nlink(), 0);
+    file.set_permissions(fs::Permissions::from_mode(0o644))
+        .unwrap();
+    assert_eq!(
+        upload.copy_to(&mut output).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(output.is_empty());
+
+    upload
+        .file
+        .as_ref()
+        .unwrap()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+    upload.file.as_ref().unwrap().set_len(4).unwrap();
+    assert_eq!(
+        upload.copy_to(&mut output).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(output.is_empty());
+
+    upload.file.as_ref().unwrap().set_len(3).unwrap();
+    assert_eq!(upload.copy_to(&mut output).unwrap(), 3);
+    assert_eq!(output, b"xyz");
+    drop(request);
+    spool.empty();
+}
+
+#[test]
+fn upload_copy_rejects_linked_file_even_with_private_permissions() {
+    let spool = Spool::new();
+    let named = spool.0.join("linked-upload");
+    fs::write(&named, b"xyz").unwrap();
+    fs::set_permissions(&named, fs::Permissions::from_mode(0o600)).unwrap();
+    let file = OpenOptions::new().read(true).open(&named).unwrap();
+    assert_eq!(file.metadata().unwrap().nlink(), 1);
+    let mut upload = Upload {
+        file: Some(file),
+        length: 3,
+        discarded: false,
+        partial: false,
+        write_failed: false,
+        no_tmp_dir: false,
+    };
+    let mut output = Vec::new();
+    assert_eq!(
+        upload.copy_to(&mut output).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(output.is_empty());
+    drop(upload);
+    fs::remove_file(named).unwrap();
+    spool.empty();
+}
