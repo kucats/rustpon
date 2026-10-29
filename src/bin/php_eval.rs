@@ -4730,7 +4730,10 @@ mod tests {
             "echo E_STRICT_1;",
             "echo E_ERROR();",
         ] {
-            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program}"
+            );
         }
     }
 }
