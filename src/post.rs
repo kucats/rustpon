@@ -318,6 +318,10 @@ impl PostRequest {
             ) {
                 Ok(count) => count,
                 Err(Error::Depth) if php_nesting && leaf.is_some() => {
+                    // php_register_variable_ex removes any existing root
+                    // variable when a later name exceeds the nesting limit.
+                    // Keeping an earlier value would diverge from PHP 8.4.
+                    this.discard_php_nesting_root()?;
                     this.stats.skipped_fields += 1;
                     continue;
                 }
@@ -440,6 +444,50 @@ impl PostRequest {
                 }
                 array = node;
             }
+        }
+        Ok(())
+    }
+
+    // PHP 8.4 unsets the entire top-level variable when registration of
+    // an over-depth name fails, even if earlier fields populated that root.
+    // Detach the linked-list entry without reclaiming charged arena nodes.
+    // A later valid field recreates the root at its new wire-order position.
+    fn discard_php_nesting_root(&mut self) -> Result<(), Error> {
+        let Segment::Key(span) = self.segments[0] else {
+            return Ok(());
+        };
+        let bytes = span.bytes(&self.scratch);
+        if forbidden(bytes, &self.scratch) {
+            return Ok(());
+        }
+        let key = numeric(bytes)
+            .map(Key::Integer)
+            .unwrap_or(Key::Bytes(span));
+        let Some(target) = self.find(0, key)? else {
+            return Ok(());
+        };
+        let Value::Array(mut root) = self.nodes[0].value else {
+            unreachable!()
+        };
+        let mut previous: Option<usize> = None;
+        let mut cursor = root.first;
+        while let Some(index) = cursor {
+            self.charge(1)?;
+            if index == target {
+                let next = self.nodes[index].next;
+                if let Some(prev) = previous {
+                    self.nodes[prev].next = next;
+                } else {
+                    root.first = next;
+                }
+                if root.last == Some(index) {
+                    root.last = previous;
+                }
+                self.nodes[0].value = Value::Array(root);
+                break;
+            }
+            previous = Some(index);
+            cursor = self.nodes[index].next;
         }
         Ok(())
     }
