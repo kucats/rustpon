@@ -159,6 +159,65 @@ fn php_nesting_limit_skips_overdeep_fields_and_counts_them_toward_input_vars() {
 }
 
 #[test]
+fn php_nesting_overflow_removes_existing_root_and_reinserts_at_end() {
+    let spool = Spool::new();
+    let post = request(
+        &spool,
+        &[
+            (b"keep", b"1"),
+            (b"a[x]", b"old"),
+            (b"a[x][y]", b"over"),
+            (b"after", b"2"),
+            (b"a[z]", b"new"),
+        ],
+        false,
+    )
+    .into_post_with_php_limits(Limits::default(), usize::MAX, 1)
+    .unwrap();
+    assert_eq!(post.stats().skipped_fields, 1);
+    assert_eq!(
+        json(&post),
+        r#"["a",[[["s","6b656570"],["s","31"]],[["s","6166746572"],["s","32"]],[["s","61"],["a",[[["s","7a"],["s","6e6577"]]]]]]]"#
+    );
+
+    // Numeric root keys are detached using their PHP integer identity.
+    let numeric_root = request(
+        &spool,
+        &[
+            (b"0[x]", b"old"),
+            (b"0[x][y]", b"over"),
+            (b"0[z]", b"new"),
+        ],
+        false,
+    )
+    .into_post_with_php_limits(Limits::default(), usize::MAX, 1)
+    .unwrap();
+    assert_eq!(
+        json(&numeric_root),
+        r#"["a",[[["i","0"],["a",[[["s","7a"],["s","6e6577"]]]]]]]"#
+    );
+
+    // The max_input_vars gate precedes nesting checks: an overflow outside
+    // the admitted quota cannot delete an earlier, accepted root.
+    let quota = request(
+        &spool,
+        &[
+            (b"a[x]", b"old"),
+            (b"b", b"2"),
+            (b"a[x][y]", b"over"),
+        ],
+        false,
+    )
+    .into_post_with_php_limits(Limits::default(), 2, 1)
+    .unwrap();
+    assert_eq!(quota.stats().skipped_fields, 1);
+    assert_eq!(
+        json(&quota),
+        r#"["a",[[["s","61"],["a",[[["s","78"],["s","6f6c64"]]]]],[["s","62"],["s","32"]]]]"#
+    );
+}
+
+#[test]
 fn numeric_keys_follow_signed_64_bit_php_rules() {
     for (input, expected) in [
         ("0", Some(0)),
