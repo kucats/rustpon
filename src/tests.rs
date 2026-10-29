@@ -2651,9 +2651,7 @@ fn upload_copy_rejects_mutation_between_read_and_first_write() {
                         if rewrite {
                             source.write_at(b"!", 0).unwrap();
                             source
-                                .set_times(
-                                    fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH),
-                                )
+                                .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))
                                 .unwrap();
                         } else {
                             source
@@ -2668,7 +2666,10 @@ fn upload_copy_rejects_mutation_between_read_and_first_write() {
             io::ErrorKind::InvalidData
         );
         assert!(injected);
-        assert!(output.is_empty(), "no bytes may escape after a pre-write mutation");
+        assert!(
+            output.is_empty(),
+            "no bytes may escape after a pre-write mutation"
+        );
 
         if rewrite {
             source.write_at(b"q", 0).unwrap();
