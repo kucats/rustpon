@@ -2627,3 +2627,64 @@ fn upload_copy_stops_after_first_short_write_when_source_changes() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_rejects_mutation_between_read_and_first_write() {
+    use std::os::unix::fs::FileExt;
+
+    let spool = Spool::new();
+    let payload = vec![b'q'; BLOCK * 2 + 3];
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+
+    // Inject a mutation immediately after pread, before the first byte can
+    // reach the destination. Neither a permission relaxation nor a same-size
+    // rewrite may publish the already-buffered block.
+    for rewrite in [false, true] {
+        let source = upload.file.as_ref().unwrap().try_clone().unwrap();
+        let mut injected = false;
+        let mut output = Vec::new();
+        assert_eq!(
+            upload
+                .copy_to_with_read_hook(&mut output, || {
+                    if !injected {
+                        if rewrite {
+                            source.write_at(b"!", 0).unwrap();
+                            source
+                                .set_times(
+                                    fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH),
+                                )
+                                .unwrap();
+                        } else {
+                            source
+                                .set_permissions(fs::Permissions::from_mode(0o644))
+                                .unwrap();
+                        }
+                        injected = true;
+                    }
+                })
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(injected);
+        assert!(output.is_empty(), "no bytes may escape after a pre-write mutation");
+
+        if rewrite {
+            source.write_at(b"q", 0).unwrap();
+        } else {
+            source
+                .set_permissions(fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        let mut recovered = Vec::new();
+        assert_eq!(
+            upload.copy_to(&mut recovered).unwrap(),
+            payload.len() as u64
+        );
+        assert_eq!(recovered, payload);
+    }
+
+    drop(request);
+    spool.empty();
+}
