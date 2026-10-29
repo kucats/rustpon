@@ -54,6 +54,8 @@ CASES = [
     ("replace", [(b"a[x]", b"old", None), (b"a", b"mid", None), (b"a[]", b"new", None)]),
     ("file-and-field", [(b"upload", b"DATA", b"sample.bin"), (b"message", b"yes", None)]),
     ("file-only", [(b"upload", b"DATA", b"sample.bin")]),
+    ("file-binary-copy", [(b"upload", b"\x00\xffxyz", b"binary.bin")]),
+    ("file-multi-buffer-copy", [(b"upload", b"\x00\xff" + b"x" * (8192 + 17), b"large.bin")]),
     ("two-files", [(b"upload", b"first", b"one.bin"),
                    (b"attachment", b"second", b"two.bin")]),
     ("nested-files", [(b"f[x][]", b"first", b"one.bin"),
