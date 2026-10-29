@@ -183,11 +183,7 @@ fn php_nesting_overflow_removes_existing_root_and_reinserts_at_end() {
     // Numeric root keys are detached using their PHP integer identity.
     let numeric_root = request(
         &spool,
-        &[
-            (b"0[x]", b"old"),
-            (b"0[x][y]", b"over"),
-            (b"0[z]", b"new"),
-        ],
+        &[(b"0[x]", b"old"), (b"0[x][y]", b"over"), (b"0[z]", b"new")],
         false,
     )
     .into_post_with_php_limits(Limits::default(), usize::MAX, 1)
@@ -201,11 +197,7 @@ fn php_nesting_overflow_removes_existing_root_and_reinserts_at_end() {
     // the admitted quota cannot delete an earlier, accepted root.
     let quota = request(
         &spool,
-        &[
-            (b"a[x]", b"old"),
-            (b"b", b"2"),
-            (b"a[x][y]", b"over"),
-        ],
+        &[(b"a[x]", b"old"), (b"b", b"2"), (b"a[x][y]", b"over")],
         false,
     )
     .into_post_with_php_limits(Limits::default(), 2, 1)
