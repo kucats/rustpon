@@ -119,7 +119,11 @@ other code seeking through a cloned descriptor cannot skip or duplicate
 blocks during the copy; this does not protect against concurrent writes to
 the source inode. A mismatch
 fails before writing destination bytes; this is a point-in-time integrity
-check. Metadata is revalidated after **every successful destination write**, including
+check. Metadata is also revalidated immediately **after each positional read
+and before its bytes are written**, detecting observable source modifications
+during the read without emitting the affected block. Deterministic fault
+injection covers permission changes and same-size rewrites at this boundary.
+Metadata is revalidated after **every successful destination write**, including
 short writes within an 8192-byte read block, and after the loop (including
 empty uploads). Persistent permission, link-count,
 or length changes, and modifications to inode mtime/ctime, now abort before
