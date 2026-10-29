@@ -79,6 +79,10 @@ jobs:
           php -l tools/php_projection.php
           cargo build --offline --locked --bin urlencoded
           python3 tools/differential_urlencoded.py --rust-bin target/debug/urlencoded
+      - name: Compare URL-encoded Content-Length admission with PHP 8.4 HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_urlencoded_content_length.py --rust-bin target/debug/urlencoded
       - name: Compare real FFI ABI with PHP 8.4 parse_str (Linux)
         if: runner.os == 'Linux'
         run: |
