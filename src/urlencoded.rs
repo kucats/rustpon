@@ -29,6 +29,9 @@ pub struct FormParser {
     // Preserve syntactically present but empty decoded names so the POST
     // adapter can count them toward PHP max_input_vars in wire order.
     php_count_ignored_names: bool,
+    // PHP 8.4 HTTP SAPI counts even separator-only empty pairs toward
+    // max_input_vars, unlike CLI parse_str(). Only opt in for SAPI quotas.
+    php_count_blank_pairs: bool,
 }
 
 impl FormParser {
@@ -81,6 +84,7 @@ impl FormParser {
             separators: [1u64 << (b'&' as usize % 64), 0, 0, 0],
             php_nul_name_truncation: false,
             php_count_ignored_names: false,
+            php_count_blank_pairs: false,
         })
     }
 
@@ -119,6 +123,12 @@ impl FormParser {
     /// This is opt-in; the strict wire parser continues to discard them.
     pub fn with_php_input_var_counting(mut self) -> Self {
         self.php_count_ignored_names = true;
+        self
+    }
+
+    fn with_php_sapi_blank_pair_counting(mut self) -> Self {
+        self.php_count_ignored_names = true;
+        self.php_count_blank_pairs = true;
         self
     }
 
@@ -205,6 +215,7 @@ impl FormParser {
         let value_start = self.value_start.unwrap_or(end);
         if self.field_start == value_start
             && !(self.php_count_ignored_names && self.value_start.is_some())
+            && !self.php_count_blank_pairs
         {
             // Blank pairs never count. In strict mode empty names are also
             // discarded; PHP counting mode retains explicit '=value' pairs.
@@ -435,6 +446,34 @@ pub fn parse_reader_with_php_content_length(
     content_length: u64,
     php_post_max_bytes: Option<u64>,
 ) -> Result<Request, Error> {
+    parse_reader_with_php_content_length_impl(
+        reader, limits, content_length, php_post_max_bytes, false,
+    )
+}
+
+/// PHP 8.4 HTTP SAPI max_input_vars accounting differs from CLI parse_str():
+/// SAPI counts separator-only blank pairs and admits up to N+1 tokens for a
+/// configured limit N. Preserve those blank wire entries here; the caller
+/// must pass max_input_vars.saturating_add(1) to the POST projection.
+/// Without a SAPI variable quota, prefer parse_reader_with_php_content_length.
+pub fn parse_reader_with_php_content_length_sapi_vars(
+    reader: &mut impl Read,
+    limits: Limits,
+    content_length: u64,
+    php_post_max_bytes: Option<u64>,
+) -> Result<Request, Error> {
+    parse_reader_with_php_content_length_impl(
+        reader, limits, content_length, php_post_max_bytes, true,
+    )
+}
+
+fn parse_reader_with_php_content_length_impl(
+    reader: &mut impl Read,
+    limits: Limits,
+    content_length: u64,
+    php_post_max_bytes: Option<u64>,
+    sapi_count_blank_pairs: bool,
+) -> Result<Request, Error> {
     if content_length > limits.body_bytes {
         return Err(Error::Limit(Limit::BodyBytes));
     }
@@ -449,11 +488,13 @@ pub fn parse_reader_with_php_content_length(
     let mut parser = if over_php_limit {
         None
     } else {
-        Some(
-            FormParser::new(limits)?
-                .with_php_nul_name_truncation()
-                .with_php_input_var_counting(),
-        )
+        let mut parser = FormParser::new(limits)?
+            .with_php_nul_name_truncation()
+            .with_php_input_var_counting();
+        if sapi_count_blank_pairs {
+            parser = parser.with_php_sapi_blank_pair_counting();
+        }
+        Some(parser)
     };
     let mut remaining = content_length;
     let mut buffer = [0u8; 8192];
@@ -576,6 +617,51 @@ mod tests {
             Error::Limit(Limit::BodyBytes)
         );
         assert_eq!(reader.position(), 0);
+    }
+
+    #[test]
+    fn php_http_sapi_var_counting_retains_blank_pairs_in_wire_order() {
+        let body = b"&&a=1&b=2&c=3";
+        let mut reader = Cursor::new(body);
+        let request = parse_reader_with_php_content_length_sapi_vars(
+            &mut reader,
+            Limits::default(),
+            body.len() as u64,
+            None,
+        )
+        .unwrap();
+        assert_eq!(reader.position(), body.len() as u64);
+        assert_eq!(
+            fields(&request),
+            vec![
+                (Vec::new(), Vec::new()),
+                (Vec::new(), Vec::new()),
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+                (b"c".to_vec(), b"3".to_vec()),
+            ]
+        );
+        // HTTP SAPI max_input_vars=2 accepts three wire tokens, including
+        // the two empty pairs. Only a is published.
+        let post = request
+            .into_post_with_max_input_vars(post::Limits::default(), 3)
+            .unwrap();
+        let mut json = Vec::new();
+        post.write_json(&mut json).unwrap();
+        let json = String::from_utf8(json).unwrap();
+        assert!(json.contains(r#"["s","61"],["s","31"]"#));
+        assert!(!json.contains(r#"["s","62"]"#));
+
+        // The ordinary Content-Length API retains parse_str-like blank
+        // suppression when no SAPI max_input_vars policy is requested.
+        let request = parse_reader_with_php_content_length(
+            &mut Cursor::new(body),
+            Limits::default(),
+            body.len() as u64,
+            None,
+        )
+        .unwrap();
+        assert_eq!(request.parts().len(), 3);
     }
 
     #[test]

@@ -25,6 +25,17 @@ CASES = [
     ("multi-buffer", b"v=" + b"X" * (8192 + 17)),
 ]
 
+# PHP 8.4 HTTP SAPI counts blank separator-delimited pairs and permits
+# N+1 tokens for max_input_vars=N, unlike CLI parse_str()'s N tokens.
+QUOTA_CASES = [
+    ("plain", b"a=1&b=2&c=3&d=4"),
+    ("leading-blank", b"&a=1&b=2&c=3"),
+    ("two-blanks", b"&&a=1&b=2&c=3"),
+    ("middle-blank", b"a=1&&b=2&c=3"),
+    ("ignored-name", b"a=1&=ignored&b=2&c=3"),
+    ("nul-ignored-name", b"a=1&%00ignored=2&b=3&c=4"),
+]
+
 
 def php_post(port, body):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
@@ -42,11 +53,13 @@ def php_post(port, body):
         connection.close()
 
 
-def rust_post(binary, body, limit):
+def rust_post(binary, body, limit, max_input_vars=None):
     command = [
         str(binary), "--php-content-length", str(len(body)),
         "--php-post-max-size", str(limit),
     ]
+    if max_input_vars is not None:
+        command.extend(["--php-max-input-vars", str(max_input_vars)])
     process = subprocess.run(
         command, input=body, capture_output=True, timeout=15, check=False,
     )
@@ -86,6 +99,30 @@ def main():
                 failures += 1
                 print(
                     f"FAIL {label} (length={len(body)}, post_max_size={limit}): {error}",
+                    file=sys.stderr,
+                )
+            finally:
+                server.terminate()
+                server.wait(timeout=10)
+    for max_vars in (0, 1, 2, 3):
+        for label, body in QUOTA_CASES:
+            post_limit = len(body) + 1
+            server, port = start_server(
+                args.php_bin, 2 * 1024 * 1024, router,
+                post_limit=post_limit, max_input_vars=max_vars,
+            )
+            try:
+                expected = php_post(port, body)
+                actual = rust_post(
+                    args.rust_bin, body, post_limit, max_input_vars=max_vars,
+                )
+                if expected != actual:
+                    raise AssertionError(f"PHP={expected!r} Rust={actual!r}")
+                checked += 1
+            except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+                failures += 1
+                print(
+                    f"FAIL quota {label} (max_input_vars={max_vars}): {error}",
                     file=sys.stderr,
                 )
             finally:

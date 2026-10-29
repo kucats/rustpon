@@ -91,3 +91,34 @@ fn cli_content_length_options_are_validated_before_reading() {
     assert!(huge.stdout.is_empty());
     assert!(String::from_utf8_lossy(&huge.stderr).contains("BodyBytes"));
 }
+
+#[test]
+fn cli_content_length_applies_http_sapi_var_counting() {
+    let cases: &[(&[u8], &str, &str, &str)] = &[
+        (b"a=1&b=2&c=3&d=4", "2", "63", "64"),
+        (b"&&a=1&b=2", "2", "61", "62"),
+        (b"a=1&=ignored&b=2&c=3", "1", "61", "62"),
+        (b"a=1&b=2", "0", "61", "62"),
+    ];
+    for &(body, limit, accepted, rejected) in cases {
+        let output = run(
+            &[
+                "--php-content-length",
+                &body.len().to_string(),
+                "--php-max-input-vars",
+                limit,
+            ],
+            body,
+        );
+        assert!(output.status.success(), "{limit}: {:?}", output.stderr);
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            stdout.contains(&format!(r#"["s","{accepted}"]"#)),
+            "{limit}: {stdout}"
+        );
+        assert!(
+            !stdout.contains(&format!(r#"["s","{rejected}"]"#)),
+            "{limit}: {stdout}"
+        );
+    }
+}

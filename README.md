@@ -155,6 +155,14 @@ printf 'a=1&b=2NEXT' | cargo run --offline --locked --bin urlencoded -- \\
 
 The Linux CI compares accepted and oversized URL-encoded POST trees with a
 real PHP 8.4 HTTP SAPI using `tools/differential_urlencoded_content_length.py`.
+When `--php-max-input-vars N` is combined with `--php-content-length`,
+the harness uses HTTP SAPI counting: separator-only blank pairs consume slots
+and PHP 8.4 HTTP SAPI accepts up to N+1 wire tokens (including ignored names).
+Without Content-Length, the same flag retains CLI `parse_str()` counting,
+which admits N nonblank tokens. The SAPI-specific Rust entry point is
+`parse_reader_with_php_content_length_sapi_vars`; its caller must project
+with `max_input_vars.saturating_add(1)`. These behaviors were measured against
+PHP 8.4.24 and are checked against the CI PHP 8.4 HTTP SAPI oracle.
 The CLI is a test harness: callers must validate HTTP Content-Length framing
 and independently enforce transport quotas before invoking the adapter.
 

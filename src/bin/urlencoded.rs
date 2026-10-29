@@ -73,12 +73,21 @@ fn run() -> Result<(), String> {
     // max_input_vars, even though they do not appear in the published tree.
     // Preserve their wire positions only when this PHP quota is requested.
     let request = if let Some(length) = php_content_length {
-        urlencoded::parse_reader_with_php_content_length(
-            &mut io::stdin().lock(),
-            Limits::default(),
-            length,
-            php_post_max_size,
-        )
+        if max_input_vars.is_some() {
+            urlencoded::parse_reader_with_php_content_length_sapi_vars(
+                &mut io::stdin().lock(),
+                Limits::default(),
+                length,
+                php_post_max_size,
+            )
+        } else {
+            urlencoded::parse_reader_with_php_content_length(
+                &mut io::stdin().lock(),
+                Limits::default(),
+                length,
+                php_post_max_size,
+            )
+        }
     } else if max_input_vars.is_some() {
         let separators: &[u8] = if let Some(ref separators) = php_arg_separators {
             separators.as_bytes()
@@ -121,6 +130,13 @@ fn run() -> Result<(), String> {
         urlencoded::parse_reader(&mut io::stdin().lock(), Limits::default())
     }
     .map_err(|error| format!("wire: {error:?}"))?;
+    // PHP 8.4 HTTP SAPI counts blank pairs and admits N+1 tokens with a
+    // configured max_input_vars=N. CLI parse_str() uses exactly N instead.
+    let max_input_vars = if php_content_length.is_some() {
+        max_input_vars.map(|limit| limit.saturating_add(1))
+    } else {
+        max_input_vars
+    };
     let post = match (max_input_vars, max_input_nesting_level) {
         (vars, Some(depth)) => request.into_post_with_php_limits(
             post::Limits::default(),
