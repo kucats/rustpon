@@ -1193,6 +1193,17 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
     Ok(Header::Disposition { name, filename })
 }
 
+// Staged data must not be written to an inode that another local account
+// can read, or into a private directory owned by a different account. The
+// directory owner is compared with the *opened* inode's owner so a privileged
+// caller cannot accidentally stage into an untrusted user's 0700 directory.
+// A restrictive umask may remove owner bits; only group/other access matters.
+fn private_staging_inode(metadata: &fs::Metadata, directory_owner: Option<u32>) -> bool {
+    metadata.is_file()
+        && directory_owner == Some(metadata.uid())
+        && metadata.permissions().mode() & 0o077 == 0
+}
+
 /// Filename creation is independent of client metadata. create_new prevents
 /// following an existing path; unlink happens before any payload is written.
 /// NEXT_UPLOAD is a name counter only, never a pointer to request state.
@@ -1265,6 +1276,7 @@ fn anonymous_upload_with_hooks(
                 // A mismatch fails closed; never unlink a different file.
                 let parent = path.parent().ok_or(Error::InvalidSpoolDirectory)?;
                 let directory = fs::symlink_metadata(parent);
+                let directory_owner = directory.as_ref().ok().map(MetadataExt::uid);
                 let entry = fs::symlink_metadata(&*path);
                 let opened = file.metadata();
                 let valid_directory = matches!(
@@ -1281,6 +1293,7 @@ fn anonymous_upload_with_hooks(
                         if entry.is_file()
                             && entry.dev() == opened.dev()
                             && entry.ino() == opened.ino()
+                            && private_staging_inode(&opened, directory_owner)
                 );
                 if !valid_directory || !valid_entry {
                     // A concurrent rename may leave an empty named file in
@@ -1296,6 +1309,7 @@ fn anonymous_upload_with_hooks(
                     // returning a writable descriptor. This narrows the
                     // pathname race window but does not replace openat/unlinkat.
                     let directory = fs::symlink_metadata(parent);
+                    let directory_owner = directory.as_ref().ok().map(MetadataExt::uid);
                     let valid_directory = matches!(
                         directory,
                         Ok(ref metadata)
@@ -1307,7 +1321,11 @@ fn anonymous_upload_with_hooks(
                     // A rename/hard-link race could leave the opened inode
                     // reachable under another name. Never write upload bytes
                     // unless the descriptor is genuinely anonymous.
-                    if !valid_directory || file.metadata()?.nlink() != 0 {
+                    let opened = file.metadata()?;
+                    if !valid_directory
+                        || !private_staging_inode(&opened, directory_owner)
+                        || opened.nlink() != 0
+                    {
                         Err(Error::InvalidSpoolDirectory)
                     } else {
                         Ok(file)
