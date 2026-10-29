@@ -2541,10 +2541,7 @@ fn upload_copy_is_independent_of_shared_file_offsets() {
             seek_to_end,
             writes: 0,
         };
-        assert_eq!(
-            upload.copy_to(&mut writer).unwrap(),
-            payload.len() as u64
-        );
+        assert_eq!(upload.copy_to(&mut writer).unwrap(), payload.len() as u64);
         assert!(writer.writes >= 3);
         assert_eq!(writer.output, payload);
     }
