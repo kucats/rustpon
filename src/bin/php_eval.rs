@@ -863,15 +863,15 @@ impl<'a> Parser<'a> {
         // probed without an undefined-variable warning. Other expressions
         // must be parsed normally, with the speculative work rolled back.
         if matches!(self.peek(), Some(b'$' | b'(')) {
-            if let Ok(variable) = self.parenthesized_variable(depth + 1) {
-                if self.consume(b')') {
-                    let value = self
-                        .bindings
-                        .iter()
-                        .find(|(key, _)| *key == variable)
-                        .map(|(_, value)| *value);
-                    return Ok(Value::Bool(value.is_none_or(|value| !value.as_bool())));
-                }
+            if let Ok(variable) = self.parenthesized_variable(depth + 1)
+                && self.consume(b')')
+            {
+                let value = self
+                    .bindings
+                    .iter()
+                    .find(|(key, _)| *key == variable)
+                    .map(|(_, value)| *value);
+                return Ok(Value::Bool(value.is_none_or(|value| !value.as_bool())));
             }
             self.offset = expression_start;
             self.work = work_before_probe;
