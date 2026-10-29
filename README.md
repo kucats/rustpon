@@ -1035,8 +1035,12 @@ false for undefined or null variables and accepts multiple simple variables
 with an optional trailing comma. `empty` additionally evaluates supported
 integer/boolean/null expressions, including arithmetic, comparisons, nested
 builtins and parentheses, then applies PHP truthiness. A bare undefined
-variable remains a notice-free probe. The original value tags are retained,
-and expression parsing obeys existing source, work and recursion limits.
+variable remains a notice-free probe. Redundant parentheses around a
+simple variable preserve this behavior: `isset((($missing)))` returns false
+and `empty((($missing)))` returns true, without an undefined-variable warning.
+Mixed parenthesized and bare operands in `isset()` are supported. The original
+value tags are retained, and expression parsing obeys existing source, work
+and recursion limits.
 
 The PHP 8.4 CLI differential suite compares defined/undefined variables,
 scalar expressions, nested probes and 256 generated expression programs.
