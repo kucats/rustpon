@@ -199,6 +199,26 @@ INLINE_TEMPLATE_PROGRAMS = [
 ]
 
 
+# With short_open_tag=0, only <?= and <?php followed by PHP opening-tag
+# whitespace (space, tab, CR, LF) or EOF resume PHP execution. All other
+# <? sequences, including XML declarations, remain literal inline HTML.
+INLINE_LITERAL_OPENERS = [
+    "echo 1 ?><?",
+    'echo 1 ?><?xml version="1.0"?>',
+    "echo 1 ?><?foo",
+    "echo 1 ?><?phpx echo 2;",
+    "echo 1 ?><?php?>",
+    "echo 1 ?><? echo 2 ?>",
+    "echo 1 ?><?PHPX",
+    "echo 1 ?><?php\\v echo 2;",
+    "echo 1 ?><?php\\f echo 2;",
+    "echo 1 ?>a<?xml?>b<?foo",
+    "echo 1 ?>\\r\\n<?xml",
+    "echo 1 ?><?xml\\n<?phpx",
+]
+
+
+
 # PHP 8.4 also uses ?> as the statement terminator for assignments,
 # compound assignments, standalone increment/decrement and unset().
 # The bounded VM emits terminal UTF-8 template bytes after the closing tag.
@@ -1254,7 +1274,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
