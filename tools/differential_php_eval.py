@@ -184,6 +184,21 @@ TERMINAL_CLOSE_TAG_PROGRAMS = [
 ]
 
 
+# PHP 8.4 emits terminal inline HTML after consuming one newline at ?>.
+# The bounded VM accepts only UTF-8 suffixes without another PHP opener.
+INLINE_TEMPLATE_PROGRAMS = [
+    "echo 1 ?>raw", "echo 1 ?>\n\n", "echo 1 ?>\r\r",
+    "print 2 ?>\t", "echo 1; ?>  ",
+    "echo 7; $x=1 ?>raw", "echo 7; $x=1; $x++ ?>raw",
+    "echo 7; unset($x) ?>raw", "echo 1; return 1; ?> trailing",
+    "echo 1; exit(0) ?>trailing", "echo 1; // ?>trailing",
+    "echo 1 ?>\nhello", "echo 1 ?>\r\nhello",
+    "echo 1 ?>\n\r\n", "echo 1; var_dump(3) ?>hi",
+    "echo 1; print_r(false) ?>yes", "echo 1; $x=1; $x+=2 ?>ok",
+    "echo 1 ?>\r\n\r\n",
+]
+
+
 # PHP 8.4 also uses ?> as the statement terminator for assignments,
 # compound assignments, standalone increment/decrement and unset().
 # The bounded VM rejects subsequent template bytes instead of dropping them.
@@ -1239,7 +1254,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1290,8 +1305,9 @@ def main():
         b"<?php 1/0;",
         b"<?php echo 1; 1/0;",
         b"<?php 1+;",
-        b"<?php 1+2 ?>raw",
-        b"<?php 1+2 ?>\n\n",
+        b"<?php echo 1 ?><?php echo 2;",
+        b"<?php echo 1 ?><?=2?>",
+        b"<?php echo 1 ?>\xff",
         b"<?php nonexistent(1);",
         b"<?php (1+2;",
         b"<?php 1+2 3;",
@@ -1306,27 +1322,10 @@ def main():
         b"<?= 1",
         b"<?= ;",
         b"<?= 1, ?>",
-        b"<?= 1 ?>trailing",
-        b"<?= 1 ?>\n\n",
         b"<?= 1; /* unterminated",
         b"<?= 1; exit(0); echo 2;",
         b"<?PHPecho 7;",
-        # The evaluator deliberately rejects raw template bytes following a
-        # close tag instead of silently discarding PHP's observable output.
-        b"<?php echo 1 ?> ",
-        b"<?php echo 1 ?>text",
         b"<?php echo 7; $x= ?>",
-        b"<?php echo 7; $x=1 ?>raw",
-        b"<?php echo 7; $x=1 ?>\\n\\n",
-        b"<?php echo 7; $x=1; $x+=2 ?> ",
-        b"<?php echo 7; $x=1; $x++ ?>raw",
-        b"<?php echo 7; $x=1; ++$x ?>raw",
-        b"<?php echo 7; unset($x) ?>raw",
-        b"<?php echo 1 ?>\n\n",
-        b"<?php echo 1; ?>\r\r",
-        b"<?php print 2 ?>\t",
-        b"<?php return 1; ?> ",
-        b"<?php exit(0); ?>trailing",
         b"<?php echo 1; exit(1,2);",
         b"<?php echo 1; exit(1/0);",
         b"<?php echo 1; exit($missing);",
@@ -1339,7 +1338,6 @@ def main():
         b"<?php echo 1; /*/",
         b"<?php echo 1; /* never closes\n",
         b"<?php echo 1; #[A] echo 2;",
-        b"<?php echo 1; // ?>trailing",
         b"<?php echo intdiv(9,3,,);",
         b"<?php echo intdiv(9,);",
         b"<?php echo abs(1,,);",
@@ -1376,7 +1374,6 @@ def main():
         b"<?php echo 1; return 1/0;",
         b"<?php echo 1; return $missing;",
         b"<?php echo 1; return 1; echo 2;",
-        b"<?php echo 1; return 1; ?> trailing",
         b"<?php echo 1; return 1",
         b"<?php echo 1; return; /* unterminated",
         b"<?php return 1,2;",
@@ -1388,7 +1385,6 @@ def main():
         b"<?php echo 1; echo 1/0;",
         b"<?php echo 1; echo $missing;",
         b"<?php echo 1; echo 2; unknown;",
-        b"<?php echo 1; ?> trailing",
         b"<?php print 1,2;",
         b"<?php echo 1,;",
         b"<?php echo 1,,2;",
@@ -1860,7 +1856,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-utf8-template/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "

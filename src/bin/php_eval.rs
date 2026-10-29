@@ -195,10 +195,8 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // A PHP closing tag terminates the current statement. PHP consumes one
-    // immediately following LF, CR, or CRLF. Other bytes are raw template
-    // output, which this bounded evaluator cannot represent: reject them
-    // rather than silently dropping observable output.
+    // PHP consumes one newline after ?> before emitting template bytes.
+    // This subset accepts a terminal UTF-8 suffix but no PHP re-entry.
     fn terminal_close_tag(&mut self) -> Result<bool, EvalError> {
         self.skip_space();
         if !self.source[self.offset..].starts_with(b"?>") {
@@ -206,12 +204,24 @@ impl<'a> Parser<'a> {
         }
         self.offset += 2;
         let trailing = &self.source[self.offset..];
-        if trailing.is_empty() || trailing == b"\n" || trailing == b"\r" || trailing == b"\r\n" {
-            self.offset = self.source.len();
-            Ok(true)
+        let newline_len = if trailing.starts_with(b"\r\n") {
+            2
+        } else if trailing.starts_with(b"\r") || trailing.starts_with(b"\n") {
+            1
         } else {
-            Err(EvalError::TrailingInput)
+            0
+        };
+        let template = &trailing[newline_len..];
+        if template.windows(2).any(|pair| pair == b"<?") {
+            return Err(EvalError::TrailingInput);
         }
+        let text = std::str::from_utf8(template).map_err(|_| EvalError::TrailingInput)?;
+        if self.output.len().saturating_add(text.len()) > MAX_OUTPUT {
+            return Err(EvalError::OutputLimit);
+        }
+        self.output.push_str(text);
+        self.offset = self.source.len();
+        Ok(true)
     }
 
     fn charge(&mut self) -> Result<(), EvalError> {
@@ -1680,7 +1690,10 @@ impl<'a> Parser<'a> {
                     }
                     value
                 };
+                // A top-level return suppresses unreachable template bytes.
+                let previous = self.output.len();
                 self.terminal_close_tag()?;
+                self.output.truncate(previous);
                 return if self.offset == self.source.len() {
                     Ok(value)
                 } else {
@@ -1727,7 +1740,10 @@ impl<'a> Parser<'a> {
                 if !self.consume(b';') && !self.source[self.offset..].starts_with(b"?>") {
                     return Err(EvalError::Syntax);
                 }
+                // exit/die also suppresses unreachable template bytes.
+                let previous = self.output.len();
                 self.terminal_close_tag()?;
+                self.output.truncate(previous);
                 if self.offset != self.source.len() {
                     return Err(EvalError::TrailingInput);
                 }
@@ -1897,8 +1913,6 @@ mod tests {
             "<?php 1/0;",
             "<?php echo 1; 1/0;",
             "<?php 1+;",
-            "<?php 1+2 ?>raw",
-            "<?php 1+2 ?>\n\n",
             "<?php nonexistent(1);",
             "<?php (1+2;",
             "<?php 1+2 3;",
@@ -1941,15 +1955,9 @@ mod tests {
     }
 
     #[test]
-    fn php84_terminal_close_tag_rejects_raw_template_and_bad_mutations() {
+    fn php84_terminal_close_tag_rejects_bad_mutations() {
         for program in [
             "<?php echo 7; $x= ?>",
-            "<?php echo 7; $x=1 ?>raw",
-            "<?php echo 7; $x=1 ?>\n\n",
-            "<?php echo 7; $x=1; $x+=2 ?> ",
-            "<?php echo 7; $x=1; $x++ ?>raw",
-            "<?php echo 7; $x=1; ++$x ?>raw",
-            "<?php echo 7; unset($x) ?>raw",
         ] {
             let mut parser = Parser::new(program.as_bytes());
             assert!(parser.evaluate().is_err(), "{program:?}");
@@ -2293,8 +2301,6 @@ mod tests {
             "<?= 1",
             "<?= ;",
             "<?= 1, ?>",
-            "<?= 1 ?>trailing",
-            "<?= 1 ?>\n\n",
             "<?= 1; /* unterminated",
             "<?= 1; exit(0); echo 2;",
             "<?PHPecho 7;",
@@ -2380,21 +2386,49 @@ mod tests {
             assert!(parser.evaluate().is_ok(), "{program:?}");
             assert_eq!(parser.output, output, "{program:?}");
         }
-        for program in [
-            "echo 1 ?> ",
-            "echo 1 ?>text",
-            "echo 1 ?>\n\n",
-            "echo 1; ?>\r\r",
-            "print 2 ?>\t",
-            "return 1; ?> ",
-            "exit(0); ?>trailing",
-        ] {
+        for program in ["echo 1 ?><?php echo 2;", "echo 1 ?><?=2?>"] {
             assert_eq!(
                 Parser::new(program.as_bytes()).evaluate(),
                 Err(EvalError::TrailingInput),
                 "{program:?}"
             );
         }
+    }
+
+    #[test]
+    fn php84_terminal_template_output_and_limits() {
+        for (program, output) in [
+            ("echo 1 ?>raw", "1raw"),
+            ("echo 1 ?>\nhello", "1hello"),
+            ("echo 1 ?>\r\nhello", "1hello"),
+            ("echo 1 ?>\n\n", "1\n"),
+            ("echo 1 ?>\r\r", "1\r"),
+            ("print 2 ?>\t", "2\t"),
+            ("echo 1; ?>  ", "1  "),
+            ("echo 7; $x=1 ?>raw", "7raw"),
+            ("echo 7; $x=1; $x++ ?>raw", "7raw"),
+            ("echo 7; unset($x) ?>raw", "7raw"),
+            ("echo 1; // ?>trailing", "1trailing"),
+            ("echo 1 ?>日本語", "1日本語"),
+            ("echo 1; return 1; ?> trailing", "1"),
+            ("echo 1; exit(0) ?>trailing", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, output, "{program:?}");
+        }
+        let at_limit = format!("echo 1 ?>{}", "x".repeat(MAX_OUTPUT - 1));
+        let mut parser = Parser::new(at_limit.as_bytes());
+        assert!(parser.evaluate().is_ok());
+        assert_eq!(parser.output.len(), MAX_OUTPUT);
+        let too_long = format!("echo 1 ?>{}", "x".repeat(MAX_OUTPUT));
+        let mut parser = Parser::new(too_long.as_bytes());
+        assert_eq!(parser.evaluate(), Err(EvalError::OutputLimit));
+        assert_eq!(parser.output.len(), 1);
+        assert_eq!(
+            Parser::new(b"echo 1 ?>\xff").evaluate(),
+            Err(EvalError::TrailingInput)
+        );
     }
 
     #[test]
@@ -4396,7 +4430,6 @@ mod tests {
             "echo 1; /*/",
             "echo 1; /* never closes\n",
             "echo 1; #[A] echo 2;",
-            "echo 1; // ?>trailing",
         ] {
             assert!(
                 Parser::new(program.as_bytes()).evaluate().is_err(),

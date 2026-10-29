@@ -654,7 +654,7 @@ unsupported PHP attributes rather than misread as a hash comment.
 Unterminated block comments (including the overlapping `/*/` sequence)
 fail closed without publishing buffered output. Source-size and work
 budgets still apply. This does not add general PHP lexical modes,
-string interpolation, attributes, or HTML-template output.
+string interpolation, attributes, or mixed PHP/HTML/PHP templates.
 
 Fixed and seeded comment-placement cases are compared byte-for-byte
 with the installed PHP 8.4 CLI, while malformed and unterminated
@@ -751,7 +751,7 @@ string values, and arbitrary calls are not yet implemented.
 
 The PHP 8.4 CLI differential corpus includes fixed examples, 64 seeded
 arithmetic statements, and strict rejection cases for malformed syntax,
-runtime errors, and trailing raw template bytes.
+runtime errors, and unsupported PHP re-entry after terminal template bytes.
 
 ## PHP 8.4 ordered output and local statement execution (research evaluator)
 
@@ -1494,12 +1494,13 @@ The CLI differential corpus includes the mutation/unset cases and checks
 their observable output against PHP 8.4; Rust regressions cover the
 corresponding parse and rejection boundaries.
 
-Any further template bytes (including spaces) are rejected rather than
-silently discarded, since the research evaluator has no HTML/template-output
-mode. The differential corpus checks accepted output byte-for-byte against
-PHP 8.4 CLI and verifies PHP's observable template bytes for rejected cases.
-This does not implement mixed PHP/HTML scripts or PHP's complete closing-tag
-grammar.
+A final UTF-8 template suffix is emitted byte-for-byte after PHP consumes
+one immediately following CR, LF or CRLF. All output, including template
+bytes, shares the 1,024-byte transactional quota. Top-level return/exit
+suppress unreachable template output. Further PHP opening tags and non-UTF-8
+template bytes fail closed; mixed PHP/HTML/PHP scripts and binary templates
+still require a dedicated lexer and byte-oriented output buffer.
+The differential corpus checks terminal template output against PHP 8.4 CLI.
 
 ### PHP 8.4 trailing commas in scalar builtins (research evaluator)
 
@@ -1522,8 +1523,9 @@ may terminate the statement without a semicolon. The PHP 8.4 CLI differential
 suite compares the output bytes of these tag forms, including mixed-case
 long tags, comments, magic line numbers, and subsequent statements.
 
-A short echo still requires a semicolon or closing tag; unsupported raw
-template output and unreachable code after `exit` remain rejected.
+A short echo still requires a semicolon or closing tag; terminal UTF-8
+template output is supported, while PHP re-entry and unreachable PHP code
+after `exit` remain rejected.
 This does not implement general mixed HTML/PHP templates or short `<?`
 tags. Output is committed only after the complete supported program succeeds.
 
