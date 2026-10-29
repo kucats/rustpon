@@ -259,8 +259,14 @@ An additional opt-in PHP 8.4 nesting slice is exposed by
 max_input_nesting_level)` and the `urlencoded` CLI flags
 `--php-max-input-vars` and `--php-max-input-nesting-level`.
 Ordinary fields exceeding the nesting level are discarded while later fields
-are retained; discarded fields still count toward `max_input_vars`. The
-wire parser's hard limits and FILES upload-name policy remain strict.
+are retained; discarded fields still count toward `max_input_vars`. As in
+PHP 8.4, an over-depth field also removes any previously registered top-level
+variable with the same normalized root name. A later valid field recreates
+that root at its new insertion-order position; numeric root keys follow PHP
+integer-key matching. Fields already excluded by `max_input_vars` do not
+trigger this removal. Detached nodes remain charged against the adapter's
+resource limits. The wire parser's hard limits and FILES upload-name policy
+remain strict.
 Differential tests compare the resulting tagged trees with PHP CLI
 `parse_str()` under explicit `-d max_input_nesting_level` and
 `-d max_input_vars` settings, including zero, boundary and combined cases.
