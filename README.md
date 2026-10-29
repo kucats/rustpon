@@ -1662,9 +1662,16 @@ Only `<?=` or a case-insensitive `<?php` followed by a space, tab, CR,
 LF, or EOF is recognized as a PHP opening tag. A recognized PHP re-entry
 after the terminal suffix is still rejected rather than interpreted.
 The same 1,024-byte cumulative output cap applies to literal HTML.
+A UTF-8 BOM directly preceding a recognized leading PHP opening tag is
+preserved as three output bytes, before PHP expression output, matching
+PHP 8.4 CLI. The BOM counts against the shared output quota. Other leading
+HTML (including a BOM followed by arbitrary text) remains unsupported until
+a general PHP/HTML mode-switching lexer is available.
 The differential test suite compares this narrow behavior with PHP 8.4 CLI,
-including byte-for-byte non-UTF-8 templates and 1,024-byte output limits;
-it does not claim complete PHP template or binary-output support.
+including byte-for-byte non-UTF-8 templates, BOM-prefixed scripts, and
+exact/one-byte-over 1,024-byte output boundaries. A stale strict-rejection
+case for valid binary HTML was corrected after Linux CI detected it;
+this does not claim complete PHP template or binary-output support.
 
 ## PHP 8.4 error-reporting constants (research evaluator)
 
