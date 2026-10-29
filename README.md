@@ -116,7 +116,13 @@ inode whose on-disk length matches the recorded upload length. A mismatch
 fails before writing destination bytes; this is a point-in-time integrity
 check. A second metadata check after copying detects persistent permission, link-count,
 or length changes during the write (including a destination writer mutating a
-cloned source descriptor). A failed copy can already have emitted bytes, so
+cloned source descriptor). It also compares pre/post inode modification and
+change timestamps, detecting many same-length content rewrites and restored
+permission changes. Timestamp checks are not atomic and cannot detect every
+concurrent rewrite (including clock-granularity or timestamp-restoration
+cases). A deterministic fault-injection test rewrites an already-copied byte
+without changing file size; the PHP 8.4 HTTP SAPI differential corpus also
+covers a three-block binary upload. A failed copy can already have emitted bytes, so
 callers must discard the destination on **every** copy error. Neither check
 provides an atomic source snapshot or detects same-length in-place rewrites.
 This rejects privileged staging into a
