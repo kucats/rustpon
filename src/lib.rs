@@ -151,7 +151,7 @@ pub struct Upload {
 
 // The source is checked before and after copying. A failed postflight
 // requires the caller to discard all destination bytes already written.
-fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<()> {
+fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<fs::Metadata> {
     let metadata = file.metadata()?;
     if !metadata.is_file()
         || metadata.nlink() != 0
@@ -160,7 +160,7 @@ fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<
     {
         return Err(io::ErrorKind::InvalidData.into());
     }
-    Ok(())
+    Ok(metadata)
 }
 
 impl Upload {
@@ -189,7 +189,7 @@ impl Upload {
         // original directory and can be modified by local code holding it.
         // Reject tampering before emitting any bytes. This is a point-in-time
         // check, not a substitute for descriptor-relative upload creation.
-        validate_staged_copy_source(file, self.length)?;
+        let source_before = validate_staged_copy_source(file, self.length)?;
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = self.length;
         let mut buffer = [0_u8; BLOCK];
@@ -219,7 +219,19 @@ impl Upload {
         // change its permissions or length during copy. Detect persistent
         // mutation before reporting success. This is not an atomic snapshot:
         // the caller must discard destination bytes on any error.
-        validate_staged_copy_source(file, self.length)?;
+        let source_after = validate_staged_copy_source(file, self.length)?;
+        // A same-length rewrite (or a permission change later reverted)
+        // can leave all the static inode checks satisfied. Detect metadata
+        // timestamp changes across the copy as an additional fault signal.
+        // This is not an atomic snapshot: coarse clocks and deliberate
+        // timestamp restoration can still evade detection.
+        if source_before.mtime() != source_after.mtime()
+            || source_before.mtime_nsec() != source_after.mtime_nsec()
+            || source_before.ctime() != source_after.ctime()
+            || source_before.ctime_nsec() != source_after.ctime_nsec()
+        {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
         Ok(self.length)
     }
 }
