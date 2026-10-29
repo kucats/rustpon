@@ -2574,9 +2574,8 @@ fn upload_copy_stops_after_first_short_write_when_source_changes() {
                     // Same-size mutation, with a deterministic timestamp
                     // change even on coarse-resolution filesystems.
                     self.source.write_at(b"!", 0)?;
-                    self.source.set_times(
-                        fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH),
-                    )?;
+                    self.source
+                        .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))?;
                 } else {
                     self.source
                         .set_permissions(fs::Permissions::from_mode(0o644))?;
