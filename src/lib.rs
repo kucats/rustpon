@@ -192,7 +192,10 @@ fn validate_staged_copy_bytes(file: &File, offset: u64, expected: &[u8]) -> io::
     let mut received = 0;
     let mut interrupts = 0;
     while received < expected.len() {
-        match file.read_at(&mut actual[received..expected.len()], offset + received as u64) {
+        match file.read_at(
+            &mut actual[received..expected.len()],
+            offset + received as u64,
+        ) {
             Ok(0) => return Err(io::ErrorKind::InvalidData.into()),
             Ok(count) => {
                 received += count;
