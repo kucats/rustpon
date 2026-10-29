@@ -2427,3 +2427,62 @@ fn upload_copy_detects_source_mutation_during_destination_write() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_detects_same_length_rewrite_during_destination_write() {
+    use std::os::unix::fs::FileExt;
+
+    struct RewritingWriter {
+        output: Vec<u8>,
+        source: File,
+        rewritten: bool,
+    }
+
+    impl Write for RewritingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(bytes);
+            if !self.rewritten {
+                // Rewrite an already-copied byte without changing file length,
+                // link count or permissions. Force a distinct mtime even on
+                // filesystems with coarse timestamp resolution.
+                self.source.write_at(b"!", 0)?;
+                self.source
+                    .set_times(fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH))?;
+                self.rewritten = true;
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let spool = Spool::new();
+    let payload = vec![b'x'; BLOCK + 1];
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let mut writer = RewritingWriter {
+        output: Vec::new(),
+        source: upload.file.as_ref().unwrap().try_clone().unwrap(),
+        rewritten: false,
+    };
+    assert_eq!(
+        upload.copy_to(&mut writer).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(writer.rewritten);
+    // The destination has received a complete copy, but must be discarded.
+    assert_eq!(writer.output, payload);
+
+    // Repairing the source allows a new copy with its own metadata baseline.
+    upload.file.as_ref().unwrap().write_at(b"x", 0).unwrap();
+    let mut recovered = Vec::new();
+    assert_eq!(
+        upload.copy_to(&mut recovered).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(recovered, payload);
+    drop(request);
+    spool.empty();
+}
