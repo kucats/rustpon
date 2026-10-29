@@ -61,6 +61,7 @@ CASES = [
     ("file-block-plus-one", [(b"upload", b"\x00\xff" + b"x" * (8192 - 1), b"after.bin")]),
     ("file-exact-two-blocks", [(b"upload", b"\x00\xff" + b"x" * (16384 - 2), b"two.bin")]),
     ("file-multi-buffer-copy", [(b"upload", b"\x00\xff" + b"x" * (8192 + 17), b"large.bin")]),
+    ("file-three-blocks-binary", [(b"upload", bytes(range(256)) * 96 + b"\xff", b"three.bin")]),
     ("two-files", [(b"upload", b"first", b"one.bin"),
                    (b"attachment", b"second", b"two.bin")]),
     ("nested-files", [(b"f[x][]", b"first", b"one.bin"),
