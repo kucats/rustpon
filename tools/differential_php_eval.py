@@ -201,7 +201,7 @@ INLINE_TEMPLATE_PROGRAMS = [
 
 # PHP 8.4 also uses ?> as the statement terminator for assignments,
 # compound assignments, standalone increment/decrement and unset().
-# The bounded VM rejects subsequent template bytes instead of dropping them.
+# The bounded VM emits terminal UTF-8 template bytes after the closing tag.
 TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS = [
     "$x=1 ?>",
     "echo 7; $x=1 ?>",
@@ -1722,8 +1722,8 @@ def main():
                 file=sys.stderr,
             )
 
-    # These rejected programs are valid PHP 8.4: PHP emits raw template
-    # bytes after the closing tag, which the Rust subset cannot represent.
+    # Cross-check previously unsupported terminal template output in both
+    # implementations, including the consumed first newline.
     for index, (code, expected) in enumerate([
         (b"<?php echo 1 ?> ", b"1 "),
         (b"<?php echo 1 ?>text", b"1text"),
@@ -1732,11 +1732,15 @@ def main():
         (b"<?php print 2 ?>\t", b"2\t"),
     ]):
         php = execute([args.php_bin, "-d", "display_errors=0"], code)
-        if php.returncode != 0 or php.stdout != expected:
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode != 0 or php.stdout != expected
+                or rust.returncode != 0 or rust.stdout != expected):
             failures += 1
             print(
                 f"FAIL close_tag_template={index} "
-                f"php={php.returncode}:{php.stdout[:80]!r} expected={expected!r}",
+                f"php={php.returncode}:{php.stdout[:80]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r} "
+                f"expected={expected!r}",
                 file=sys.stderr,
             )
 
