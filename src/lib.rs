@@ -149,8 +149,8 @@ pub struct Upload {
     no_tmp_dir: bool,
 }
 
-// The source is checked before and after copying. A failed postflight
-// requires the caller to discard all destination bytes already written.
+// The source is checked before copying and after each emitted block.
+// A failed check requires the caller to discard destination bytes.
 fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<fs::Metadata> {
     let metadata = file.metadata()?;
     if !metadata.is_file()
@@ -161,6 +161,25 @@ fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<
         return Err(io::ErrorKind::InvalidData.into());
     }
     Ok(metadata)
+}
+
+// Compare against the initial inode snapshot after every emitted block, not
+// only after the final block. This bounds further output following observable
+// source tampering; it is not an atomic snapshot or a rollback mechanism.
+fn validate_staged_copy_snapshot(
+    file: &File,
+    expected_length: u64,
+    baseline: &fs::Metadata,
+) -> io::Result<()> {
+    let current = validate_staged_copy_source(file, expected_length)?;
+    if baseline.mtime() != current.mtime()
+        || baseline.mtime_nsec() != current.mtime_nsec()
+        || baseline.ctime() != current.ctime()
+        || baseline.ctime_nsec() != current.ctime_nsec()
+    {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(())
 }
 
 impl Upload {
@@ -217,25 +236,15 @@ impl Upload {
                 Err(error) => return Err(error),
             };
             write_chunk(output, &buffer[..count])?;
+            // A writer may mutate the staged inode through a cloned FD.
+            // Stop before reading/emitting the next block when the mutation
+            // is observable. Already-written bytes still require rollback
+            // by the caller.
+            validate_staged_copy_snapshot(file, self.length, &source_before)?;
             offset += count as u64;
         }
-        // A destination writer can hold a cloned source descriptor and
-        // change its permissions or length during copy. Detect persistent
-        // mutation before reporting success. This is not an atomic snapshot:
-        // the caller must discard destination bytes on any error.
-        let source_after = validate_staged_copy_source(file, self.length)?;
-        // A same-length rewrite (or a permission change later reverted)
-        // can leave all the static inode checks satisfied. Detect metadata
-        // timestamp changes across the copy as an additional fault signal.
-        // This is not an atomic snapshot: coarse clocks and deliberate
-        // timestamp restoration can still evade detection.
-        if source_before.mtime() != source_after.mtime()
-            || source_before.mtime_nsec() != source_after.mtime_nsec()
-            || source_before.ctime() != source_after.ctime()
-            || source_before.ctime_nsec() != source_after.ctime_nsec()
-        {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
+        // Also validate zero-byte uploads, for which the loop does not run.
+        validate_staged_copy_snapshot(file, self.length, &source_before)?;
         Ok(self.length)
     }
 }
