@@ -815,8 +815,11 @@ statements alongside `echo expression;`, including the parenthesized
 form `print(expression);`. Both keywords are case-insensitive, matching PHP
 8.4. The interpreter evaluates the existing integer/boolean/null subset and
 writes its bytes only after the complete program passes validation. PHP
-`print` returns integer 1 when used as an expression; that form remains
-unsupported. Terminal `echo` accepts
+`print` also works inside supported scalar expressions and returns the
+integer 1 after emitting its operand. For example, `echo print 7;`
+produces `71`, while `echo (print 0)+(print 1);` produces `012`.
+Nested print operands, case-insensitive spelling, and output order are
+compared byte-for-byte with PHP 8.4 CLI. Terminal `echo` accepts
 comma-separated scalar expressions (for example, `echo 1, true, null, 2;`),
 concatenating their PHP 8.4 string representations without separators. `print`
 still accepts exactly one expression. A separate 1024-byte output quota
