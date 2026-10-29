@@ -2704,7 +2704,9 @@ fn upload_copy_readback_rejects_same_size_drift_and_truncation() {
 
     validate_staged_copy_bytes(&source, 0, &payload[..BLOCK]).unwrap();
     validate_staged_copy_bytes(&source, BLOCK as u64, &payload[BLOCK..BLOCK * 2]).unwrap();
-    source.write_at(&[payload[BLOCK - 1] ^ 0xff], (BLOCK - 1) as u64).unwrap();
+    source
+        .write_at(&[payload[BLOCK - 1] ^ 0xff], (BLOCK - 1) as u64)
+        .unwrap();
     assert_eq!(
         validate_staged_copy_bytes(&source, 0, &payload[..BLOCK])
             .unwrap_err()
@@ -2712,7 +2714,9 @@ fn upload_copy_readback_rejects_same_size_drift_and_truncation() {
         io::ErrorKind::InvalidData
     );
 
-    source.write_at(&payload[BLOCK - 1..BLOCK], (BLOCK - 1) as u64).unwrap();
+    source
+        .write_at(&payload[BLOCK - 1..BLOCK], (BLOCK - 1) as u64)
+        .unwrap();
     let mut copied = Vec::new();
     assert_eq!(upload.copy_to(&mut copied).unwrap(), payload.len() as u64);
     assert_eq!(copied, payload);
