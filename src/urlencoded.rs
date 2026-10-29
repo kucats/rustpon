@@ -445,8 +445,7 @@ pub fn parse_reader_with_php_content_length(
             stats: Stats::default(),
         });
     }
-    let over_php_limit =
-        php_post_max_bytes.is_some_and(|max| max != 0 && content_length > max);
+    let over_php_limit = php_post_max_bytes.is_some_and(|max| max != 0 && content_length > max);
     let mut parser = if over_php_limit {
         None
     } else {
@@ -538,39 +537,27 @@ mod tests {
         );
 
         let mut reader = Cursor::new(b"=ignored&a=1".to_vec());
-        let request = parse_reader_with_php_content_length(
-            &mut reader,
-            Limits::default(),
-            12,
-            Some(0),
-        )
-        .unwrap();
+        let request =
+            parse_reader_with_php_content_length(&mut reader, Limits::default(), 12, Some(0))
+                .unwrap();
         assert_eq!(fields(&request)[0].0, b"".to_vec());
     }
 
     #[test]
     fn php_content_length_preflight_drains_without_parsing_or_overreading() {
         let mut reader = Cursor::new(b"bad=%00&still=hereNEXT".to_vec());
-        let request = parse_reader_with_php_content_length(
-            &mut reader,
-            Limits::default(),
-            18,
-            Some(17),
-        )
-        .unwrap();
+        let request =
+            parse_reader_with_php_content_length(&mut reader, Limits::default(), 18, Some(17))
+                .unwrap();
         assert_eq!(reader.position(), 18);
         assert_eq!(request.stats().body_bytes, 18);
         assert_eq!(request.stats().parts, 0);
         assert!(fields(&request).is_empty());
 
         let mut reader = Cursor::new(b"a=1".to_vec());
-        let request = parse_reader_with_php_content_length(
-            &mut reader,
-            Limits::default(),
-            0,
-            Some(1),
-        )
-        .unwrap();
+        let request =
+            parse_reader_with_php_content_length(&mut reader, Limits::default(), 0, Some(1))
+                .unwrap();
         assert_eq!(reader.position(), 0);
         assert!(fields(&request).is_empty());
 
@@ -596,13 +583,8 @@ mod tests {
         for php_max in [None, Some(1)] {
             let mut short = Cursor::new(b"a=1".to_vec());
             assert_eq!(
-                parse_reader_with_php_content_length(
-                    &mut short,
-                    Limits::default(),
-                    4,
-                    php_max,
-                )
-                .unwrap_err(),
+                parse_reader_with_php_content_length(&mut short, Limits::default(), 4, php_max,)
+                    .unwrap_err(),
                 Error::Truncated
             );
         }
@@ -613,23 +595,13 @@ mod tests {
             }
         }
         assert_eq!(
-            parse_reader_with_php_content_length(
-                &mut Overreport,
-                Limits::default(),
-                3,
-                None,
-            )
-            .unwrap_err(),
+            parse_reader_with_php_content_length(&mut Overreport, Limits::default(), 3, None,)
+                .unwrap_err(),
             Error::Io(std::io::ErrorKind::InvalidData)
         );
         assert_eq!(
-            parse_reader_with_php_content_length(
-                &mut Overreport,
-                Limits::default(),
-                3,
-                Some(1),
-            )
-            .unwrap_err(),
+            parse_reader_with_php_content_length(&mut Overreport, Limits::default(), 3, Some(1),)
+                .unwrap_err(),
             Error::Io(std::io::ErrorKind::InvalidData)
         );
     }
