@@ -64,6 +64,11 @@ CASES = [
     ("file-three-blocks-binary", [(b"upload", bytes(range(256)) * 96 + b"\xff", b"three.bin")]),
     # Short-write regression companion: PHP SAPI must preserve every binary byte.
     ("file-short-write-oracle", [(b"upload", bytes((i * 47 + 3) % 256 for i in range(8192 * 2 + 9)), b"short-write.bin")]),
+    # Post-read/pre-write integrity-check companion: verify unchanged binary
+    # uploads still match the PHP 8.4 HTTP SAPI across multiple read blocks.
+    ("file-prewrite-snapshot-oracle", [
+        (b"upload", bytes((i * 19 + 7) % 256 for i in range(8192 * 2 + 3)), b"snapshot.bin")
+    ]),
     # Distinct data at every copy boundary: catch skipped/repeated source blocks.
     ("file-offset-sensitive-binary", [(b"upload", bytes((i * 31 + 17) % 251 for i in range(8192 * 2 + 17)), b"offset.bin")]),
     # More than four copy blocks, exercising every post-write source check.
