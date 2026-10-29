@@ -119,17 +119,19 @@ other code seeking through a cloned descriptor cannot skip or duplicate
 blocks during the copy; this does not protect against concurrent writes to
 the source inode. A mismatch
 fails before writing destination bytes; this is a point-in-time integrity
-check. A second metadata check after copying detects persistent permission, link-count,
-or length changes during the write (including a destination writer mutating a
-cloned source descriptor). It also compares pre/post inode modification and
-change timestamps, detecting many same-length content rewrites and restored
-permission changes. Timestamp checks are not atomic and cannot detect every
+check. Metadata is revalidated after **each emitted 8192-byte block**, as well
+as after the loop (including empty uploads). Persistent permission, link-count,
+or length changes, and modifications to inode mtime/ctime, now abort before
+subsequent blocks are emitted. Deterministic fault injection checks that a
+destination writer mutating a cloned source descriptor after the first block
+cannot receive the remaining blocks, including same-length rewrites. PHP 8.4
+HTTP SAPI differential coverage includes binary uploads spanning more than
+four blocks. Timestamp checks are not atomic and cannot detect every
 concurrent rewrite (including clock-granularity or timestamp-restoration
-cases). A deterministic fault-injection test rewrites an already-copied byte
-without changing file size; the PHP 8.4 HTTP SAPI differential corpus also
-covers a three-block binary upload. A failed copy can already have emitted bytes, so
-callers must discard the destination on **every** copy error. Neither check
-provides an atomic source snapshot or detects same-length in-place rewrites.
+cases). A failed copy may already have emitted a prefix, so callers **must
+discard the entire destination on every copy error**. Per-block validation
+does not provide an atomic source snapshot or guarantee detection of
+same-length in-place rewrites.
 This rejects privileged staging into a
 private directory owned by another local account and injected inode permission
 relaxation before request data is written. Deterministic fault-injection tests cover directory retargeting,
