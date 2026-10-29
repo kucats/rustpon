@@ -58,7 +58,11 @@ fn cli_php_post_max_size_discards_only_when_exceeded() {
 fn cli_content_length_zero_ignores_stdin_and_truncation_fails_closed() {
     let empty = run(&["--php-content-length", "0"], b"a=1");
     assert!(empty.status.success(), "{:?}", empty.stderr);
-    assert!(String::from_utf8(empty.stdout).unwrap().contains(r#""post_tree":["a",[]]"#));
+    assert!(
+        String::from_utf8(empty.stdout)
+            .unwrap()
+            .contains(r#""post_tree":["a",[]]"#)
+    );
 
     let short = run(&["--php-content-length", "10"], b"a=1");
     assert!(!short.status.success());
