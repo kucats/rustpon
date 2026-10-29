@@ -2067,7 +2067,7 @@ mod tests {
             ("$x=2; echo pow($x++,3),$x;", "83"),
             ("echo pow(2,3)+1;", "9"),
             ("echo pow(2,3) ?>", "8"),
-            ("echo pow(var_dump(1),0);", "int(1)\\n1"),
+            ("echo pow(var_dump(1),0);", "int(1)\n1"),
             ("echo pow(2,3),pow(3,2);", "89"),
         ] {
             let mut parser = Parser::new(program.as_bytes());
