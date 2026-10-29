@@ -1948,7 +1948,10 @@ mod tests {
             let mut parser = Parser::new(program.as_bytes());
             assert!(parser.evaluate().is_err(), "{program:?}");
         }
-        let excess = format!("<?php echo print PHP_INT_MAX;{}", "print PHP_INT_MAX;".repeat(55));
+        let excess = format!(
+            "<?php echo print PHP_INT_MAX;{}",
+            "print PHP_INT_MAX;".repeat(55)
+        );
         assert_eq!(
             Parser::new(excess.as_bytes()).evaluate(),
             Err(EvalError::OutputLimit)
