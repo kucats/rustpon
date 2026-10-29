@@ -1128,6 +1128,23 @@ impl<'a> Parser<'a> {
                 (b"UPLOAD_ERR_NO_TMP_DIR".as_slice(), Value::Int(6)),
                 (b"UPLOAD_ERR_CANT_WRITE".as_slice(), Value::Int(7)),
                 (b"UPLOAD_ERR_EXTENSION".as_slice(), Value::Int(8)),
+                // PHP 8.4 error-reporting bitmask constants (E_ALL excludes E_STRICT).
+                (b"E_ERROR".as_slice(), Value::Int(1)),
+                (b"E_WARNING".as_slice(), Value::Int(2)),
+                (b"E_PARSE".as_slice(), Value::Int(4)),
+                (b"E_NOTICE".as_slice(), Value::Int(8)),
+                (b"E_CORE_ERROR".as_slice(), Value::Int(16)),
+                (b"E_CORE_WARNING".as_slice(), Value::Int(32)),
+                (b"E_COMPILE_ERROR".as_slice(), Value::Int(64)),
+                (b"E_COMPILE_WARNING".as_slice(), Value::Int(128)),
+                (b"E_USER_ERROR".as_slice(), Value::Int(256)),
+                (b"E_USER_WARNING".as_slice(), Value::Int(512)),
+                (b"E_USER_NOTICE".as_slice(), Value::Int(1024)),
+                (b"E_STRICT".as_slice(), Value::Int(2048)),
+                (b"E_RECOVERABLE_ERROR".as_slice(), Value::Int(4096)),
+                (b"E_DEPRECATED".as_slice(), Value::Int(8192)),
+                (b"E_USER_DEPRECATED".as_slice(), Value::Int(16384)),
+                (b"E_ALL".as_slice(), Value::Int(30719)),
             ] {
                 if remaining.starts_with(name)
                     && !remaining
@@ -4664,6 +4681,56 @@ mod tests {
                 Parser::new(program.as_bytes()).evaluate().is_err(),
                 "{program:?}"
             );
+        }
+    }
+
+    #[test]
+    fn php84_error_reporting_constants_are_exact_integers() {
+        for (name, expected) in [
+            ("E_ERROR", 1),
+            ("E_WARNING", 2),
+            ("E_PARSE", 4),
+            ("E_NOTICE", 8),
+            ("E_CORE_ERROR", 16),
+            ("E_CORE_WARNING", 32),
+            ("E_COMPILE_ERROR", 64),
+            ("E_COMPILE_WARNING", 128),
+            ("E_USER_ERROR", 256),
+            ("E_USER_WARNING", 512),
+            ("E_USER_NOTICE", 1024),
+            ("E_STRICT", 2048),
+            ("E_RECOVERABLE_ERROR", 4096),
+            ("E_DEPRECATED", 8192),
+            ("E_USER_DEPRECATED", 16384),
+            ("E_ALL", 30719),
+        ] {
+            let program = format!("echo {name};");
+            let mut parser = Parser::new(program.as_bytes());
+            assert_eq!(parser.evaluate(), Ok(Value::Int(expected)), "{name}");
+            assert_eq!(parser.output, expected.to_string(), "{name}");
+            assert_eq!(eval(&format!("echo is_int({name});")), Ok(1), "{name}");
+        }
+        for (program, expected) in [
+            ("echo E_ALL & E_STRICT;", "0"),
+            ("echo E_ALL & E_USER_DEPRECATED;", "16384"),
+            ("echo E_WARNING | E_NOTICE;", "10"),
+            ("echo E_ALL ^ E_STRICT;", "32767"),
+            ("$mask=E_ERROR|E_WARNING; echo $mask;", "3"),
+            ("echo E_ERROR===true;", ""),
+            ("echo E_ERROR===1;", "1"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program}");
+            assert_eq!(parser.output, expected, "{program}");
+        }
+        for program in [
+            "echo e_error;",
+            "echo E_ERROR_EXTRA;",
+            "echo E_ALLX;",
+            "echo E_STRICT_1;",
+            "echo E_ERROR();",
+        ] {
+            assert!(Parser::new(program.as_bytes()).evaluate().is_err(), "{program}");
         }
     }
 }
