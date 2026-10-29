@@ -1179,9 +1179,24 @@ impl<'a> Parser<'a> {
     // negative exponents and overflowing integer results to float.
     // This integer-only research slice rejects those cases.
     fn pow_int(base: i64, exponent: i64) -> Result<i64, EvalError> {
-        let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
-        base.checked_pow(exponent)
-            .ok_or(EvalError::UnsupportedFloat)
+        if exponent < 0 {
+            return Err(EvalError::UnsupportedFloat);
+        }
+        if exponent == 0 {
+            return Ok(1);
+        }
+        // PHP 8.4 retains an integer result for 0, 1 and -1 even when
+        // the exponent exceeds u32. Handle these exactly before checked_pow.
+        match base {
+            0 => Ok(0),
+            1 => Ok(1),
+            -1 => Ok(if exponent & 1 == 0 { 1 } else { -1 }),
+            _ => {
+                let exponent = u32::try_from(exponent).map_err(|_| EvalError::UnsupportedFloat)?;
+                base.checked_pow(exponent)
+                    .ok_or(EvalError::UnsupportedFloat)
+            }
+        }
     }
 
     // Shared by binary division and /= so that exact integer quotients,
@@ -2059,6 +2074,12 @@ mod tests {
             ("echo pow(null,true);", "0"),
             ("echo pow(PHP_INT_MIN,1);", "-9223372036854775808"),
             ("echo pow(PHP_INT_MAX,0);", "1"),
+            ("echo pow(0,PHP_INT_MAX);", "0"),
+            ("echo pow(1,PHP_INT_MAX);", "1"),
+            ("echo pow(-1,PHP_INT_MAX);", "-1"),
+            ("echo pow(-1,PHP_INT_MAX-1);", "1"),
+            ("echo 1**PHP_INT_MAX;", "1"),
+            ("$x=-1; $x**=PHP_INT_MAX; echo $x;", "-1"),
             ("echo PoW(3,2);", "9"),
             ("echo pow(2,3,);", "8"),
             ("echo pow(2,3 /* comment */,);", "8"),
@@ -2086,6 +2107,7 @@ mod tests {
             "echo pow(2,-1);",
             "echo pow(-1,-3);",
             "echo pow(2,63);",
+            "echo pow(2,PHP_INT_MAX);",
             "echo pow(0,-1);",
             "echo pow(PHP_INT_MIN,2);",
             "echo pow(1,2,,);",
@@ -4128,7 +4150,7 @@ mod tests {
             ("echo 0**-1;", EvalError::UnsupportedFloat),
             ("echo 2**63;", EvalError::UnsupportedFloat),
             ("echo (-2)**64;", EvalError::UnsupportedFloat),
-            ("echo 1**4294967296;", EvalError::UnsupportedFloat),
+            ("echo 2**4294967296;", EvalError::UnsupportedFloat),
             ("echo 2**;", EvalError::Syntax),
             ("echo 2***3;", EvalError::Syntax),
             ("echo 2**3**;", EvalError::Syntax),

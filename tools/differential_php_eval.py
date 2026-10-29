@@ -101,6 +101,10 @@ POW_SCALAR_PROGRAMS = [
     "echo pow(true,3);", "echo pow(false,3);",
     "echo pow(null,0);", "echo pow(null,true);",
     "echo pow(PHP_INT_MIN,1);", "echo pow(PHP_INT_MAX,0);",
+    "echo pow(0,PHP_INT_MAX);", "echo pow(1,PHP_INT_MAX);",
+    "echo pow(-1,PHP_INT_MAX);", "echo pow(-1,PHP_INT_MAX-1);",
+    "echo 1**PHP_INT_MAX;",
+    "$x=-1; $x**=PHP_INT_MAX; echo $x;",
     "echo PoW(3,2);", "echo pow(2,3,);",
     "echo pow(2,3 /* comment */,);",
     "echo is_int(pow(2,3));", "echo pow(pow(2,3),2);",
@@ -1705,6 +1709,7 @@ def main():
         b"<?php echo pow(2,-1);",  # PHP returns float
         b"<?php echo pow(-1,-3);",  # PHP returns float
         b"<?php echo pow(2,63);",  # PHP returns float
+        b"<?php echo pow(2,PHP_INT_MAX);",  # PHP returns float
         b"<?php echo pow(0,-1);",  # PHP returns INF
         b"<?php echo pow(PHP_INT_MIN,2);",  # PHP returns float
         b"<?php echo pow(1,2,,);",

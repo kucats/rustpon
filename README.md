@@ -1612,7 +1612,8 @@ trailing comma, nested calls and left-to-right argument evaluation. It shares
 the existing checked integer exponentiation with `**` and compound `**=`.
 PHP 8.4 results are reproduced when the exponent is nonnegative and the result
 fits a signed 64-bit integer, including `0**0`, `PHP_INT_MIN**1`, and
-boolean/null coercion. Negative exponents and overflow promote to floating
+boolean/null coercion. Trivial bases 0, 1, and -1 retain exact integer
+results even for exponents larger than 32 bits (shared with `**` and `**=`). Negative exponents and overflow promote to floating
 point in PHP; rustpon rejects those cases without publishing partial output.
 
 The Linux PHP 8.4 CLI oracle suite adds fixed edge cases, 128 deterministic
