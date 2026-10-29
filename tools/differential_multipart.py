@@ -64,6 +64,8 @@ CASES = [
     ("file-three-blocks-binary", [(b"upload", bytes(range(256)) * 96 + b"\xff", b"three.bin")]),
     # Distinct data at every copy boundary: catch skipped/repeated source blocks.
     ("file-offset-sensitive-binary", [(b"upload", bytes((i * 31 + 17) % 251 for i in range(8192 * 2 + 17)), b"offset.bin")]),
+    # More than four copy blocks, exercising every post-write source check.
+    ("file-four-blocks-plus-one", [(b"upload", bytes((i * 73 + 19) % 256 for i in range(8192 * 4 + 1)), b"four-blocks.bin")]),
     ("two-files", [(b"upload", b"first", b"one.bin"),
                    (b"attachment", b"second", b"two.bin")]),
     ("nested-files", [(b"f[x][]", b"first", b"one.bin"),
