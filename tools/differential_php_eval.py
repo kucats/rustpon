@@ -23,6 +23,33 @@ FIXED = [
 ]
 
 
+# PHP 8.4 defines eight integer upload status constants. Compare both
+# their exact values and their type, including the intentional gap at 5.
+UPLOAD_ERROR_CONSTANT_PROGRAMS = [
+    "echo UPLOAD_ERR_OK;",
+    "echo UPLOAD_ERR_INI_SIZE;",
+    "echo UPLOAD_ERR_FORM_SIZE;",
+    "echo UPLOAD_ERR_PARTIAL;",
+    "echo UPLOAD_ERR_NO_FILE;",
+    "echo UPLOAD_ERR_NO_TMP_DIR;",
+    "echo UPLOAD_ERR_CANT_WRITE;",
+    "echo UPLOAD_ERR_EXTENSION;",
+] + [
+    f"echo is_int({name});"
+    for name in [
+        "UPLOAD_ERR_OK", "UPLOAD_ERR_INI_SIZE", "UPLOAD_ERR_FORM_SIZE",
+        "UPLOAD_ERR_PARTIAL", "UPLOAD_ERR_NO_FILE", "UPLOAD_ERR_NO_TMP_DIR",
+        "UPLOAD_ERR_CANT_WRITE", "UPLOAD_ERR_EXTENSION",
+    ]
+] + [
+    "echo UPLOAD_ERR_NO_FILE===4;",
+    "echo UPLOAD_ERR_NO_FILE+UPLOAD_ERR_CANT_WRITE;",
+    "echo UPLOAD_ERR_NO_FILE<UPLOAD_ERR_NO_TMP_DIR;",
+    "echo UPLOAD_ERR_OK===false;",
+    "$err=UPLOAD_ERR_PARTIAL; echo $err===3;",
+]
+
+
 INTEGER_CONSTANT_PROGRAMS = [
     "echo PHP_INT_MAX;", "echo PHP_INT_MIN;", "echo PHP_INT_SIZE;",
     "echo PHP_INT_MAX+0;", "echo PHP_INT_MIN+1;",
@@ -1312,7 +1339,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS + PRINT_EXPRESSION_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + UPLOAD_ERROR_CONSTANT_PROGRAMS + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1501,6 +1528,13 @@ def main():
         b"<?php echo 1<=>;",
         b"<?php echo 1<=>2<=>3;",
         b"<?php echo 1<==>2;",
+        # Undefined upload constants must never match case-insensitively or
+        # as a prefix of a supported constant.
+        b"<?php echo upload_err_ok;",
+        b"<?php echo UPLOAD_ERR_OK_extra;",
+        b"<?php echo UPLOAD_ERR_NO_TMP_DIRX;",
+        b"<?php echo UPLOAD_ERR_5;",
+        b"<?php echo UPLOAD_ERR_EXTENSION();",
         b"<?php echo truex;",
         b"<?php echo FALSE_1;",
         b"<?php echo true&&false;",
