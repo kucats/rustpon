@@ -113,6 +113,9 @@ struct Parser<'a> {
     binary_template: Vec<u8>,
     bindings: Vec<(&'a [u8], Value)>,
     assignments: usize,
+    // Nesting depth of PHP's @ error-control operator. Only undefined
+    // scalar variable reads are recoverable warnings in this VM.
+    suppressed_undefined: usize,
     // PHP CLI exit()/die() status, kept separate from the last expression.
     exit_status: Option<i32>,
 }
@@ -142,6 +145,7 @@ impl<'a> Parser<'a> {
             binary_template: Vec::new(),
             bindings: Vec::new(),
             assignments: 0,
+            suppressed_undefined: 0,
             exit_status: None,
         }
     }
@@ -921,12 +925,18 @@ impl<'a> Parser<'a> {
             Ok(value)
         } else if self.peek() == Some(b'$') {
             let name = self.variable_name()?;
-            let old_value = self
+            let old_value = match self
                 .bindings
                 .iter()
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| *value)
-                .ok_or(EvalError::UnknownVariable)?;
+            {
+                Some(value) => value,
+                // PHP 8.4 reads an undefined variable as null while @
+                // suppresses its warning. Without @, keep failing closed.
+                None if self.suppressed_undefined > 0 => Value::Null,
+                None => return Err(EvalError::UnknownVariable),
+            };
             // Postfix updates return the original tagged value. The next
             // expression/echo argument sees the updated binding.
             self.skip_space();
@@ -1256,6 +1266,15 @@ impl<'a> Parser<'a> {
                 .checked_neg()
                 .map(Value::Int)
                 .ok_or(EvalError::Overflow)
+        } else if self.consume(b'@') {
+            // PHP's error-control operator suppresses warnings within its
+            // operand, including nested expressions and builtin arguments.
+            // It does not swallow fatal runtime errors or unsupported syntax.
+            self.charge()?;
+            self.suppressed_undefined += 1;
+            let result = self.unary(depth + 1);
+            self.suppressed_undefined -= 1;
+            result
         } else if self.consume(b'!') {
             // PHP logical negation returns a boolean and binds tighter than
             // arithmetic/comparisons, but looser than exponentiation.
@@ -1992,6 +2011,56 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn php84_error_control_operator_suppresses_undefined_variable_warnings() {
+        for (program, expected) in [
+            ("<?php echo @1;", "1"),
+            ("<?php echo @(1+2);", "3"),
+            ("<?php echo @-3;", "-3"),
+            ("<?php echo @!false;", "1"),
+            ("<?php echo @@PHP_INT_MAX;", "9223372036854775807"),
+            ("<?php echo @abs(-7);", "7"),
+            ("<?php echo @(print 2);", "21"),
+            ("<?php echo @(int)true;", "1"),
+            ("<?php echo @~1;", "-2"),
+            ("<?php echo @$missing;", ""),
+            ("<?php echo @($missing+1);", "1"),
+            ("<?php echo @($missing+$other);", "0"),
+            ("<?php echo @($missing===null);", "1"),
+            ("<?php echo @($missing==false);", "1"),
+            ("<?php echo @($missing<1);", "1"),
+            ("<?php echo @($missing) + 1;", "1"),
+            ("<?php echo @var_dump($missing);", "NULL\n"),
+            ("<?php echo @($missing+1),2;", "12"),
+            ("<?php echo @@($missing+1);", "1"),
+            ("<?php echo @($missing)===null;", "1"),
+            ("<?php echo @($missing+1),@($other+2);", "12"),
+            ("<?php $x=2; echo @($x++),$x;", "23"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+        for program in [
+            "<?php echo @;",
+            "<?php echo @",
+            "<?php echo @1/0;",
+            "<?php echo @($missing/0);",
+            "<?php echo @($missing+1); echo $missing;",
+            "<?php echo @($missing+1),$other;",
+            "<?php echo @($missing++);",
+            "<?php echo @strange(1);",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program:?}");
+        }
+        let excessive = format!("<?php echo {}1;", "@".repeat(MAX_DEPTH + 1));
+        assert_eq!(
+            Parser::new(excessive.as_bytes()).evaluate(),
+            Err(EvalError::DepthLimit)
+        );
+    }
 
     #[test]
     fn php84_upload_error_constants_are_typed_and_case_sensitive() {
