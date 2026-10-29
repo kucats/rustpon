@@ -1396,6 +1396,11 @@ def main():
         b"<?php echo 7 ?>\xc3\xa9\xff",
         b"<?php echo 7 ?>\xff<?foo",
         b"<?php echo 7 ?>\x00\xff",
+        b"<?php echo 1 ?>\xff",
+        b"\xef\xbb\xbf<?php echo 7;",
+        b"\xef\xbb\xbf<?=1?>",
+        b"\xef\xbb\xbf<?PHP echo 2; return 1; ?>\xff",
+        b"\xef\xbb\xbf<?php echo 1 ?>\xff",
         b"<?php echo 7; return 1; ?>\xff",
         b"<?php echo 7; exit(0); ?>\xff",
     ]
@@ -1411,6 +1416,30 @@ def main():
                 f"stderr={rust.stderr[:160]!r}",
                 file=sys.stderr,
             )
+
+    # PHP 8.4 has no 1024-byte stdout cap, but rustpon must fail closed
+    # without partial output when binary HTML crosses its shared byte budget.
+    # Include the three-byte UTF-8 BOM in that budget.
+    for prefix, scalar_bytes in [
+        (b"<?php echo 7 ?>", b"7"),
+        (b"\xef\xbb\xbf<?php echo 7 ?>", b"\xef\xbb\xbf7"),
+    ]:
+        for suffix_len in [1024 - len(scalar_bytes), 1025 - len(scalar_bytes)]:
+            code = prefix + b"\xff" * suffix_len
+            expected = scalar_bytes + b"\xff" * suffix_len
+            php = execute([args.php_bin, "-d", "display_errors=0", "-d", "short_open_tag=0"], code)
+            rust = execute([str(args.rust_bin)], code)
+            within_limit = len(expected) <= 1024
+            if (php.returncode != 0 or php.stdout != expected
+                    or (within_limit and (rust.returncode != 0 or rust.stdout != expected))
+                    or (not within_limit and (rust.returncode == 0 or rust.stdout))):
+                failures += 1
+                print(
+                    f"FAIL binary_output_budget={len(scalar_bytes)}:{suffix_len} "
+                    f"php={php.returncode}:{len(php.stdout)} "
+                    f"rust={rust.returncode}:{len(rust.stdout)}",
+                    file=sys.stderr,
+                )
 
     # Exit status is part of the CLI observable behavior, not merely stdout.
     # Keep nonzero exit programs separate from the ordinary success corpus.
@@ -1442,7 +1471,6 @@ def main():
         b"<?php 1+;",
         b"<?php echo 1 ?><?php echo 2;",
         b"<?php echo 1 ?><?=2?>",
-        b"<?php echo 1 ?>\xff",
         b"<?php nonexistent(1);",
         b"<?php (1+2;",
         b"<?php 1+2 3;",
