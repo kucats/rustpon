@@ -109,6 +109,8 @@ struct Parser<'a> {
     offset: usize,
     work: usize,
     output: String,
+    // Terminal non-UTF-8 HTML is staged separately; it always follows scalar output.
+    binary_template: Vec<u8>,
     bindings: Vec<(&'a [u8], Value)>,
     assignments: usize,
     // PHP CLI exit()/die() status, kept separate from the last expression.
@@ -137,6 +139,7 @@ impl<'a> Parser<'a> {
             offset: 0,
             work: 0,
             output: String::new(),
+            binary_template: Vec::new(),
             bindings: Vec::new(),
             assignments: 0,
             exit_status: None,
@@ -211,7 +214,7 @@ impl<'a> Parser<'a> {
     }
 
     // PHP consumes one newline after ?> before emitting template bytes.
-    // This subset accepts a terminal UTF-8 suffix but no PHP re-entry.
+    // A terminal suffix may contain arbitrary bytes; PHP re-entry is unsupported.
     fn terminal_close_tag(&mut self) -> Result<bool, EvalError> {
         self.skip_space();
         if !self.source[self.offset..].starts_with(b"?>") {
@@ -234,11 +237,16 @@ impl<'a> Parser<'a> {
         {
             return Err(EvalError::TrailingInput);
         }
-        let text = std::str::from_utf8(template).map_err(|_| EvalError::TrailingInput)?;
-        if self.output.len().saturating_add(text.len()) > MAX_OUTPUT {
+        if self.output.len().saturating_add(template.len()) > MAX_OUTPUT {
             return Err(EvalError::OutputLimit);
         }
-        self.output.push_str(text);
+        // Preserve the existing UTF-8 scalar output path while retaining raw
+        // binary template bytes for a byte-exact CLI write after evaluation.
+        if let Ok(text) = std::str::from_utf8(template) {
+            self.output.push_str(text);
+        } else {
+            self.binary_template.extend_from_slice(template);
+        }
         self.offset = self.source.len();
         Ok(true)
     }
@@ -1784,6 +1792,7 @@ impl<'a> Parser<'a> {
                 let previous = self.output.len();
                 self.terminal_close_tag()?;
                 self.output.truncate(previous);
+                self.binary_template.clear();
                 return if self.offset == self.source.len() {
                     Ok(value)
                 } else {
@@ -1834,6 +1843,7 @@ impl<'a> Parser<'a> {
                 let previous = self.output.len();
                 self.terminal_close_tag()?;
                 self.output.truncate(previous);
+                self.binary_template.clear();
                 if self.offset != self.source.len() {
                     return Err(EvalError::TrailingInput);
                 }
@@ -1951,9 +1961,11 @@ fn run() -> Result<(), String> {
     // No output is published before the entire program has been accepted.
     let exit_status = parser.exit_status;
     let output = parser.output;
-    io::stdout()
-        .lock()
+    let binary_template = parser.binary_template;
+    let mut stdout = io::stdout().lock();
+    stdout
         .write_all(output.as_bytes())
+        .and_then(|()| stdout.write_all(&binary_template))
         .map_err(|error| error.to_string())?;
     if let Some(status) = exit_status {
         std::process::exit(status);
@@ -2100,6 +2112,45 @@ mod tests {
         assert_eq!(
             Parser::new(excess.as_bytes()).evaluate(),
             Err(EvalError::OutputLimit)
+        );
+    }
+
+
+    #[test]
+    fn php84_binary_terminal_html_is_byte_exact_and_bounded() {
+        for (source, expected) in [
+            (b"<?php echo 7 ?>\xff\x00\x80".as_slice(), b"7\xff\x00\x80".as_slice()),
+            (b"<?php echo 7 ?>\r\n\xff".as_slice(), b"7\xff".as_slice()),
+            (b"<?php echo 7 ?><?xml\xff".as_slice(), b"7<?xml\xff".as_slice()),
+            (b"<?php echo 7 ?>\xc3\xa9\xff".as_slice(), b"7\xc3\xa9\xff".as_slice()),
+            (b"<?php echo 7 ?>\xff<?foo".as_slice(), b"7\xff<?foo".as_slice()),
+            (b"<?php echo 7 ?>\x00\xff".as_slice(), b"7\x00\xff".as_slice()),
+        ] {
+            let mut parser = Parser::new(source);
+            assert!(parser.evaluate().is_ok(), "{source:?}");
+            let mut actual = parser.output.into_bytes();
+            actual.extend_from_slice(&parser.binary_template);
+            assert_eq!(actual, expected, "{source:?}");
+        }
+        for source in [
+            b"<?php echo 7; return 1; ?>\xff".as_slice(),
+            b"<?php echo 7; exit(0); ?>\xff".as_slice(),
+        ] {
+            let mut parser = Parser::new(source);
+            assert!(parser.evaluate().is_ok(), "{source:?}");
+            assert_eq!(parser.output, "7");
+            assert!(parser.binary_template.is_empty());
+        }
+        let mut exact = b"<?php echo 7 ?>".to_vec();
+        exact.extend(vec![0xff; MAX_OUTPUT - 1]);
+        let mut parser = Parser::new(&exact);
+        assert!(parser.evaluate().is_ok());
+        assert_eq!(parser.output.len() + parser.binary_template.len(), MAX_OUTPUT);
+        exact.push(0xff);
+        assert_eq!(Parser::new(&exact).evaluate(), Err(EvalError::OutputLimit));
+        assert_eq!(
+            Parser::new(b"<?php echo 7 ?>\xff<?php echo 8;").evaluate(),
+            Err(EvalError::TrailingInput)
         );
     }
 
@@ -2655,10 +2706,10 @@ mod tests {
         let mut parser = Parser::new(too_long.as_bytes());
         assert_eq!(parser.evaluate(), Err(EvalError::OutputLimit));
         assert_eq!(parser.output.len(), 1);
-        assert_eq!(
-            Parser::new(b"echo 1 ?>\xff").evaluate(),
-            Err(EvalError::TrailingInput)
-        );
+        let mut parser = Parser::new(b"echo 1 ?>\xff");
+        assert!(parser.evaluate().is_ok());
+        assert_eq!(parser.output, "1");
+        assert_eq!(parser.binary_template, b"\xff");
     }
 
     #[test]
