@@ -2388,15 +2388,17 @@ fn upload_copy_detects_source_mutation_during_destination_write() {
     }
 
     fn extend(file: &File) {
-        file.set_len((BLOCK + 2) as u64).unwrap();
+        file.set_len((BLOCK * 3 + 12) as u64).unwrap();
     }
 
     fn restore_length(file: &File) {
-        file.set_len((BLOCK + 1) as u64).unwrap();
+        file.set_len((BLOCK * 3 + 11) as u64).unwrap();
     }
 
     let spool = Spool::new();
-    let payload = vec![0x5a; BLOCK + 1];
+    // More than three blocks: a mutation after block one must prevent
+    // subsequent blocks from reaching the destination writer.
+    let payload = vec![0x5a; BLOCK * 3 + 11];
     let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
     let upload = request.upload_mut(0).unwrap();
     for (mutate, restore) in [
@@ -2414,8 +2416,9 @@ fn upload_copy_detects_source_mutation_during_destination_write() {
             io::ErrorKind::InvalidData
         );
         assert!(writer.mutated);
-        // The writer has already received bytes: they must be discarded.
-        assert_eq!(writer.output, payload);
+        // Only the first block is emitted; the remaining blocks are never
+        // read or written after an observable mutation. Discard the prefix.
+        assert_eq!(writer.output, payload[..BLOCK]);
         restore(upload.file.as_ref().unwrap());
         let mut recovered = Vec::new();
         assert_eq!(
@@ -2459,7 +2462,7 @@ fn upload_copy_detects_same_length_rewrite_during_destination_write() {
     }
 
     let spool = Spool::new();
-    let payload = vec![b'x'; BLOCK + 1];
+    let payload = vec![b'x'; BLOCK * 2 + 1];
     let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
     let upload = request.upload_mut(0).unwrap();
     let mut writer = RewritingWriter {
@@ -2472,8 +2475,9 @@ fn upload_copy_detects_same_length_rewrite_during_destination_write() {
         io::ErrorKind::InvalidData
     );
     assert!(writer.rewritten);
-    // The destination has received a complete copy, but must be discarded.
-    assert_eq!(writer.output, payload);
+    // The destination has received one block, which must be discarded.
+    // A timestamp change stops the copy before the remaining blocks.
+    assert_eq!(writer.output, payload[..BLOCK]);
 
     // Repairing the source allows a new copy with its own metadata baseline.
     upload.file.as_ref().unwrap().write_at(b"x", 0).unwrap();
