@@ -2352,3 +2352,78 @@ fn upload_copy_rejects_linked_file_even_with_private_permissions() {
     fs::remove_file(named).unwrap();
     spool.empty();
 }
+
+#[test]
+fn upload_copy_detects_source_mutation_during_destination_write() {
+    struct TamperingWriter {
+        output: Vec<u8>,
+        source: File,
+        mutate: fn(&File),
+        mutated: bool,
+    }
+
+    impl Write for TamperingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(bytes);
+            if !self.mutated {
+                (self.mutate)(&self.source);
+                self.mutated = true;
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn expose(file: &File) {
+        file.set_permissions(fs::Permissions::from_mode(0o644))
+            .unwrap();
+    }
+
+    fn restore_private(file: &File) {
+        file.set_permissions(fs::Permissions::from_mode(0o600))
+            .unwrap();
+    }
+
+    fn extend(file: &File) {
+        file.set_len((BLOCK + 2) as u64).unwrap();
+    }
+
+    fn restore_length(file: &File) {
+        file.set_len((BLOCK + 1) as u64).unwrap();
+    }
+
+    let spool = Spool::new();
+    let payload = vec![0x5a; BLOCK + 1];
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    for (mutate, restore) in [
+        (expose as fn(&File), restore_private as fn(&File)),
+        (extend as fn(&File), restore_length as fn(&File)),
+    ] {
+        let mut writer = TamperingWriter {
+            output: Vec::new(),
+            source: upload.file.as_ref().unwrap().try_clone().unwrap(),
+            mutate,
+            mutated: false,
+        };
+        assert_eq!(
+            upload.copy_to(&mut writer).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert!(writer.mutated);
+        // The writer has already received bytes: they must be discarded.
+        assert_eq!(writer.output, payload);
+        restore(upload.file.as_ref().unwrap());
+        let mut recovered = Vec::new();
+        assert_eq!(
+            upload.copy_to(&mut recovered).unwrap(),
+            payload.len() as u64
+        );
+        assert_eq!(recovered, payload);
+    }
+    drop(request);
+    spool.empty();
+}

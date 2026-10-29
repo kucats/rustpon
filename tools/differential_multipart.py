@@ -55,6 +55,11 @@ CASES = [
     ("file-and-field", [(b"upload", b"DATA", b"sample.bin"), (b"message", b"yes", None)]),
     ("file-only", [(b"upload", b"DATA", b"sample.bin")]),
     ("file-binary-copy", [(b"upload", b"\x00\xffxyz", b"binary.bin")]),
+    # Copy boundaries at 8192 bytes, including NUL and non-UTF-8 data.
+    ("file-block-minus-one", [(b"upload", b"\x00\xff" + b"x" * (8192 - 3), b"before.bin")]),
+    ("file-exact-block", [(b"upload", b"\x00\xff" + b"x" * (8192 - 2), b"exact.bin")]),
+    ("file-block-plus-one", [(b"upload", b"\x00\xff" + b"x" * (8192 - 1), b"after.bin")]),
+    ("file-exact-two-blocks", [(b"upload", b"\x00\xff" + b"x" * (16384 - 2), b"two.bin")]),
     ("file-multi-buffer-copy", [(b"upload", b"\x00\xff" + b"x" * (8192 + 17), b"large.bin")]),
     ("two-files", [(b"upload", b"first", b"one.bin"),
                    (b"attachment", b"second", b"two.bin")]),

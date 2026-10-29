@@ -149,6 +149,20 @@ pub struct Upload {
     no_tmp_dir: bool,
 }
 
+// The source is checked before and after copying. A failed postflight
+// requires the caller to discard all destination bytes already written.
+fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<()> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 0
+        || metadata.permissions().mode() & 0o077 != 0
+        || metadata.len() != expected_length
+    {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(())
+}
+
 impl Upload {
     pub fn len(&self) -> u64 {
         self.length
@@ -175,14 +189,7 @@ impl Upload {
         // original directory and can be modified by local code holding it.
         // Reject tampering before emitting any bytes. This is a point-in-time
         // check, not a substitute for descriptor-relative upload creation.
-        let metadata = file.metadata()?;
-        if !metadata.is_file()
-            || metadata.nlink() != 0
-            || metadata.permissions().mode() & 0o077 != 0
-            || metadata.len() != self.length
-        {
-            return Err(io::ErrorKind::InvalidData.into());
-        }
+        validate_staged_copy_source(file, self.length)?;
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = self.length;
         let mut buffer = [0_u8; BLOCK];
@@ -208,6 +215,11 @@ impl Upload {
             write_chunk(output, &buffer[..count])?;
             remaining -= count as u64;
         }
+        // A destination writer can hold a cloned source descriptor and
+        // change its permissions or length during copy. Detect persistent
+        // mutation before reporting success. This is not an atomic snapshot:
+        // the caller must discard destination bytes on any error.
+        validate_staged_copy_source(file, self.length)?;
         Ok(self.length)
     }
 }

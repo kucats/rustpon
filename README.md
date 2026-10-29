@@ -114,7 +114,12 @@ Before copying a completed upload, `Upload::copy_to` rechecks that its
 file descriptor still refers to a regular, unlinked (`nlink=0`), private
 inode whose on-disk length matches the recorded upload length. A mismatch
 fails before writing destination bytes; this is a point-in-time integrity
-check and does not prevent concurrent mutation after the check. This rejects privileged staging into a
+check. A second metadata check after copying detects persistent permission, link-count,
+or length changes during the write (including a destination writer mutating a
+cloned source descriptor). A failed copy can already have emitted bytes, so
+callers must discard the destination on **every** copy error. Neither check
+provides an atomic source snapshot or detects same-length in-place rewrites.
+This rejects privileged staging into a
 private directory owned by another local account and injected inode permission
 relaxation before request data is written. Deterministic fault-injection tests cover directory retargeting,
 filename replacement, hard-link creation before unlink, and directory replacement
