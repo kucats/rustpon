@@ -934,6 +934,17 @@ impl<'a> Parser<'a> {
             {
                 return self.builtin_print_r(depth);
             }
+            // A nested print expression is a PHP language construct,
+            // not the print_r() function or an identifier prefix.
+            if remaining
+                .get(..b"print".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"print"))
+                && !remaining
+                    .get(b"print".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.print_expression(depth);
+            }
             if remaining
                 .get(..b"var_export".len())
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"var_export"))
@@ -1570,6 +1581,21 @@ impl<'a> Parser<'a> {
         Ok(Value::Null)
     }
 
+    // PHP 8.4 print is an expression as well as a statement. Its operand
+    // is evaluated first, its rendered bytes are appended to the bounded
+    // output, and the expression itself yields the integer 1. Unlike echo,
+    // print takes one operand; the surrounding echo may still take commas.
+    fn print_expression(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"print".len();
+        self.charge()?;
+        let value = self.bitwise_or(depth + 1)?;
+        self.append_output(value)?;
+        Ok(Value::Int(1))
+    }
+
     // PHP 8.4 print_r() prints scalar int/bool/null using the same
     // conversion as echo, but returns bool(true). Evaluate the optional
     // return flag before emitting anything; return=true yields a PHP
@@ -1894,6 +1920,40 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn php84_nested_print_expression_order_and_return_type() {
+        for (program, expected) in [
+            ("<?php echo print 7;", "71"),
+            ("<?php echo PRINT 1+2;", "31"),
+            ("<?php echo (print 7)+2;", "73"),
+            ("<?php echo 1+print 2;", "22"),
+            ("<?php echo print print 3;", "311"),
+            ("<?php echo print 1,2;", "112"),
+            ("<?php echo print 1+2,print 4;", "3141"),
+            ("<?php echo (print 0)+(print 1);", "012"),
+            ("<?php echo (print false) === 1;", "1"),
+            ("<?php echo print_r(2);", "21"),
+            ("<?php print print 3;", "31"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+        for program in [
+            "<?php echo print;",
+            "<?php echo print();",
+            "<?php echo print 1,;",
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_err(), "{program:?}");
+        }
+        let excess = format!("<?php echo print PHP_INT_MAX;{}", "print PHP_INT_MAX;".repeat(55));
+        assert_eq!(
+            Parser::new(excess.as_bytes()).evaluate(),
+            Err(EvalError::OutputLimit)
+        );
+    }
 
     #[test]
     fn php84_terminal_html_preserves_non_php_processing_instructions() {
