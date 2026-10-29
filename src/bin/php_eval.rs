@@ -1956,7 +1956,7 @@ mod tests {
 
     #[test]
     fn php84_terminal_close_tag_rejects_bad_mutations() {
-        for program in ["<?php echo 7; $x= ?>"] {
+        for program in ["<?php echo 7; $x= ?>", "<?php echo 7; $x=1+ ?>"] {
             let mut parser = Parser::new(program.as_bytes());
             assert!(parser.evaluate().is_err(), "{program:?}");
         }
