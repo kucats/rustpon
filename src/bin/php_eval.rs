@@ -1967,16 +1967,8 @@ mod tests {
             ("UPLOAD_ERR_CANT_WRITE", 7),
             ("UPLOAD_ERR_EXTENSION", 8),
         ] {
-            assert_eq!(
-                eval(&format!("<?php echo {name};")),
-                Ok(expected),
-                "{name}"
-            );
-            assert_eq!(
-                eval(&format!("<?php echo is_int({name});")),
-                Ok(1),
-                "{name}"
-            );
+            assert_eq!(eval(&format!("<?php echo {name};")), Ok(expected), "{name}");
+            assert_eq!(eval(&format!("<?php echo is_int({name});")), Ok(1), "{name}");
         }
         for (program, expected) in [
             ("<?php echo UPLOAD_ERR_NO_FILE===4;", 1),
