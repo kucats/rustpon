@@ -103,6 +103,35 @@ FLOAT_CLASSIFICATION_PROGRAMS = [
 ]
 
 
+# PHP 8.4's @ operator suppresses undefined-variable warnings in its
+# operand. This bounded VM models that recovery as null, while fatal errors,
+# unsupported syntax, and unsuppressed variable reads remain strict failures.
+ERROR_CONTROL_PROGRAMS = [
+    "echo @1;",
+    "echo @(1+2);",
+    "echo @-3;",
+    "echo @!false;",
+    "echo @@PHP_INT_MAX;",
+    "echo @abs(-7);",
+    "echo @(print 2);",
+    "echo @(int)true;",
+    "echo @~1;",
+    "echo @$missing;",
+    "echo @($missing+1);",
+    "echo @($missing+$other);",
+    "echo @($missing===null);",
+    "echo @($missing==false);",
+    "echo @($missing<1);",
+    "echo @($missing) + 1;",
+    "echo @var_dump($missing);",
+    "echo @($missing+1),2;",
+    "echo @@($missing+1);",
+    "echo @($missing)===null;",
+    "echo @($missing+1),@($other+2);",
+    "$x=2; echo @($x++),$x;",
+]
+
+
 # PHP 8.4 permits a trailing comma in scalar function calls, including
 # multi-argument builtins. empty() is a language construct and rejects it.
 BUILTIN_TRAILING_COMMA_PROGRAMS = [
@@ -1355,7 +1384,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS + PRINT_EXPRESSION_PROGRAMS
-        + echo_arguments + integer_constants + UPLOAD_ERROR_CONSTANT_PROGRAMS + ERROR_LEVEL_CONSTANT_PROGRAMS + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + UPLOAD_ERROR_CONSTANT_PROGRAMS + ERROR_LEVEL_CONSTANT_PROGRAMS + ERROR_CONTROL_PROGRAMS + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1458,6 +1487,14 @@ def main():
             )
 
     invalid = [
+        b"<?php echo @;",
+        b"<?php echo @",
+        b"<?php echo @1/0;",
+        b"<?php echo @($missing/0);",
+        b"<?php echo @($missing+1); echo $missing;",
+        b"<?php echo @($missing+1),$other;",
+        b"<?php echo @($missing++);",
+        b"<?php echo @strange(1);",
         b"<?php echo print;",
         b"<?php echo e_error;",
         b"<?php echo E_ERROR_EXTRA;",
@@ -2035,7 +2072,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-binary-template/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-binary-template/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar/error-control-undefined-reads differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(binary_templates)} binary-template cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
