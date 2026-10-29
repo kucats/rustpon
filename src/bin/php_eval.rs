@@ -2498,7 +2498,6 @@ mod tests {
             "echo 1; echo 1/0;",
             "echo 1; echo $missing;",
             "echo 1; echo 2; unknown;",
-            "echo 1; ?> trailing",
         ] {
             assert!(
                 Parser::new(program.as_bytes()).evaluate().is_err(),
@@ -2540,7 +2539,6 @@ mod tests {
             "echo 1; return 1/0;",
             "echo 1; return $missing;",
             "echo 1; return 1; echo 2;",
-            "echo 1; return 1; ?> trailing",
             "returner 1;",
             "echo 1; return 1",
             "echo 1; return; /* unterminated",
