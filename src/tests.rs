@@ -2164,3 +2164,68 @@ fn post_create_hardlink_is_rejected_before_any_upload_data() {
     fs::remove_file(exposed).unwrap();
     spool.empty();
 }
+
+#[test]
+fn post_unlink_directory_swap_is_rejected_before_upload_bytes() {
+    let spool = Spool::new();
+    let replacement = Spool::new();
+    let original = fs::symlink_metadata(&spool.0).unwrap();
+    let saved = spool.0.with_extension("post-unlink-saved");
+    let mut path = spool.0.clone();
+
+    // The inode has already been unlinked, so no directory entry can reveal
+    // its contents. A directory swap must still prevent accepting the FD.
+    let result = anonymous_upload_with_hooks(
+        &mut path,
+        original.dev(),
+        original.ino(),
+        || {},
+        || {
+            fs::rename(&spool.0, &saved).unwrap();
+            std::os::unix::fs::symlink(&replacement.0, &spool.0).unwrap();
+        },
+    );
+    assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
+    assert_eq!(path, spool.0);
+    assert_eq!(fs::read_dir(&saved).unwrap().count(), 0);
+    replacement.empty();
+
+    fs::remove_file(&spool.0).unwrap();
+    fs::rename(&saved, &spool.0).unwrap();
+    spool.empty();
+}
+
+#[test]
+fn post_unlink_permission_relaxation_is_rejected() {
+    let spool = Spool::new();
+    let original = fs::symlink_metadata(&spool.0).unwrap();
+    let mut path = spool.0.clone();
+
+    let result = anonymous_upload_with_hooks(
+        &mut path,
+        original.dev(),
+        original.ino(),
+        || {},
+        || {
+            fs::set_permissions(&spool.0, fs::Permissions::from_mode(0o755)).unwrap();
+        },
+    );
+    assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
+    assert_eq!(path, spool.0);
+    fs::set_permissions(&spool.0, fs::Permissions::from_mode(0o700)).unwrap();
+    spool.empty();
+
+    // The same path and inode are still usable once permissions are private.
+    let file = anonymous_upload_with_hooks(
+        &mut path,
+        original.dev(),
+        original.ino(),
+        || {},
+        || {},
+    )
+    .unwrap();
+    assert_eq!(file.metadata().unwrap().nlink(), 0);
+    assert_eq!(file.metadata().unwrap().len(), 0);
+    drop(file);
+    spool.empty();
+}
