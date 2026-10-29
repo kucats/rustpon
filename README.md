@@ -112,7 +112,12 @@ group/other permission bits, and its owner must match the spool directory's
 owner both before and after unlink.
 Before copying a completed upload, `Upload::copy_to` rechecks that its
 file descriptor still refers to a regular, unlinked (`nlink=0`), private
-inode whose on-disk length matches the recorded upload length. A mismatch
+inode whose on-disk length matches the recorded upload length.
+The copy uses positional (`pread`-style) reads from explicit offsets rather
+than changing the descriptor's shared file offset. A destination writer or
+other code seeking through a cloned descriptor cannot skip or duplicate
+blocks during the copy; this does not protect against concurrent writes to
+the source inode. A mismatch
 fails before writing destination bytes; this is a point-in-time integrity
 check. A second metadata check after copying detects persistent permission, link-count,
 or length changes during the write (including a destination writer mutating a
