@@ -1730,9 +1730,7 @@ impl<'a> Parser<'a> {
         // arbitrary leading HTML (which requires a mode-switching lexer).
         // The BOM is emitted before any scalar output and charged to the
         // same transactional byte quota.
-        if self.source.starts_with(b"\xef\xbb\xbf")
-            && is_php_open_tag(&self.source[3..])
-        {
+        if self.source.starts_with(b"\xef\xbb\xbf") && is_php_open_tag(&self.source[3..]) {
             self.output.push('\u{feff}');
             self.offset = 3;
         }
