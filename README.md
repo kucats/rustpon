@@ -929,6 +929,21 @@ ordering, and variable-update programs against the installed PHP binary.
 These predefined constants do not imply general constant lookup,
 64-bit compatibility on a 32-bit host, or Zend integration.
 
+## PHP 8.4 upload error constants (research evaluator)
+
+The bounded `php_eval` interpreter now recognizes all eight standard PHP
+upload status constants as signed integers: `UPLOAD_ERR_OK=0`,
+`UPLOAD_ERR_INI_SIZE=1`, `UPLOAD_ERR_FORM_SIZE=2`,
+`UPLOAD_ERR_PARTIAL=3`, `UPLOAD_ERR_NO_FILE=4`,
+`UPLOAD_ERR_NO_TMP_DIR=6`, `UPLOAD_ERR_CANT_WRITE=7`, and
+`UPLOAD_ERR_EXTENSION=8`. Status 5 is intentionally undefined.
+Constants are case-sensitive, require complete identifier boundaries,
+and participate in existing scalar arithmetic, comparisons, assignments,
+and type predicates. The Rust regressions and PHP 8.4 CLI oracle verify
+their values and integer types, plus rejection of unknown names.
+This exposes constants in the standalone language experiment; it does
+not populate the PHP `$_FILES` superglobal or implement a Zend SAPI.
+
 ## PHP 8.4 integer literal lexical compatibility
 
 The research-only `php_eval` interpreter recognizes bounded PHP 8.4
