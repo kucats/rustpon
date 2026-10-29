@@ -140,6 +140,24 @@ accepted-field oracle; HTTP transport framing and Content-Length
 validation remain the caller's responsibility. This adapter does not
 register `$_POST` with Zend or replace an HTTP SAPI.
 
+The `urlencoded` CLI exposes this adapter with `--php-content-length BYTES`
+and optional `--php-post-max-size BYTES`. It uses the trusted declared length
+rather than reading stdin to EOF, truncates decoded NUL names, and retains
+ignored names for `--php-max-input-vars` accounting. The PHP quota flag
+requires a Content-Length; the Content-Length mode currently supports only
+PHP's default `&` input separator (custom separator flags are rejected).
+For example:
+
+```sh
+printf 'a=1&b=2NEXT' | cargo run --offline --locked --bin urlencoded -- \\
+  --php-content-length 7 --php-post-max-size 7
+```
+
+The Linux CI compares accepted and oversized URL-encoded POST trees with a
+real PHP 8.4 HTTP SAPI using `tools/differential_urlencoded_content_length.py`.
+The CLI is a test harness: callers must validate HTTP Content-Length framing
+and independently enforce transport quotas before invoking the adapter.
+
 ## PHP 8.4 URL-encoded separator option
 
 The default URL-encoded decoder splits fields only at raw `&`. PHP's
