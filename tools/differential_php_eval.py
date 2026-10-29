@@ -1390,14 +1390,14 @@ def main():
     # Return/exit suppress the unreachable suffix. Keep PHP re-entry a strict
     # rejection until the mixed PHP/HTML lexer is implemented.
     binary_templates = [
-        b"<?php echo 7 ?>\\xff\\x00\\x80",
-        b"<?php echo 7 ?>\\r\\n\\xff",
-        b"<?php echo 7 ?><?xml\\xff",
-        b"<?php echo 7 ?>\\xc3\\xa9\\xff",
-        b"<?php echo 7 ?>\\xff<?foo",
-        b"<?php echo 7 ?>\\x00\\xff",
-        b"<?php echo 7; return 1; ?>\\xff",
-        b"<?php echo 7; exit(0); ?>\\xff",
+        b"<?php echo 7 ?>\xff\x00\x80",
+        b"<?php echo 7 ?>\r\n\xff",
+        b"<?php echo 7 ?><?xml\xff",
+        b"<?php echo 7 ?>\xc3\xa9\xff",
+        b"<?php echo 7 ?>\xff<?foo",
+        b"<?php echo 7 ?>\x00\xff",
+        b"<?php echo 7; return 1; ?>\xff",
+        b"<?php echo 7; exit(0); ?>\xff",
     ]
     for index, code in enumerate(binary_templates):
         php = execute([args.php_bin, "-d", "display_errors=0", "-d", "short_open_tag=0"], code)
@@ -1796,7 +1796,7 @@ def main():
     # complete identifiers; overflowing operations promote to unsupported
     # floating-point values in PHP and must fail closed here.
     invalid.extend([
-        b"<?php echo 7 ?>\\xff<?php echo 8;",  # valid PHP re-entry, not yet supported
+        b"<?php echo 7 ?>\xff<?php echo 8;",  # valid PHP re-entry, not yet supported
         b"<?php echo is_float();",
         b"<?php echo is_float(1,2);",
         b"<?php echo is_countable(1,2);",
