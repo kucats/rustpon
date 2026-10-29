@@ -32,12 +32,16 @@ fn run() -> Result<(), String> {
             }
             "--php-content-length" if php_content_length.is_none() => {
                 php_content_length = Some(
-                    value.parse::<u64>().map_err(|_| "invalid content length".to_owned())?,
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| "invalid content length".to_owned())?,
                 );
             }
             "--php-post-max-size" if php_post_max_size.is_none() => {
                 php_post_max_size = Some(
-                    value.parse::<u64>().map_err(|_| "invalid post_max_size".to_owned())?,
+                    value
+                        .parse::<u64>()
+                        .map_err(|_| "invalid post_max_size".to_owned())?,
                 );
             }
             "--php-max-input-vars" if max_input_vars.is_none() => {
@@ -61,7 +65,9 @@ fn run() -> Result<(), String> {
         return Err("--php-post-max-size requires --php-content-length".to_owned());
     }
     if php_content_length.is_some() && (php_semicolon_separator || php_arg_separators.is_some()) {
-        return Err("--php-content-length currently supports only the default '&' separator".to_owned());
+        return Err(
+            "--php-content-length currently supports only the default '&' separator".to_owned(),
+        );
     }
     // PHP counts explicit empty-name pairs and NUL-truncated names toward
     // max_input_vars, even though they do not appear in the published tree.
