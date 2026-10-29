@@ -2115,16 +2115,30 @@ mod tests {
         );
     }
 
-
     #[test]
     fn php84_binary_terminal_html_is_byte_exact_and_bounded() {
         for (source, expected) in [
-            (b"<?php echo 7 ?>\xff\x00\x80".as_slice(), b"7\xff\x00\x80".as_slice()),
+            (
+                b"<?php echo 7 ?>\xff\x00\x80".as_slice(),
+                b"7\xff\x00\x80".as_slice(),
+            ),
             (b"<?php echo 7 ?>\r\n\xff".as_slice(), b"7\xff".as_slice()),
-            (b"<?php echo 7 ?><?xml\xff".as_slice(), b"7<?xml\xff".as_slice()),
-            (b"<?php echo 7 ?>\xc3\xa9\xff".as_slice(), b"7\xc3\xa9\xff".as_slice()),
-            (b"<?php echo 7 ?>\xff<?foo".as_slice(), b"7\xff<?foo".as_slice()),
-            (b"<?php echo 7 ?>\x00\xff".as_slice(), b"7\x00\xff".as_slice()),
+            (
+                b"<?php echo 7 ?><?xml\xff".as_slice(),
+                b"7<?xml\xff".as_slice(),
+            ),
+            (
+                b"<?php echo 7 ?>\xc3\xa9\xff".as_slice(),
+                b"7\xc3\xa9\xff".as_slice(),
+            ),
+            (
+                b"<?php echo 7 ?>\xff<?foo".as_slice(),
+                b"7\xff<?foo".as_slice(),
+            ),
+            (
+                b"<?php echo 7 ?>\x00\xff".as_slice(),
+                b"7\x00\xff".as_slice(),
+            ),
         ] {
             let mut parser = Parser::new(source);
             assert!(parser.evaluate().is_ok(), "{source:?}");
@@ -2145,7 +2159,10 @@ mod tests {
         exact.extend(vec![0xff; MAX_OUTPUT - 1]);
         let mut parser = Parser::new(&exact);
         assert!(parser.evaluate().is_ok());
-        assert_eq!(parser.output.len() + parser.binary_template.len(), MAX_OUTPUT);
+        assert_eq!(
+            parser.output.len() + parser.binary_template.len(),
+            MAX_OUTPUT
+        );
         exact.push(0xff);
         assert_eq!(Parser::new(&exact).evaluate(), Err(EvalError::OutputLimit));
         assert_eq!(
