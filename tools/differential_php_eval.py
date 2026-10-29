@@ -1386,6 +1386,32 @@ def main():
                 file=sys.stderr,
             )
 
+    # Raw HTML after ?> is byte-oriented in PHP, including NUL and invalid UTF-8.
+    # Return/exit suppress the unreachable suffix. Keep PHP re-entry a strict
+    # rejection until the mixed PHP/HTML lexer is implemented.
+    binary_templates = [
+        b"<?php echo 7 ?>\\xff\\x00\\x80",
+        b"<?php echo 7 ?>\\r\\n\\xff",
+        b"<?php echo 7 ?><?xml\\xff",
+        b"<?php echo 7 ?>\\xc3\\xa9\\xff",
+        b"<?php echo 7 ?>\\xff<?foo",
+        b"<?php echo 7 ?>\\x00\\xff",
+        b"<?php echo 7; return 1; ?>\\xff",
+        b"<?php echo 7; exit(0); ?>\\xff",
+    ]
+    for index, code in enumerate(binary_templates):
+        php = execute([args.php_bin, "-d", "display_errors=0", "-d", "short_open_tag=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL binary_template={index} code={code!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
     # Exit status is part of the CLI observable behavior, not merely stdout.
     # Keep nonzero exit programs separate from the ordinary success corpus.
     for index, program in enumerate(EXIT_NONZERO_PROGRAMS):
@@ -1770,6 +1796,7 @@ def main():
     # complete identifiers; overflowing operations promote to unsupported
     # floating-point values in PHP and must fail closed here.
     invalid.extend([
+        b"<?php echo 7 ?>\\xff<?php echo 8;",  # valid PHP re-entry, not yet supported
         b"<?php echo is_float();",
         b"<?php echo is_float(1,2);",
         b"<?php echo is_countable(1,2);",
@@ -1980,8 +2007,8 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-utf8-template/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar differential: "
-        f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-binary-template/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar differential: "
+        f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(binary_templates)} binary-template cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
         f"{len(intdiv_errors)} PHP intdiv runtime-error rejections, {failures} failures"
