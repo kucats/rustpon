@@ -119,6 +119,27 @@ These pathname checks do **not** close the final check/unlink race:
 descriptor-relative creation and unlinking with an independently audited
 OS interface are required before treating a mutable spool path as safe.
 
+## PHP 8.4 URL-encoded Content-Length admission
+
+`urlencoded::parse_reader_with_php_content_length(reader, limits,
+content_length, php_post_max_bytes)` consumes **exactly** the trusted
+Content-Length bytes and leaves any following transport message unread.
+The hard `Limits::body_bytes` cap is checked before reading. A declared
+zero-byte body publishes empty fields without reading. When a nonzero PHP
+`post_max_size` is exceeded, the function drains exactly the declared
+body without allocating a parser or publishing fields, while retaining the
+body byte count. An early EOF, an overreporting `Read` implementation, or
+persistent interruptions fail closed. A PHP limit of zero is unlimited.
+
+Accepted requests enable PHP 8.4 percent-decoded NUL-name truncation and
+preserve explicit empty names for later `max_input_vars` accounting. The
+new Rust regression tests cover exact-size admission, the PHP limit
+boundary, hard-limit preflight, transport pipelining, truncation and a
+misbehaving reader. PHP 8.4 CLI `parse_str()` provides the expected
+accepted-field oracle; HTTP transport framing and Content-Length
+validation remain the caller's responsibility. This adapter does not
+register `$_POST` with Zend or replace an HTTP SAPI.
+
 ## PHP 8.4 URL-encoded separator option
 
 The default URL-encoded decoder splits fields only at raw `&`. PHP's
