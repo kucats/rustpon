@@ -7,9 +7,9 @@
 #![cfg(unix)]
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Write};
 use std::ops::Range;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{FileExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -176,7 +176,9 @@ impl Upload {
     /// and bounded consecutive Interrupted retries on both I/O directions.
     /// A failed copy may have written a prefix: callers must discard that
     /// destination. The descriptor stays owned by this request, so a retry
-    /// can start at offset zero. No client path is exposed.
+    /// can start at offset zero. Reads use explicit offsets so another handle
+    /// sharing the same open-file description cannot redirect the copy by
+    /// seeking. No client path is exposed.
     pub fn copy_to(&mut self, output: &mut impl Write) -> io::Result<u64> {
         // Preserve the received length for PHP error=1 metadata, but never
         // expose a partial prefix from a discarded upload.
@@ -190,14 +192,16 @@ impl Upload {
         // Reject tampering before emitting any bytes. This is a point-in-time
         // check, not a substitute for descriptor-relative upload creation.
         let source_before = validate_staged_copy_source(file, self.length)?;
-        file.seek(SeekFrom::Start(0))?;
-        let mut remaining = self.length;
+        // File::try_clone shares the kernel file offset with the original.
+        // pread-style reads avoid both that shared offset and interference
+        // from a destination writer that seeks through a cloned descriptor.
+        let mut offset = 0_u64;
         let mut buffer = [0_u8; BLOCK];
         let mut read_interrupts = 0;
-        while remaining > 0 {
+        while offset < self.length {
             // This is at most BLOCK, so the cast is safe on all Unix targets.
-            let capacity = remaining.min(BLOCK as u64) as usize;
-            let count = match file.read(&mut buffer[..capacity]) {
+            let capacity = (self.length - offset).min(BLOCK as u64) as usize;
+            let count = match file.read_at(&mut buffer[..capacity], offset) {
                 Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
                 Ok(count) => {
                     read_interrupts = 0;
@@ -213,7 +217,7 @@ impl Upload {
                 Err(error) => return Err(error),
             };
             write_chunk(output, &buffer[..count])?;
-            remaining -= count as u64;
+            offset += count as u64;
         }
         // A destination writer can hold a cloned source descriptor and
         // change its permissions or length during copy. Detect persistent
