@@ -1661,3 +1661,17 @@ after the terminal suffix is still rejected rather than interpreted.
 The same 1,024-byte cumulative output cap applies to literal HTML.
 The differential test suite compares this narrow behavior with PHP 8.4 CLI;
 it does not claim complete PHP template or binary-output support.
+
+## PHP 8.4 error-reporting constants (research evaluator)
+
+The bounded `php_eval` interpreter recognizes the 16 standard PHP 8.4
+`E_*` error-level constants as signed integer values. `E_ERROR=1`,
+`E_WARNING=2`, `E_STRICT=2048`, `E_USER_DEPRECATED=16384`, and
+`E_ALL=30719` are checked alongside the remaining error levels against
+PHP 8.4 CLI. In PHP 8.4, `E_ALL` excludes the `E_STRICT` bit.
+Names are case-sensitive and require a full identifier boundary. Existing
+bitwise operations, integer comparisons, variable assignments, and type
+predicates can use these values. The PHP CLI differential suite checks
+all values and types, bitmask combinations, and unknown-name rejection.
+This does not implement PHP's error handler, `error_reporting()`, or
+Zend runtime warning/exception behavior. No new dependencies are required.
