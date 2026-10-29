@@ -2166,6 +2166,67 @@ fn post_create_hardlink_is_rejected_before_any_upload_data() {
 }
 
 #[test]
+fn staged_inode_requires_private_mode_and_matching_directory_owner() {
+    let spool = Spool::new();
+    let path = spool.0.join("owner-mode-check");
+    fs::write(&path, b"").unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    let directory_owner = fs::metadata(&spool.0).unwrap().uid();
+    let metadata = fs::metadata(&path).unwrap();
+    assert!(private_staging_inode(&metadata, Some(directory_owner)));
+    assert!(!private_staging_inode(
+        &metadata,
+        Some(directory_owner.wrapping_add(1))
+    ));
+    assert!(!private_staging_inode(&metadata, None));
+
+    // Another local account must not be able to read a staged inode,
+    // even if the spool directory itself is still private.
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+    assert!(!private_staging_inode(
+        &fs::metadata(&path).unwrap(),
+        Some(directory_owner)
+    ));
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::remove_file(path).unwrap();
+    spool.empty();
+}
+
+#[test]
+fn post_create_staged_inode_permission_relaxation_is_rejected() {
+    let spool = Spool::new();
+    let original = fs::symlink_metadata(&spool.0).unwrap();
+    let mut path = spool.0.clone();
+
+    // Simulate a same-UID actor changing the created inode's mode before
+    // unlink. It must be rejected while still empty, without upload bytes.
+    let result = anonymous_upload_with_hook(&mut path, original.dev(), original.ino(), || {
+        let created = fs::read_dir(&spool.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .find(|entry| {
+                entry
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("php-request-")
+            })
+            .unwrap();
+        fs::set_permissions(created, fs::Permissions::from_mode(0o644)).unwrap();
+    });
+    assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
+    assert_eq!(path, spool.0);
+    let created: Vec<_> = fs::read_dir(&spool.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(created.len(), 1);
+    assert_eq!(fs::metadata(&created[0]).unwrap().len(), 0);
+    fs::remove_file(&created[0]).unwrap();
+    spool.empty();
+}
+
+#[test]
 fn post_unlink_directory_swap_is_rejected_before_upload_bytes() {
     let spool = Spool::new();
     let replacement = Spool::new();
