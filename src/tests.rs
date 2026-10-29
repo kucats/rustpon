@@ -2486,3 +2486,69 @@ fn upload_copy_detects_same_length_rewrite_during_destination_write() {
     drop(request);
     spool.empty();
 }
+
+
+#[test]
+fn upload_copy_is_independent_of_shared_file_offsets() {
+    struct SeekingWriter {
+        output: Vec<u8>,
+        source: File,
+        seek_to_end: bool,
+        writes: usize,
+    }
+
+    impl Write for SeekingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.output.extend_from_slice(bytes);
+            self.writes += 1;
+            // A cloned descriptor shares the underlying kernel file offset.
+            // Redirect it after every write, without modifying file contents.
+            let target = if self.seek_to_end {
+                SeekFrom::End(0)
+            } else {
+                SeekFrom::Start(0)
+            };
+            self.source.seek(target)?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let spool = Spool::new();
+    let payload: Vec<u8> = (0..BLOCK * 2 + 17)
+        .map(|index| ((index * 31 + 17) % 251) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+
+    // A positional copy must not alter another handle's shared offset.
+    let mut observer = upload.file.as_ref().unwrap().try_clone().unwrap();
+    observer.seek(SeekFrom::Start(7)).unwrap();
+    let mut copied = Vec::new();
+    assert_eq!(upload.copy_to(&mut copied).unwrap(), payload.len() as u64);
+    assert_eq!(copied, payload);
+    assert_eq!(observer.stream_position().unwrap(), 7);
+
+    // A writer that seeks a clone to EOF used to cause a premature EOF;
+    // seeking back to zero used to duplicate the first block.
+    for seek_to_end in [true, false] {
+        let mut writer = SeekingWriter {
+            output: Vec::new(),
+            source: upload.file.as_ref().unwrap().try_clone().unwrap(),
+            seek_to_end,
+            writes: 0,
+        };
+        assert_eq!(
+            upload.copy_to(&mut writer).unwrap(),
+            payload.len() as u64
+        );
+        assert!(writer.writes >= 3);
+        assert_eq!(writer.output, payload);
+    }
+
+    drop(request);
+    spool.empty();
+}
