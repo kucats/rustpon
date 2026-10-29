@@ -115,6 +115,21 @@ struct Parser<'a> {
     exit_status: Option<i32>,
 }
 
+// PHP 8.4 with short_open_tag=0 recognizes only <?= and <?php followed
+// by space, tab, CR, LF, or EOF. Bare <? and XML processing instructions
+// are ordinary inline HTML; vertical tab/form feed do not open PHP.
+fn is_php_open_tag(source: &[u8]) -> bool {
+    if source.starts_with(b"<?=") {
+        return true;
+    }
+    source
+        .get(..5)
+        .is_some_and(|tag| tag.eq_ignore_ascii_case(b"<?php"))
+        && source
+            .get(5)
+            .is_none_or(|&byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n'))
+}
+
 impl<'a> Parser<'a> {
     fn new(source: &'a [u8]) -> Self {
         Self {
@@ -212,7 +227,11 @@ impl<'a> Parser<'a> {
             0
         };
         let template = &trailing[newline_len..];
-        if template.windows(2).any(|pair| pair == b"<?") {
+        if template
+            .windows(2)
+            .enumerate()
+            .any(|(index, pair)| pair == b"<?" && is_php_open_tag(&template[index..]))
+        {
             return Err(EvalError::TrailingInput);
         }
         let text = std::str::from_utf8(template).map_err(|_| EvalError::TrailingInput)?;
@@ -1629,14 +1648,8 @@ impl<'a> Parser<'a> {
         if self.source[self.offset..].starts_with(b"<?=") {
             self.offset += 3;
             implicit_echo = true;
-        } else if self.source[self.offset..]
-            .get(..5)
-            .is_some_and(|tag| tag.eq_ignore_ascii_case(b"<?php"))
-        {
+        } else if is_php_open_tag(&self.source[self.offset..]) {
             self.offset += 5;
-            if self.peek().is_some_and(|b| !b.is_ascii_whitespace()) {
-                return Err(EvalError::Syntax);
-            }
         }
         // Keep all output private until every statement succeeds. PHP may
         // flush earlier output before a runtime error; this bounded research
@@ -1881,6 +1894,62 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn php84_terminal_html_preserves_non_php_processing_instructions() {
+        for (program, expected) in [
+            ("<?php echo 1 ?><?", "1<?"),
+            ("<?php echo 1 ?><?xml version=\"1.0\"?>", "1<?xml version=\"1.0\"?>"),
+            ("<?php echo 1 ?><?foo", "1<?foo"),
+            ("<?php echo 1 ?><?phpx echo 2;", "1<?phpx echo 2;"),
+            ("<?php echo 1 ?><?php?>", "1<?php?>"),
+            ("<?php echo 1 ?><? echo 2 ?>", "1<? echo 2 ?>"),
+            ("<?php echo 1 ?><?PHPX", "1<?PHPX"),
+            ("<?php echo 1 ?><?php\u{000b} echo 2;", "1<?php\u{000b} echo 2;"),
+            ("<?php echo 1 ?><?php\u{000c} echo 2;", "1<?php\u{000c} echo 2;"),
+            ("<?php echo 1 ?>a<?xml?>b<?foo", "1a<?xml?>b<?foo"),
+            ("<?php echo 1 ?>\r\n<?xml", "1<?xml"),
+            ("<?php echo 1 ?><?xml\n<?phpx", "1<?xml\n<?phpx"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+        for program in [
+            "<?php echo 1 ?><?php",
+            "<?php echo 1 ?><?PHP echo 2 ?>",
+            "<?php echo 1 ?><?= 2 ?>",
+            "<?php echo 1 ?><?php\necho 2;",
+            "<?php echo 1 ?><?php\techo 2;",
+        ] {
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(EvalError::TrailingInput),
+                "{program:?}"
+            );
+        }
+        // A literal opener must count against the same byte output limit.
+        let exact = format!("<?php echo 1 ?><?xml{}", "x".repeat(MAX_OUTPUT - 6));
+        let mut parser = Parser::new(exact.as_bytes());
+        assert!(parser.evaluate().is_ok());
+        assert_eq!(parser.output.len(), MAX_OUTPUT);
+        let excess = format!("{exact}x");
+        assert_eq!(
+            Parser::new(excess.as_bytes()).evaluate(),
+            Err(EvalError::OutputLimit)
+        );
+    }
+
+    #[test]
+    fn php84_open_tag_whitespace_is_not_generic_ascii_whitespace() {
+        for suffix in ["\u{000b}", "\u{000c}"] {
+            let program = format!("<?php{suffix} echo 1;");
+            assert_eq!(
+                Parser::new(program.as_bytes()).evaluate(),
+                Err(EvalError::Syntax)
+            );
+        }
+    }
 
     fn eval(source: &str) -> Result<i64, EvalError> {
         Parser::new(source.as_bytes()).evaluate().map(Value::as_int)
