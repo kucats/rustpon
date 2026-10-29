@@ -447,7 +447,11 @@ pub fn parse_reader_with_php_content_length(
     php_post_max_bytes: Option<u64>,
 ) -> Result<Request, Error> {
     parse_reader_with_php_content_length_impl(
-        reader, limits, content_length, php_post_max_bytes, false,
+        reader,
+        limits,
+        content_length,
+        php_post_max_bytes,
+        false,
     )
 }
 
@@ -463,7 +467,11 @@ pub fn parse_reader_with_php_content_length_sapi_vars(
     php_post_max_bytes: Option<u64>,
 ) -> Result<Request, Error> {
     parse_reader_with_php_content_length_impl(
-        reader, limits, content_length, php_post_max_bytes, true,
+        reader,
+        limits,
+        content_length,
+        php_post_max_bytes,
+        true,
     )
 }
 
