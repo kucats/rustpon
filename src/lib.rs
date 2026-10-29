@@ -1206,7 +1206,19 @@ fn anonymous_upload_with_hook(
     path: &mut PathBuf,
     device: u64,
     inode: u64,
+    after_create: impl FnMut(),
+) -> Result<File, Error> {
+    anonymous_upload_with_hooks(path, device, inode, after_create, || {})
+}
+
+// Keep a separate post-unlink injection point to test directory replacement
+// after the last pathname operation but before any request bytes are written.
+fn anonymous_upload_with_hooks(
+    path: &mut PathBuf,
+    device: u64,
+    inode: u64,
     mut after_create: impl FnMut(),
+    mut after_unlink: impl FnMut(),
 ) -> Result<File, Error> {
     use std::fmt::Write as _;
     struct Name {
@@ -1278,10 +1290,24 @@ fn anonymous_upload_with_hook(
                     // Do not retry an unlink error: the pathname may now
                     // refer to a different file after an adversarial swap.
                     fs::remove_file(&*path).map_err(Error::from)?;
+                    after_unlink();
+                    // The trusted directory may be swapped or made public
+                    // after the pre-unlink identity check. Recheck before
+                    // returning a writable descriptor. This narrows the
+                    // pathname race window but does not replace openat/unlinkat.
+                    let directory = fs::symlink_metadata(parent);
+                    let valid_directory = matches!(
+                        directory,
+                        Ok(ref metadata)
+                            if metadata.is_dir()
+                                && metadata.permissions().mode() & 0o077 == 0
+                                && metadata.dev() == device
+                                && metadata.ino() == inode
+                    );
                     // A rename/hard-link race could leave the opened inode
                     // reachable under another name. Never write upload bytes
                     // unless the descriptor is genuinely anonymous.
-                    if file.metadata()?.nlink() != 0 {
+                    if !valid_directory || file.metadata()?.nlink() != 0 {
                         Err(Error::InvalidSpoolDirectory)
                     } else {
                         Ok(file)
