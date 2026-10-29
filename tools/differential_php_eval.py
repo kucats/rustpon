@@ -50,6 +50,22 @@ UPLOAD_ERROR_CONSTANT_PROGRAMS = [
 ]
 
 
+# Exact PHP 8.4 error-level integers; E_ALL intentionally excludes E_STRICT.
+ERROR_LEVEL_CONSTANT_PROGRAMS = [
+    f"echo {name};" for name in ["E_ERROR", "E_WARNING", "E_PARSE", "E_NOTICE", "E_CORE_ERROR", "E_CORE_WARNING", "E_COMPILE_ERROR", "E_COMPILE_WARNING", "E_USER_ERROR", "E_USER_WARNING", "E_USER_NOTICE", "E_STRICT", "E_RECOVERABLE_ERROR", "E_DEPRECATED", "E_USER_DEPRECATED", "E_ALL"]
+] + [
+    f"echo is_int({name});" for name in ["E_ERROR", "E_WARNING", "E_PARSE", "E_NOTICE", "E_CORE_ERROR", "E_CORE_WARNING", "E_COMPILE_ERROR", "E_COMPILE_WARNING", "E_USER_ERROR", "E_USER_WARNING", "E_USER_NOTICE", "E_STRICT", "E_RECOVERABLE_ERROR", "E_DEPRECATED", "E_USER_DEPRECATED", "E_ALL"]
+] + [
+    "echo E_ALL & E_STRICT;",
+    "echo E_ALL & E_USER_DEPRECATED;",
+    "echo E_WARNING | E_NOTICE;",
+    "echo E_ALL ^ E_STRICT;",
+    "$mask=E_ERROR|E_WARNING; echo $mask;",
+    "echo E_ERROR===true;",
+    "echo E_ERROR===1;",
+]
+
+
 INTEGER_CONSTANT_PROGRAMS = [
     "echo PHP_INT_MAX;", "echo PHP_INT_MIN;", "echo PHP_INT_SIZE;",
     "echo PHP_INT_MAX+0;", "echo PHP_INT_MIN+1;",
@@ -1339,7 +1355,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS + PRINT_EXPRESSION_PROGRAMS
-        + echo_arguments + integer_constants + UPLOAD_ERROR_CONSTANT_PROGRAMS + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + UPLOAD_ERROR_CONSTANT_PROGRAMS + ERROR_LEVEL_CONSTANT_PROGRAMS + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1388,6 +1404,11 @@ def main():
 
     invalid = [
         b"<?php echo print;",
+        b"<?php echo e_error;",
+        b"<?php echo E_ERROR_EXTRA;",
+        b"<?php echo E_ALLX;",
+        b"<?php echo E_STRICT_1;",
+        b"<?php echo E_ERROR();",
         b"<?php echo print();",
         b"<?php echo print 1,;",
         b"<?php 1/0;",
