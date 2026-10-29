@@ -2487,7 +2487,6 @@ fn upload_copy_detects_same_length_rewrite_during_destination_write() {
     spool.empty();
 }
 
-
 #[test]
 fn upload_copy_is_independent_of_shared_file_offsets() {
     struct SeekingWriter {
