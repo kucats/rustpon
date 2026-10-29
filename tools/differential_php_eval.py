@@ -538,6 +538,22 @@ VARIABLE_PROBE_PROGRAMS = [
     "$x=null; echo is_bool(isset($x));",
     "$x=0; echo empty($x)===true;",
     "$x=7; echo isset($x)===true;",
+    # Parentheses around simple lvalues retain isset/empty's undefined-variable
+    # suppression. PHP 8.4 accepts these without warnings.
+    "echo isset(($missing));",
+    "echo isset((($missing)));",
+    "$x=7; echo isset(($x));",
+    "$x=null; echo isset((($x)));",
+    "$x=7; $y=0; echo isset(($x),($y));",
+    "$x=7; echo isset((($x)),(($missing)));",
+    "$x=7; echo isset((($x)),);",
+    "echo empty(($missing));",
+    "echo empty((($missing)));",
+    "echo empty(((( $missing ))));",
+    "echo empty(( $missing /* comment */ ));",
+    "$x=null; echo empty((($x)));",
+    "$x=false; echo empty((($x)));",
+    "$x=7; echo empty((($x)));",
 ]
 
 
@@ -1392,6 +1408,10 @@ def main():
         b"<?php echo boolval(1,,);",
         b"<?php echo intval(1,2,,);",
         b"<?php echo empty(1,);",
+        b"<?php echo isset(($x)+1);",
+        b"<?php echo isset(($x[0]));",
+        b"<?php echo empty(($x,));",
+        b"<?php echo empty(($missing+1));",
         b"<?php echo is_callable();",
         b"<?php echo is_callable(1,2,3);",
         b"<?php echo is_callable(1,,);",
