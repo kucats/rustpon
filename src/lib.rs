@@ -199,6 +199,16 @@ impl Upload {
     /// sharing the same open-file description cannot redirect the copy by
     /// seeking. No client path is exposed.
     pub fn copy_to(&mut self, output: &mut impl Write) -> io::Result<u64> {
+        self.copy_to_with_read_hook(output, || {})
+    }
+
+    // The hook is a no-op in production. Tests use it to inject an inode
+    // mutation deterministically *after* pread and *before* the first write.
+    fn copy_to_with_read_hook(
+        &mut self,
+        output: &mut impl Write,
+        mut after_read: impl FnMut(),
+    ) -> io::Result<u64> {
         // Preserve the received length for PHP error=1 metadata, but never
         // expose a partial prefix from a discarded upload.
         if self.discarded {
@@ -236,6 +246,12 @@ impl Upload {
                 }
                 Err(error) => return Err(error),
             };
+            // A source can change while pread fills the buffer, before the
+            // destination has received anything. Reject observable mutations
+            // before emitting the just-read block. This is still not an
+            // atomic snapshot of the inode.
+            after_read();
+            validate_staged_copy_snapshot(file, expected_length, &source_before)?;
             // A short-writing destination may mutate the staged inode after
             // emitting only a few bytes. Revalidate after *each* successful
             // write, before offering it the remainder of this read block.
