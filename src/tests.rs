@@ -1,5 +1,5 @@
 use super::*;
-use std::io::Cursor;
+use std::io::{Cursor, Seek, SeekFrom};
 
 struct Spool(PathBuf);
 
