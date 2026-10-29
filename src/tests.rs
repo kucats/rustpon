@@ -2552,3 +2552,79 @@ fn upload_copy_is_independent_of_shared_file_offsets() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_stops_after_first_short_write_when_source_changes() {
+    use std::os::unix::fs::FileExt;
+
+    struct ShortTamperingWriter {
+        output: Vec<u8>,
+        source: File,
+        rewrite: bool,
+        writes: usize,
+    }
+
+    impl Write for ShortTamperingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.writes += 1;
+            let count = bytes.len().min(7);
+            self.output.extend_from_slice(&bytes[..count]);
+            if self.writes == 1 {
+                if self.rewrite {
+                    // Same-size mutation, with a deterministic timestamp
+                    // change even on coarse-resolution filesystems.
+                    self.source.write_at(b"!", 0)?;
+                    self.source.set_times(
+                        fs::FileTimes::new().set_modified(std::time::UNIX_EPOCH),
+                    )?;
+                } else {
+                    self.source
+                        .set_permissions(fs::Permissions::from_mode(0o644))?;
+                }
+            }
+            Ok(count)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let spool = Spool::new();
+    let payload = vec![b'q'; BLOCK * 2 + 9];
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    for rewrite in [false, true] {
+        let mut writer = ShortTamperingWriter {
+            output: Vec::new(),
+            source: upload.file.as_ref().unwrap().try_clone().unwrap(),
+            rewrite,
+            writes: 0,
+        };
+        assert_eq!(
+            upload.copy_to(&mut writer).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(writer.writes, 1, "must not offer the rest of the block");
+        assert_eq!(writer.output, payload[..7]);
+        // Restore the source, then verify a new copy begins at offset zero.
+        if rewrite {
+            upload.file.as_ref().unwrap().write_at(b"q", 0).unwrap();
+        } else {
+            upload
+                .file
+                .as_ref()
+                .unwrap()
+                .set_permissions(fs::Permissions::from_mode(0o600))
+                .unwrap();
+        }
+        let mut recovered = Vec::new();
+        assert_eq!(
+            upload.copy_to(&mut recovered).unwrap(),
+            payload.len() as u64
+        );
+        assert_eq!(recovered, payload);
+    }
+    drop(request);
+    spool.empty();
+}

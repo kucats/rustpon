@@ -205,6 +205,7 @@ impl Upload {
             return Err(io::ErrorKind::InvalidData.into());
         }
         let file = self.file.as_mut().ok_or(io::ErrorKind::InvalidData)?;
+        let expected_length = self.length;
         // A staged upload must still be anonymous, private, regular, and
         // complete when the caller copies it. A descriptor can outlive its
         // original directory and can be modified by local code holding it.
@@ -235,12 +236,12 @@ impl Upload {
                 }
                 Err(error) => return Err(error),
             };
-            write_chunk(output, &buffer[..count])?;
-            // A writer may mutate the staged inode through a cloned FD.
-            // Stop before reading/emitting the next block when the mutation
-            // is observable. Already-written bytes still require rollback
-            // by the caller.
-            validate_staged_copy_snapshot(file, self.length, &source_before)?;
+            // A short-writing destination may mutate the staged inode after
+            // emitting only a few bytes. Revalidate after *each* successful
+            // write, before offering it the remainder of this read block.
+            write_chunk_checked(output, &buffer[..count], || {
+                validate_staged_copy_snapshot(file, expected_length, &source_before)
+            })?;
             offset += count as u64;
         }
         // Also validate zero-byte uploads, for which the loop does not run.
@@ -1042,7 +1043,18 @@ impl Parser {
 
 // Unlike Write::write_all, do not retry an indefinitely Interrupted writer.
 // Any successful write resets the consecutive-interrupt budget.
-fn write_chunk(writer: &mut impl Write, mut bytes: &[u8]) -> io::Result<()> {
+fn write_chunk(writer: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
+    write_chunk_checked(writer, bytes, || Ok(()))
+}
+
+// Check the source after each positive write, not just after a complete
+// BLOCK-sized read. This also covers partial writes and retries. The caller
+// must discard already-emitted destination bytes if the check fails.
+fn write_chunk_checked(
+    writer: &mut impl Write,
+    mut bytes: &[u8],
+    mut check: impl FnMut() -> io::Result<()>,
+) -> io::Result<()> {
     let mut consecutive_interrupts = 0;
     while !bytes.is_empty() {
         match writer.write(bytes) {
@@ -1053,6 +1065,7 @@ fn write_chunk(writer: &mut impl Write, mut bytes: &[u8]) -> io::Result<()> {
             Ok(count) => {
                 bytes = &bytes[count..];
                 consecutive_interrupts = 0;
+                check()?;
             }
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 consecutive_interrupts += 1;

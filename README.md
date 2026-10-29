@@ -119,12 +119,14 @@ other code seeking through a cloned descriptor cannot skip or duplicate
 blocks during the copy; this does not protect against concurrent writes to
 the source inode. A mismatch
 fails before writing destination bytes; this is a point-in-time integrity
-check. Metadata is revalidated after **each emitted 8192-byte block**, as well
-as after the loop (including empty uploads). Persistent permission, link-count,
+check. Metadata is revalidated after **every successful destination write**, including
+short writes within an 8192-byte read block, and after the loop (including
+empty uploads). Persistent permission, link-count,
 or length changes, and modifications to inode mtime/ctime, now abort before
 subsequent blocks are emitted. Deterministic fault injection checks that a
 destination writer mutating a cloned source descriptor after the first block
-cannot receive the remaining blocks, including same-length rewrites. PHP 8.4
+or after a seven-byte partial write cannot receive the remaining bytes,
+including same-length rewrites. PHP 8.4
 HTTP SAPI differential coverage includes binary uploads spanning more than
 four blocks. Timestamp checks are not atomic and cannot detect every
 concurrent rewrite (including clock-granularity or timestamp-restoration

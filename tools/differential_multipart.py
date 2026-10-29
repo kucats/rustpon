@@ -62,6 +62,8 @@ CASES = [
     ("file-exact-two-blocks", [(b"upload", b"\x00\xff" + b"x" * (16384 - 2), b"two.bin")]),
     ("file-multi-buffer-copy", [(b"upload", b"\x00\xff" + b"x" * (8192 + 17), b"large.bin")]),
     ("file-three-blocks-binary", [(b"upload", bytes(range(256)) * 96 + b"\xff", b"three.bin")]),
+    # Short-write regression companion: PHP SAPI must preserve every binary byte.
+    ("file-short-write-oracle", [(b"upload", bytes((i * 47 + 3) % 256 for i in range(8192 * 2 + 9)), b"short-write.bin")]),
     # Distinct data at every copy boundary: catch skipped/repeated source blocks.
     ("file-offset-sensitive-binary", [(b"upload", bytes((i * 31 + 17) % 251 for i in range(8192 * 2 + 17)), b"offset.bin")]),
     # More than four copy blocks, exercising every post-write source check.
