@@ -1899,14 +1899,23 @@ mod tests {
     fn php84_terminal_html_preserves_non_php_processing_instructions() {
         for (program, expected) in [
             ("<?php echo 1 ?><?", "1<?"),
-            ("<?php echo 1 ?><?xml version=\"1.0\"?>", "1<?xml version=\"1.0\"?>"),
+            (
+                "<?php echo 1 ?><?xml version=\"1.0\"?>",
+                "1<?xml version=\"1.0\"?>",
+            ),
             ("<?php echo 1 ?><?foo", "1<?foo"),
             ("<?php echo 1 ?><?phpx echo 2;", "1<?phpx echo 2;"),
             ("<?php echo 1 ?><?php?>", "1<?php?>"),
             ("<?php echo 1 ?><? echo 2 ?>", "1<? echo 2 ?>"),
             ("<?php echo 1 ?><?PHPX", "1<?PHPX"),
-            ("<?php echo 1 ?><?php\u{000b} echo 2;", "1<?php\u{000b} echo 2;"),
-            ("<?php echo 1 ?><?php\u{000c} echo 2;", "1<?php\u{000c} echo 2;"),
+            (
+                "<?php echo 1 ?><?php\u{000b} echo 2;",
+                "1<?php\u{000b} echo 2;",
+            ),
+            (
+                "<?php echo 1 ?><?php\u{000c} echo 2;",
+                "1<?php\u{000c} echo 2;",
+            ),
             ("<?php echo 1 ?>a<?xml?>b<?foo", "1a<?xml?>b<?foo"),
             ("<?php echo 1 ?>\r\n<?xml", "1<?xml"),
             ("<?php echo 1 ?><?xml\n<?phpx", "1<?xml\n<?phpx"),
