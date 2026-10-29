@@ -1117,6 +1117,17 @@ impl<'a> Parser<'a> {
                 (b"PHP_INT_MAX".as_slice(), Value::Int(i64::MAX)),
                 (b"PHP_INT_MIN".as_slice(), Value::Int(i64::MIN)),
                 (b"PHP_INT_SIZE".as_slice(), Value::Int(8)),
+                // PHP 8.4's standard upload status constants are integers.
+                // Keep their names case-sensitive and token-delimited like
+                // PHP_INT_MAX; there is intentionally no status code 5.
+                (b"UPLOAD_ERR_OK".as_slice(), Value::Int(0)),
+                (b"UPLOAD_ERR_INI_SIZE".as_slice(), Value::Int(1)),
+                (b"UPLOAD_ERR_FORM_SIZE".as_slice(), Value::Int(2)),
+                (b"UPLOAD_ERR_PARTIAL".as_slice(), Value::Int(3)),
+                (b"UPLOAD_ERR_NO_FILE".as_slice(), Value::Int(4)),
+                (b"UPLOAD_ERR_NO_TMP_DIR".as_slice(), Value::Int(6)),
+                (b"UPLOAD_ERR_CANT_WRITE".as_slice(), Value::Int(7)),
+                (b"UPLOAD_ERR_EXTENSION".as_slice(), Value::Int(8)),
             ] {
                 if remaining.starts_with(name)
                     && !remaining
@@ -1943,6 +1954,50 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn php84_upload_error_constants_are_typed_and_case_sensitive() {
+        for (name, expected) in [
+            ("UPLOAD_ERR_OK", 0_i64),
+            ("UPLOAD_ERR_INI_SIZE", 1),
+            ("UPLOAD_ERR_FORM_SIZE", 2),
+            ("UPLOAD_ERR_PARTIAL", 3),
+            ("UPLOAD_ERR_NO_FILE", 4),
+            ("UPLOAD_ERR_NO_TMP_DIR", 6),
+            ("UPLOAD_ERR_CANT_WRITE", 7),
+            ("UPLOAD_ERR_EXTENSION", 8),
+        ] {
+            assert_eq!(
+                eval(&format!("<?php echo {name};")),
+                Ok(expected),
+                "{name}"
+            );
+            assert_eq!(
+                eval(&format!("<?php echo is_int({name});")),
+                Ok(1),
+                "{name}"
+            );
+        }
+        for (program, expected) in [
+            ("<?php echo UPLOAD_ERR_NO_FILE===4;", 1),
+            ("<?php echo UPLOAD_ERR_NO_FILE+UPLOAD_ERR_CANT_WRITE;", 11),
+            ("<?php echo UPLOAD_ERR_NO_FILE<UPLOAD_ERR_NO_TMP_DIR;", 1),
+            ("<?php echo UPLOAD_ERR_OK===false;", 0),
+            ("<?php $err=UPLOAD_ERR_PARTIAL; echo $err===3;", 1),
+        ] {
+            assert_eq!(eval(program), Ok(expected), "{program}");
+        }
+        // Unknown or differently cased names must not match a prefix.
+        for program in [
+            "<?php echo upload_err_ok;",
+            "<?php echo UPLOAD_ERR_OK_extra;",
+            "<?php echo UPLOAD_ERR_NO_TMP_DIRX;",
+            "<?php echo UPLOAD_ERR_5;",
+            "<?php echo UPLOAD_ERR_EXTENSION();",
+        ] {
+            assert!(eval(program).is_err(), "{program}");
+        }
+    }
 
     #[test]
     fn php84_nested_print_expression_order_and_return_type() {
