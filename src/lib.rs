@@ -170,6 +170,19 @@ impl Upload {
             return Err(io::ErrorKind::InvalidData.into());
         }
         let file = self.file.as_mut().ok_or(io::ErrorKind::InvalidData)?;
+        // A staged upload must still be anonymous, private, regular, and
+        // complete when the caller copies it. A descriptor can outlive its
+        // original directory and can be modified by local code holding it.
+        // Reject tampering before emitting any bytes. This is a point-in-time
+        // check, not a substitute for descriptor-relative upload creation.
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.nlink() != 0
+            || metadata.permissions().mode() & 0o077 != 0
+            || metadata.len() != self.length
+        {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
         file.seek(SeekFrom::Start(0))?;
         let mut remaining = self.length;
         let mut buffer = [0_u8; BLOCK];
