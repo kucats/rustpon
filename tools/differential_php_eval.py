@@ -1430,7 +1430,7 @@ def main():
         b"<?php echo 0**-1;",
         b"<?php echo 2**63;",
         b"<?php echo (-2)**64;",
-        b"<?php echo 1**4294967296;",
+        b"<?php echo 2**4294967296;",
         b"<?php echo 2**;",
         b"<?php echo 2***3;",
         b"<?php echo 2**3**;",
