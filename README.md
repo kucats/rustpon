@@ -1621,3 +1621,15 @@ point in PHP; rustpon rejects those cases without publishing partial output.
 The Linux PHP 8.4 CLI oracle suite adds fixed edge cases, 128 deterministic
 bounded generated cases, and malformed/unsupported calls. This does not add
 floating-point values, general PHP functions, or production SAPI integration.
+
+## PHP 8.4 CLI inline HTML opener handling
+
+The experimental `php_eval` command supports a terminal UTF-8 HTML suffix
+after `?>`. With PHP's default `short_open_tag=0`, literal `<?` sequences
+such as `<?xml`, `<?phpx`, and `<?php?>` remain ordinary HTML output.
+Only `<?=` or a case-insensitive `<?php` followed by a space, tab, CR,
+LF, or EOF is recognized as a PHP opening tag. A recognized PHP re-entry
+after the terminal suffix is still rejected rather than interpreted.
+The same 1,024-byte cumulative output cap applies to literal HTML.
+The differential test suite compares this narrow behavior with PHP 8.4 CLI;
+it does not claim complete PHP template or binary-output support.
