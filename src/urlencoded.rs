@@ -415,6 +415,86 @@ fn parse_reader_impl(
     }
 }
 
+/// Parse a URL-encoded HTTP request body using a transport-validated
+/// Content-Length. The reader is never advanced beyond the declared length.
+/// This is a bounded PHP 8.4-style admission adapter, not an HTTP parser or
+/// a replacement for Zend's SAPI input handling.
+///
+/// A zero length publishes an empty request. A nonzero PHP post_max_size
+/// exceeded by Content-Length also publishes an empty request, after draining
+/// exactly that many bytes without allocating a parser or projecting fields.
+/// The independent hard body limit is checked before reading. Early EOF,
+/// malformed readers and persistent interruptions fail closed.
+///
+/// Accepted bodies use PHP's decoded-NUL name truncation and retain ignored
+/// empty names for later max_input_vars accounting. The caller must validate
+/// HTTP framing and reject ambiguous Content-Length headers upstream.
+pub fn parse_reader_with_php_content_length(
+    reader: &mut impl Read,
+    limits: Limits,
+    content_length: u64,
+    php_post_max_bytes: Option<u64>,
+) -> Result<Request, Error> {
+    if content_length > limits.body_bytes {
+        return Err(Error::Limit(Limit::BodyBytes));
+    }
+    if content_length == 0 {
+        return Ok(Request {
+            arena: Vec::new(),
+            parts: Vec::new(),
+            stats: Stats::default(),
+        });
+    }
+    let over_php_limit =
+        php_post_max_bytes.is_some_and(|max| max != 0 && content_length > max);
+    let mut parser = if over_php_limit {
+        None
+    } else {
+        Some(
+            FormParser::new(limits)?
+                .with_php_nul_name_truncation()
+                .with_php_input_var_counting(),
+        )
+    };
+    let mut remaining = content_length;
+    let mut buffer = [0u8; 8192];
+    let mut consecutive_interrupts = 0usize;
+    while remaining != 0 {
+        let allowed = remaining.min(buffer.len() as u64) as usize;
+        match reader.read(&mut buffer[..allowed]) {
+            Ok(0) => return Err(Error::Truncated),
+            Ok(count) if count > allowed => {
+                return Err(Error::Io(std::io::ErrorKind::InvalidData));
+            }
+            Ok(count) => {
+                remaining -= count as u64;
+                consecutive_interrupts = 0;
+                if let Some(parser) = parser.as_mut() {
+                    parser.feed(&buffer[..count])?;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                consecutive_interrupts += 1;
+                if consecutive_interrupts >= crate::MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(Error::Io(std::io::ErrorKind::Interrupted));
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    match parser {
+        Some(parser) => parser.finish(),
+        None => Ok(Request {
+            arena: Vec::new(),
+            parts: Vec::new(),
+            stats: Stats {
+                body_bytes: content_length,
+                ..Stats::default()
+            },
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -430,6 +510,128 @@ mod tests {
             .parts()
             .map(|p| (p.name.to_vec(), p.value.unwrap().to_vec()))
             .collect()
+    }
+
+    #[test]
+    fn php_content_length_admission_is_exact_and_preserves_next_message() {
+        // PHP 8.4 CLI parse_str() projects x%00tail as x and b[] as b[0].
+        let body = b"a=1&x%00tail=2&b%5B%5D=3";
+        let mut wire = body.to_vec();
+        wire.extend_from_slice(b"NEXT");
+        let mut reader = Cursor::new(wire);
+        let request = parse_reader_with_php_content_length(
+            &mut reader,
+            Limits::default(),
+            body.len() as u64,
+            Some(body.len() as u64),
+        )
+        .unwrap();
+        assert_eq!(reader.position(), body.len() as u64);
+        assert_eq!(request.stats().body_bytes, body.len() as u64);
+        assert_eq!(
+            fields(&request),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"x".to_vec(), b"2".to_vec()),
+                (b"b[]".to_vec(), b"3".to_vec()),
+            ]
+        );
+
+        let mut reader = Cursor::new(b"=ignored&a=1".to_vec());
+        let request = parse_reader_with_php_content_length(
+            &mut reader,
+            Limits::default(),
+            12,
+            Some(0),
+        )
+        .unwrap();
+        assert_eq!(fields(&request)[0].0, b"".to_vec());
+    }
+
+    #[test]
+    fn php_content_length_preflight_drains_without_parsing_or_overreading() {
+        let mut reader = Cursor::new(b"bad=%00&still=hereNEXT".to_vec());
+        let request = parse_reader_with_php_content_length(
+            &mut reader,
+            Limits::default(),
+            18,
+            Some(17),
+        )
+        .unwrap();
+        assert_eq!(reader.position(), 18);
+        assert_eq!(request.stats().body_bytes, 18);
+        assert_eq!(request.stats().parts, 0);
+        assert!(fields(&request).is_empty());
+
+        let mut reader = Cursor::new(b"a=1".to_vec());
+        let request = parse_reader_with_php_content_length(
+            &mut reader,
+            Limits::default(),
+            0,
+            Some(1),
+        )
+        .unwrap();
+        assert_eq!(reader.position(), 0);
+        assert!(fields(&request).is_empty());
+
+        let mut reader = Cursor::new(b"a=1".to_vec());
+        assert_eq!(
+            parse_reader_with_php_content_length(
+                &mut reader,
+                Limits {
+                    body_bytes: 2,
+                    ..Limits::default()
+                },
+                3,
+                None,
+            )
+            .unwrap_err(),
+            Error::Limit(Limit::BodyBytes)
+        );
+        assert_eq!(reader.position(), 0);
+    }
+
+    #[test]
+    fn php_content_length_rejects_short_and_misbehaving_readers() {
+        for php_max in [None, Some(1)] {
+            let mut short = Cursor::new(b"a=1".to_vec());
+            assert_eq!(
+                parse_reader_with_php_content_length(
+                    &mut short,
+                    Limits::default(),
+                    4,
+                    php_max,
+                )
+                .unwrap_err(),
+                Error::Truncated
+            );
+        }
+        struct Overreport;
+        impl Read for Overreport {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                Ok(buffer.len() + 1)
+            }
+        }
+        assert_eq!(
+            parse_reader_with_php_content_length(
+                &mut Overreport,
+                Limits::default(),
+                3,
+                None,
+            )
+            .unwrap_err(),
+            Error::Io(std::io::ErrorKind::InvalidData)
+        );
+        assert_eq!(
+            parse_reader_with_php_content_length(
+                &mut Overreport,
+                Limits::default(),
+                3,
+                Some(1),
+            )
+            .unwrap_err(),
+            Error::Io(std::io::ErrorKind::InvalidData)
+        );
     }
 
     #[test]
