@@ -460,9 +460,7 @@ impl PostRequest {
         if forbidden(bytes, &self.scratch) {
             return Ok(());
         }
-        let key = numeric(bytes)
-            .map(Key::Integer)
-            .unwrap_or(Key::Bytes(span));
+        let key = numeric(bytes).map(Key::Integer).unwrap_or(Key::Bytes(span));
         let Some(target) = self.find(0, key)? else {
             return Ok(());
         };
