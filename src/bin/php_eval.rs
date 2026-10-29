@@ -1725,6 +1725,17 @@ impl<'a> Parser<'a> {
         if self.source.len() > MAX_SOURCE {
             return Err(EvalError::SourceTooLong);
         }
+        // A leading UTF-8 BOM is literal inline HTML in PHP 8.4 CLI.
+        // Support the bounded BOM + PHP opener slice without accepting
+        // arbitrary leading HTML (which requires a mode-switching lexer).
+        // The BOM is emitted before any scalar output and charged to the
+        // same transactional byte quota.
+        if self.source.starts_with(b"\xef\xbb\xbf")
+            && is_php_open_tag(&self.source[3..])
+        {
+            self.output.push('\u{feff}');
+            self.offset = 3;
+        }
         self.skip_space();
         // PHP 8.4 recognizes the long opening tag without regard to ASCII
         // case, and <?= starts an implicit echo statement. Do not accept
@@ -2111,6 +2122,48 @@ mod tests {
         let excess = format!("{exact}x");
         assert_eq!(
             Parser::new(excess.as_bytes()).evaluate(),
+            Err(EvalError::OutputLimit)
+        );
+    }
+
+    #[test]
+    fn php84_leading_utf8_bom_is_emitted_before_php_output() {
+        for (source, expected) in [
+            (
+                b"\xef\xbb\xbf<?php echo 7;".as_slice(),
+                b"\xef\xbb\xbf7".as_slice(),
+            ),
+            (
+                b"\xef\xbb\xbf<?=1?>".as_slice(),
+                b"\xef\xbb\xbf1".as_slice(),
+            ),
+            (
+                b"\xef\xbb\xbf<?PHP echo 2; return 1; ?>\xff".as_slice(),
+                b"\xef\xbb\xbf2".as_slice(),
+            ),
+            (
+                b"\xef\xbb\xbf<?php echo 1 ?>\xff".as_slice(),
+                b"\xef\xbb\xbf1\xff".as_slice(),
+            ),
+        ] {
+            let mut parser = Parser::new(source);
+            assert!(parser.evaluate().is_ok(), "{source:?}");
+            let mut actual = parser.output.into_bytes();
+            actual.extend_from_slice(&parser.binary_template);
+            assert_eq!(actual, expected, "{source:?}");
+        }
+
+        let mut at_limit = b"\xef\xbb\xbf<?php echo 1 ?>".to_vec();
+        at_limit.extend(vec![0xff; MAX_OUTPUT - 4]);
+        let mut parser = Parser::new(&at_limit);
+        assert!(parser.evaluate().is_ok());
+        assert_eq!(
+            parser.output.len() + parser.binary_template.len(),
+            MAX_OUTPUT
+        );
+        at_limit.push(0xff);
+        assert_eq!(
+            Parser::new(&at_limit).evaluate(),
             Err(EvalError::OutputLimit)
         );
     }
