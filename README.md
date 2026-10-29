@@ -1522,13 +1522,15 @@ The CLI differential corpus includes the mutation/unset cases and checks
 their observable output against PHP 8.4; Rust regressions cover the
 corresponding parse and rejection boundaries.
 
-A final UTF-8 template suffix is emitted byte-for-byte after PHP consumes
-one immediately following CR, LF or CRLF. All output, including template
-bytes, shares the 1,024-byte transactional quota. Top-level return/exit
-suppress unreachable template output. Further PHP opening tags and non-UTF-8
-template bytes fail closed; mixed PHP/HTML/PHP scripts and binary templates
-still require a dedicated lexer and byte-oriented output buffer.
-The differential corpus checks terminal template output against PHP 8.4 CLI.
+A terminal template suffix is emitted byte-for-byte after PHP consumes
+one immediately following CR, LF or CRLF. UTF-8 output remains in the
+scalar output buffer; suffixes containing arbitrary binary bytes (including
+NUL and invalid UTF-8) use a separate staged byte buffer, written after
+scalar output. All output shares the 1,024-byte transactional quota.
+Top-level return/exit suppress unreachable template output. Further PHP
+opening tags still fail closed; mixed PHP/HTML/PHP scripts require a
+proper mode-switching lexer. The PHP 8.4 CLI differential corpus checks
+binary suffixes, CRLF handling, output order and return/exit suppression.
 
 ### PHP 8.4 trailing commas in scalar builtins (research evaluator)
 
@@ -1652,14 +1654,16 @@ floating-point values, general PHP functions, or production SAPI integration.
 
 ## PHP 8.4 CLI inline HTML opener handling
 
-The experimental `php_eval` command supports a terminal UTF-8 HTML suffix
-after `?>`. With PHP's default `short_open_tag=0`, literal `<?` sequences
+The experimental `php_eval` command supports a terminal binary-safe HTML suffix
+after `?>`, including embedded NUL and non-UTF-8 bytes. With PHP's default
+`short_open_tag=0`, literal `<?` sequences
 such as `<?xml`, `<?phpx`, and `<?php?>` remain ordinary HTML output.
 Only `<?=` or a case-insensitive `<?php` followed by a space, tab, CR,
 LF, or EOF is recognized as a PHP opening tag. A recognized PHP re-entry
 after the terminal suffix is still rejected rather than interpreted.
 The same 1,024-byte cumulative output cap applies to literal HTML.
-The differential test suite compares this narrow behavior with PHP 8.4 CLI;
+The differential test suite compares this narrow behavior with PHP 8.4 CLI,
+including byte-for-byte non-UTF-8 templates and 1,024-byte output limits;
 it does not claim complete PHP template or binary-output support.
 
 ## PHP 8.4 error-reporting constants (research evaluator)
