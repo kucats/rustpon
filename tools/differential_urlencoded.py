@@ -153,12 +153,21 @@ def main():
         (1, b"a%5Bx%5D%5By=1&ok=2"),
         (2, b"a%5Bx%5D%5By=1&ok=2"),
         (64, b"a" + b"%5Bx%5D" * 65 + b"=deep&ok=2"),
+        # A later over-depth field removes the entire existing PHP root,
+        # including earlier valid scalar/array entries; a subsequent valid
+        # registration recreates that root at the end of insertion order.
+        (1, b"a=1&a%5Bx%5D%5By%5D=over&b=2"),
+        (1, b"keep=1&a%5Bx%5D=old&a%5Bx%5D%5By%5D=over&after=2&a%5Bz%5D=new"),
+        (1, b"0%5Bx%5D=old&0%5Bx%5D%5By%5D=over&0%5Bz%5D=new"),
+        (0, b"a=1&a%5Bx%5D=over&b=2"),
     ]
     combined = [
         (1, 1, b"a%5Bx%5D%5By%5D=1&ok=2"),
         (2, 1, b"a%5Bx%5D%5By%5D=1&ok=2&tail=3"),
         (3, 2, b"a%5Bx%5D%5By%5D%5Bz%5D=1&a%5Bx%5D%5By%5D=2&ok=3"),
         (0, 2, b"a%5Bx%5D=1&ok=2"),
+        (2, 1, b"a%5Bx%5D=old&b=2&a%5Bx%5D%5By%5D=over"),
+        (3, 1, b"a%5Bx%5D=old&b=2&a%5Bx%5D%5By%5D=over"),
     ]
     for depth, data in nested:
         expected = run([args.php_bin, "-d", "max_input_vars=10000",
