@@ -107,7 +107,11 @@ also checks that the directory still has its original identity and that the
 pathname still names the opened file before unlinking it. After unlink,
 it revalidates the original private directory's device/inode and permissions,
 then verifies that the opened inode has zero remaining hard links before writing
-request bytes. Deterministic fault-injection tests cover directory retargeting,
+request bytes. The opened inode must also remain a regular file with no
+group/other permission bits, and its owner must match the spool directory's
+owner both before and after unlink. This rejects privileged staging into a
+private directory owned by another local account and injected inode permission
+relaxation before request data is written. Deterministic fault-injection tests cover directory retargeting,
 filename replacement, hard-link creation before unlink, and directory replacement
 or permission relaxation immediately after unlink. A detected race fails closed without
 writing request bytes; an empty orphan may remain in a renamed directory.
