@@ -70,6 +70,11 @@ CASES = [
         (b"upload", bytes((i * 19 + 7) % 256 for i in range(8192 * 2 + 3)), b"snapshot.bin")
     ]),
     # Distinct data at every copy boundary: catch skipped/repeated source blocks.
+    # Post-write readback companion: byte-varying data crosses three full
+    # blocks and a short final block in both the Rust and PHP 8.4 paths.
+    ("file-readback-boundary-oracle", [
+        (b"upload", bytes((i * 61 + 5) % 256 for i in range(8192 * 3 + 5)), b"readback.bin")
+    ]),
     ("file-offset-sensitive-binary", [(b"upload", bytes((i * 31 + 17) % 251 for i in range(8192 * 2 + 17)), b"offset.bin")]),
     # More than four copy blocks, exercising every post-write source check.
     ("file-four-blocks-plus-one", [(b"upload", bytes((i * 73 + 19) % 256 for i in range(8192 * 4 + 1)), b"four-blocks.bin")]),

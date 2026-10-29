@@ -2689,3 +2689,42 @@ fn upload_copy_rejects_mutation_between_read_and_first_write() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_readback_rejects_same_size_drift_and_truncation() {
+    use std::os::unix::fs::FileExt;
+
+    let spool = Spool::new();
+    let payload: Vec<u8> = (0..BLOCK * 2 + 7)
+        .map(|index| ((index * 17 + 11) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let source = upload.file.as_ref().unwrap().try_clone().unwrap();
+
+    validate_staged_copy_bytes(&source, 0, &payload[..BLOCK]).unwrap();
+    validate_staged_copy_bytes(&source, BLOCK as u64, &payload[BLOCK..BLOCK * 2]).unwrap();
+    source.write_at(&[payload[BLOCK - 1] ^ 0xff], (BLOCK - 1) as u64).unwrap();
+    assert_eq!(
+        validate_staged_copy_bytes(&source, 0, &payload[..BLOCK])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+
+    source.write_at(&payload[BLOCK - 1..BLOCK], (BLOCK - 1) as u64).unwrap();
+    let mut copied = Vec::new();
+    assert_eq!(upload.copy_to(&mut copied).unwrap(), payload.len() as u64);
+    assert_eq!(copied, payload);
+
+    source.set_len((BLOCK - 1) as u64).unwrap();
+    assert_eq!(
+        validate_staged_copy_bytes(&source, 0, &payload[..BLOCK])
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    drop(source);
+    drop(request);
+    spool.empty();
+}

@@ -182,6 +182,37 @@ fn validate_staged_copy_snapshot(
     Ok(())
 }
 
+// Re-read the just-emitted block from the staged inode. Metadata timestamps
+// can be coarse or restored, so compare actual bytes as a second, bounded
+// integrity signal. This is not an atomic snapshot: callers still must discard
+// the destination on any error.
+fn validate_staged_copy_bytes(file: &File, offset: u64, expected: &[u8]) -> io::Result<()> {
+    debug_assert!(expected.len() <= BLOCK);
+    let mut actual = [0_u8; BLOCK];
+    let mut received = 0;
+    let mut interrupts = 0;
+    while received < expected.len() {
+        match file.read_at(&mut actual[received..expected.len()], offset + received as u64) {
+            Ok(0) => return Err(io::ErrorKind::InvalidData.into()),
+            Ok(count) => {
+                received += count;
+                interrupts = 0;
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                interrupts += 1;
+                if interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    if &actual[..expected.len()] != expected {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(())
+}
+
 impl Upload {
     pub fn len(&self) -> u64 {
         self.length
@@ -258,6 +289,11 @@ impl Upload {
             write_chunk_checked(output, &buffer[..count], || {
                 validate_staged_copy_snapshot(file, expected_length, &source_before)
             })?;
+            // Read back the completed block before transferring the next one.
+            // This catches persistent byte drift even when metadata alone
+            // cannot distinguish the two inode contents.
+            validate_staged_copy_bytes(file, offset, &buffer[..count])?;
+            validate_staged_copy_snapshot(file, expected_length, &source_before)?;
             offset += count as u64;
         }
         // Also validate zero-byte uploads, for which the loop does not run.
