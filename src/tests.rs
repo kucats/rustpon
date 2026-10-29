@@ -2216,14 +2216,8 @@ fn post_unlink_permission_relaxation_is_rejected() {
     spool.empty();
 
     // The same path and inode are still usable once permissions are private.
-    let file = anonymous_upload_with_hooks(
-        &mut path,
-        original.dev(),
-        original.ino(),
-        || {},
-        || {},
-    )
-    .unwrap();
+    let file = anonymous_upload_with_hooks(&mut path, original.dev(), original.ino(), || {}, || {})
+        .unwrap();
     assert_eq!(file.metadata().unwrap().nlink(), 0);
     assert_eq!(file.metadata().unwrap().len(), 0);
     drop(file);
