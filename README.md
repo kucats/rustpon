@@ -1673,6 +1673,25 @@ exact/one-byte-over 1,024-byte output boundaries. A stale strict-rejection
 case for valid binary HTML was corrected after Linux CI detected it;
 this does not claim complete PHP template or binary-output support.
 
+## PHP 8.4 error-control operator (research evaluator)
+
+The bounded `php_eval` CLI accepts PHP's unary `@` error-control operator
+for its supported scalar expressions. Within the operand, reading an undefined
+simple variable yields the PHP 8.4 `null` value while suppressing its warning:
+`echo @($missing + 1);` outputs `1`, and
+`echo @var_dump($missing);` outputs `NULL` followed by a newline.
+Nested `@` operators, parentheses, scalar conversions, builtins, and ordinary
+variable updates retain the existing depth, work, and output limits.
+
+Only undefined-variable reads are modeled as recoverable warnings. The
+operator does not swallow division-by-zero errors, unsupported constructs,
+unknown variables outside its operand, or resource-limit failures. Programs
+that fail are rejected transactionally without partial stdout, unlike PHP
+scripts that may have emitted output before a later runtime error. The PHP
+8.4 CLI differential corpus includes 22 successful cases and eight strict
+rejections; Rust regression tests also cover excessive nesting. This does
+not implement Zend's general warning/notice machinery or error handlers.
+
 ## PHP 8.4 error-reporting constants (research evaluator)
 
 The bounded `php_eval` interpreter recognizes the 16 standard PHP 8.4
