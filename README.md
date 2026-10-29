@@ -137,7 +137,12 @@ concurrent rewrite (including clock-granularity or timestamp-restoration
 cases). A failed copy may already have emitted a prefix, so callers **must
 discard the entire destination on every copy error**. Per-block validation
 does not provide an atomic source snapshot or guarantee detection of
-same-length in-place rewrites. After each completed block, the copy also\nre-reads that block using positional I/O and compares the bytes against what\nwas emitted. This adds a bounded-memory second integrity signal even when\nmetadata changes are not observable, at the cost of an extra read pass. It\ndoes not make the copy atomic, and any failure still requires discarding the\nwhole destination.
+same-length in-place rewrites. After each completed block, the copy also
+re-reads that block using positional I/O and compares the bytes against what
+was emitted. This adds a bounded-memory second integrity signal even when
+metadata changes are not observable, at the cost of an extra read pass. It
+does not make the copy atomic, and any failure still requires discarding the
+whole destination.
 This rejects privileged staging into a
 private directory owned by another local account and injected inode permission
 relaxation before request data is written. Deterministic fault-injection tests cover directory retargeting,
