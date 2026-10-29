@@ -292,6 +292,28 @@ PRINT_R_SCALAR_PROGRAMS = [
 ]
 
 
+# PHP 8.4 print is also an expression. Check the operand's output
+# precedes the integer-1 result, including nested calls and mixed echo args.
+PRINT_EXPRESSION_PROGRAMS = [
+    "echo print 7;",
+    "echo PRINT 1+2;",
+    "echo (print 7)+2;",
+    "echo 1+print 2;",
+    "echo print print 3;",
+    "echo print 1,2;",
+    "echo print 1+2,print 4;",
+    "echo (print 0)+(print 1);",
+    "echo (print false) === 1;",
+    "echo print_r(2);",
+    "print print 3;",
+    "echo (print 1)===(print 2);",
+    "echo is_int(print 5);",
+    "echo print (print 3);",
+    "echo print 1 ?>",
+    "echo print 1; print 2;",
+]
+
+
 VAR_DUMP_PROGRAMS = [
     "var_dump(0);",
     "var_dump(1, -1, true, false, null);",
@@ -1273,7 +1295,7 @@ def main():
         + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
-        + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
+        + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS + PRINT_EXPRESSION_PROGRAMS
         + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
@@ -1322,6 +1344,9 @@ def main():
             )
 
     invalid = [
+        b"<?php echo print;",
+        b"<?php echo print();",
+        b"<?php echo print 1,;",
         b"<?php 1/0;",
         b"<?php echo 1; 1/0;",
         b"<?php 1+;",
