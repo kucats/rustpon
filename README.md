@@ -1603,3 +1603,18 @@ type tags, side effects, invalid arity, unsupported return strings, and output
 exhaustion. The PHP 8.4 CLI differential suite compares fixed and seeded
 scalar cases byte-for-byte and verifies the oracle's `ArgumentCountError`
 for invalid arity. No third-party dependencies are added.
+
+## PHP 8.4 integer `pow()` compatibility slice
+
+The standalone `php_eval` research interpreter now evaluates case-insensitive
+`pow(base, exponent)` with two scalar int/bool/null arguments, an optional
+trailing comma, nested calls and left-to-right argument evaluation. It shares
+the existing checked integer exponentiation with `**` and compound `**=`.
+PHP 8.4 results are reproduced when the exponent is nonnegative and the result
+fits a signed 64-bit integer, including `0**0`, `PHP_INT_MIN**1`, and
+boolean/null coercion. Negative exponents and overflow promote to floating
+point in PHP; rustpon rejects those cases without publishing partial output.
+
+The Linux PHP 8.4 CLI oracle suite adds fixed edge cases, 128 deterministic
+bounded generated cases, and malformed/unsupported calls. This does not add
+floating-point values, general PHP functions, or production SAPI integration.

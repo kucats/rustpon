@@ -4,7 +4,7 @@
 //! Supported grammar: empty statements, terminal top-level return/exit/die, ordered case-insensitive echo (with comma-separated arguments) and print statements interleaved with bounded scalar assignments (including +=/-=/*=//=/**=/%=/&=/^=/|=/<<=/>>=), statement and expression-level ++/--, and unsets followed by one echo;
 //! scalar var_dump() statements with byte-exact PHP CLI output, and
 //! PHP 8.4 decimal/octal/binary/hex i64 literals (with digit separators),
-//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers, shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen()/var_export()/print_r() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
+//! variables, typed integer/boolean/null values, unary +/-, int/bool casts, logical/bitwise not, parentheses, arithmetic, integer powers (including bounded pow()), shifts, comparisons (including <=>), integer bitwise &, ^, |, bounded intdiv()/abs()/min()/max()/type-predicate/boolval()/intval()/strlen()/var_export()/print_r() builtins, variable-only isset(), scalar-expression empty(), and variable-only unset() statements.
 //! Division is supported only when its result is an exact i64.
 //! Variables are ASCII identifiers; there is no PHP symbol table.
 //! Unsupported PHP constructs and arithmetic overflow fail closed.
@@ -552,6 +552,27 @@ impl<'a> Parser<'a> {
             .ok_or(EvalError::UnsupportedFloat)
     }
 
+    // PHP 8.4 pow() preserves integer results for nonnegative integer
+    // exponents when the result fits i64. Negative exponents and overflow
+    // produce floats in PHP, which this scalar VM must reject.
+    fn builtin_pow(&mut self, depth: usize) -> Result<Value, EvalError> {
+        if depth >= MAX_DEPTH {
+            return Err(EvalError::DepthLimit);
+        }
+        self.offset += b"pow".len();
+        self.charge()?;
+        if !self.consume(b'(') {
+            return Err(EvalError::Syntax);
+        }
+        let base = self.bitwise_or(depth + 1)?.as_int();
+        if !self.consume(b',') {
+            return Err(EvalError::Syntax);
+        }
+        let exponent = self.bitwise_or(depth + 1)?.as_int();
+        self.close_builtin_call()?;
+        Self::pow_int(base, exponent).map(Value::Int)
+    }
+
     // PHP min()/max() preserve the winning argument's original scalar tag.
     // PHP's two-argument min() fast path selects the second on a loose tie;
     // max() and min() with three or more arguments preserve the first.
@@ -921,6 +942,15 @@ impl<'a> Parser<'a> {
                 return self.builtin_abs(depth);
             }
 
+            if remaining
+                .get(..b"pow".len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(b"pow"))
+                && !remaining
+                    .get(b"pow".len())
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || *byte == b'_')
+            {
+                return self.builtin_pow(depth);
+            }
             for (name, minimum) in [(b"min".as_slice(), true), (b"max".as_slice(), false)] {
                 if remaining
                     .get(..name.len())
@@ -2011,6 +2041,62 @@ mod tests {
         ] {
             let mut parser = Parser::new(program.as_bytes());
             assert!(parser.evaluate().is_err(), "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_pow_integer_builtin_matches_cli() {
+        for (program, expected) in [
+            ("echo pow(2,3);", "8"),
+            ("echo pow(-2,3);", "-8"),
+            ("echo pow(-2,2);", "4"),
+            ("echo pow(0,0);", "1"),
+            ("echo pow(2,0);", "1"),
+            ("echo pow(2,62);", "4611686018427387904"),
+            ("echo pow(true,3);", "1"),
+            ("echo pow(false,3);", "0"),
+            ("echo pow(null,0);", "1"),
+            ("echo pow(null,true);", "0"),
+            ("echo pow(PHP_INT_MIN,1);", "-9223372036854775808"),
+            ("echo pow(PHP_INT_MAX,0);", "1"),
+            ("echo PoW(3,2);", "9"),
+            ("echo pow(2,3,);", "8"),
+            ("echo pow(2,3 /* comment */,);", "8"),
+            ("echo is_int(pow(2,3));", "1"),
+            ("echo pow(pow(2,3),2);", "64"),
+            ("$x=2; echo pow($x++,3),$x;", "83"),
+            ("echo pow(2,3)+1;", "9"),
+            ("echo pow(2,3) ?>", "8"),
+            ("echo pow(var_dump(1),0);", "int(1)\\n1"),
+            ("echo pow(2,3),pow(3,2);", "89"),
+        ] {
+            let mut parser = Parser::new(program.as_bytes());
+            assert!(parser.evaluate().is_ok(), "{program:?}");
+            assert_eq!(parser.output, expected, "{program:?}");
+        }
+    }
+
+    #[test]
+    fn php84_pow_rejects_float_promotion_and_bad_arity() {
+        for program in [
+            "echo pow();",
+            "echo pow(1);",
+            "echo pow(1,2,3);",
+            "echo pow(1,,2);",
+            "echo pow(2,-1);",
+            "echo pow(-1,-3);",
+            "echo pow(2,63);",
+            "echo pow(0,-1);",
+            "echo pow(PHP_INT_MIN,2);",
+            "echo pow(1,2,,);",
+            "echo powx(2,3);",
+            "echo pow(2,3",
+            "echo pow(2,3); echo $missing;",
+        ] {
+            assert!(
+                Parser::new(program.as_bytes()).evaluate().is_err(),
+                "{program:?}"
+            );
         }
     }
 

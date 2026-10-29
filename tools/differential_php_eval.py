@@ -92,6 +92,25 @@ CALLABLE_SCALAR_PROGRAMS = [
 ]
 
 
+# PHP 8.4 pow() returns an integer for supported scalar operands when
+# the nonnegative exponent's result fits signed 64-bit. Float results are
+# intentionally rejected by the bounded evaluator.
+POW_SCALAR_PROGRAMS = [
+    "echo pow(2,3);", "echo pow(-2,3);", "echo pow(-2,2);",
+    "echo pow(0,0);", "echo pow(2,0);", "echo pow(2,62);",
+    "echo pow(true,3);", "echo pow(false,3);",
+    "echo pow(null,0);", "echo pow(null,true);",
+    "echo pow(PHP_INT_MIN,1);", "echo pow(PHP_INT_MAX,0);",
+    "echo PoW(3,2);", "echo pow(2,3,);",
+    "echo pow(2,3 /* comment */,);",
+    "echo is_int(pow(2,3));", "echo pow(pow(2,3),2);",
+    "$x=2; echo pow($x++,3),$x;",
+    "echo pow(2,3)+1;", "echo pow(2,3) ?>",
+    "echo pow(var_dump(1),0);",
+    "echo pow(2,3),pow(3,2);",
+]
+
+
 # PHP 8.4 strlen() stringifies the scalar value before counting bytes.
 # The bounded VM currently represents only int/bool/null (no strings).
 STRLEN_SCALAR_PROGRAMS = [
@@ -1191,6 +1210,11 @@ def main():
         dump_expressions.append(
             f"$x={first}; echo is_null(var_dump($x, {second},));"
         )
+    pow_scalars = list(POW_SCALAR_PROGRAMS)
+    for _ in range(128):
+        base = rng.randrange(-12, 13)
+        exponent = rng.randrange(0, 9)
+        pow_scalars.append(f"echo pow({base},{exponent});")
     strlen_scalars = list(STRLEN_SCALAR_PROGRAMS)
     for _ in range(48):
         number = rng.randrange(-9223372036854775807, 9223372036854775808)
@@ -1211,7 +1235,7 @@ def main():
         + intdiv_programs + abs_programs + type_predicates + extrema_programs
         + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
         + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS
-        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+        + echo_arguments + integer_constants + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
     )
     failures = 0
     for index, program in enumerate(cases):
@@ -1673,6 +1697,21 @@ def main():
         b"<?php var_dumpx(1);",
         b"<?php var_dump(" + b",".join([b"PHP_INT_MAX"] * 48) + b");",
     ])
+    invalid.extend([
+        b"<?php echo pow();",
+        b"<?php echo pow(1);",
+        b"<?php echo pow(1,2,3);",
+        b"<?php echo pow(1,,2);",
+        b"<?php echo pow(2,-1);",  # PHP returns float
+        b"<?php echo pow(-1,-3);",  # PHP returns float
+        b"<?php echo pow(2,63);",  # PHP returns float
+        b"<?php echo pow(0,-1);",  # PHP returns INF
+        b"<?php echo pow(PHP_INT_MIN,2);",  # PHP returns float
+        b"<?php echo pow(1,2,,);",
+        b"<?php echo powx(2,3);",
+        b"<?php echo pow(2,3",
+        b"<?php echo pow(2,3); echo $missing;",
+    ])
     for index, code in enumerate(invalid):
         rust = execute([str(args.rust_bin)], code)
         if rust.returncode == 0 or rust.stdout:
@@ -1816,7 +1855,7 @@ def main():
             )
 
     print(
-        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/print-r-scalar differential: "
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar differential: "
         f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
         f"{len(type_errors)} PHP TypeError rejections, "
         f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
