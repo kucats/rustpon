@@ -139,6 +139,9 @@ Metadata is revalidated after **every successful destination write**, including
 short writes within an 8192-byte read block, and before retrying an interrupted
 destination write. A custom writer may have modified the staged inode before
 returning `Interrupted`; no further bytes are offered until validation succeeds.
+Source-read `Interrupted` retries also revalidate the staged inode before
+attempting another positional read; injected permission tampering fails before
+the retry, while a transient interruption resumes within a fixed retry quota.
 The check also runs after the loop (including empty uploads). Persistent permission, link-count,
 or length changes, and modifications to inode mtime/ctime, now abort before
 subsequent blocks are emitted. Deterministic fault injection checks that a
