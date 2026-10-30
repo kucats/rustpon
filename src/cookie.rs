@@ -368,12 +368,9 @@ mod tests {
                 value: b"one".to_vec(),
             }]
         );
-        let ignored = parse_scalar_header_with_php_max_input_vars(
-            b"[ignored]=x; a=one; b=two",
-            limits,
-            2,
-        )
-        .unwrap();
+        let ignored =
+            parse_scalar_header_with_php_max_input_vars(b"[ignored]=x; a=one; b=two", limits, 2)
+                .unwrap();
         assert_eq!(
             ignored.entries(),
             &[Cookie {

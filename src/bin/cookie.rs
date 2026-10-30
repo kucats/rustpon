@@ -29,9 +29,9 @@ fn run() -> Result<(), String> {
     let mut out = io::BufWriter::new(io::stdout().lock());
     if array_mode {
         let tree = match php_max_input_vars {
-            Some(max) => cookie::array::parse_one_level_header_with_php_max_input_vars(
-                &header, limits, max,
-            ),
+            Some(max) => {
+                cookie::array::parse_one_level_header_with_php_max_input_vars(&header, limits, max)
+            }
             None => cookie::array::parse_one_level_header(&header, limits),
         }
         .map_err(|error| format!("cookie: {error:?}"))?;
