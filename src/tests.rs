@@ -466,8 +466,10 @@ fn php_84_disposition_ignores_trailing_parameter_text() {
         spool.empty();
     }
     // Compatibility does not relax hard header-line byte limits.
-    let mut limited = Limits::default();
-    limited.header_line_bytes = 24;
+    let limited = Limits {
+        header_line_bytes: 24,
+        ..Limits::default()
+    };
     assert_eq!(
         parse(&body(&[(cases[0].0, b"x")]), limited, &spool).unwrap_err(),
         Error::Limit(Limit::HeaderLineBytes)
