@@ -1883,3 +1883,26 @@ invalid read count. The PHP 8.4 HTTP SAPI differential corpus includes an
 unchanged 16,395-byte binary upload crossing two 8-KiB copy blocks. This
 strengthens observable mutation detection but is not an atomic source
 snapshot; a streaming destination must still be discarded after any error.
+
+
+## PHP 8.4 HTTP Cookie scalar slice (experimental)
+
+`cookie::parse_scalar_header(header, limits)` accepts a *single*, already-extracted,
+transport-validated Cookie header value. It handles semicolon separators,
+leading segment whitespace, PHP's first-wins duplicate rule (including
+collisions after dot/space name normalization), raw-URL-decoding of **values**
+without converting '+' to space, and binary values including decoded NUL.
+Cookie *names* are not percent-decoded. The result owns ordered, normalized
+scalar name/value byte pairs and can emit binary-safe hex tuple JSON.
+The caller must validate HTTP framing and the behavior of multiple headers.
+
+This intentionally small vertical slice **rejects bracketed array cookie
+names** instead of silently producing incorrect `$_COOKIE` arrays. It does not
+register variables with Zend/SAPI, implement scalar/array collisions, or
+replace PHP's cookie request lifecycle. Header, pair, name, value and retained
+byte quotas are independent; they are not full process RSS guarantees.
+
+The `cookie` CLI reads at most 64 KiB plus one overflow byte from stdin
+and prints the tagged `cookie_pairs` array only on complete success.
+Linux CI compares scalar cases with a real PHP 8.4 HTTP SAPI, including
+duplicate names, percent escapes, whitespace and a multi-block value.

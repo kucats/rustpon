@@ -87,6 +87,11 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           python3 tools/differential_query_string.py --rust-bin target/debug/urlencoded
+      - name: Compare PHP 8.4 scalar Cookie headers with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin cookie
+          python3 tools/differential_cookie.py --rust-bin target/debug/cookie
       - name: Compare real FFI ABI with PHP 8.4 parse_str (Linux)
         if: runner.os == 'Linux'
         run: |

@@ -1,0 +1,310 @@
+//! Bounded PHP 8.4 HTTP Cookie-header scalar projection.
+//!
+//! The caller supplies one already-extracted, transport-validated Cookie
+//! header value. This experimental slice intentionally rejects PHP array
+//! cookie names; native SAPI integration and array registration are separate
+//! work. PHP preserves the first value for a normalized scalar name.
+
+use std::io::{self, Write};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Error {
+    HeaderBytes,
+    Pairs,
+    NameBytes,
+    ValueBytes,
+    RetainedBytes,
+    Allocation,
+    InvalidHeader,
+    UnsupportedArrayName,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Limits {
+    pub header_bytes: usize,
+    pub pairs: usize,
+    pub name_bytes: usize,
+    pub value_bytes: usize,
+    pub retained_bytes: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            header_bytes: 64 * 1024,
+            pairs: 128,
+            name_bytes: 1024,
+            value_bytes: 8192,
+            retained_bytes: 64 * 1024,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct Cookie {
+    pub name: Vec<u8>,
+    pub value: Vec<u8>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ScalarCookies {
+    entries: Vec<Cookie>,
+}
+
+impl ScalarCookies {
+    pub fn entries(&self) -> &[Cookie] {
+        &self.entries
+    }
+
+    /// Stable binary-safe JSON tuples: [hex-normalized-name, hex-value].
+    /// This intentionally does not model the full PHP array key type system.
+    pub fn write_json(&self, writer: &mut impl Write) -> io::Result<()> {
+        writer.write_all(b"[")?;
+        for (index, entry) in self.entries.iter().enumerate() {
+            if index != 0 {
+                writer.write_all(b",")?;
+            }
+            writer.write_all(b"[\"")?;
+            for byte in &entry.name {
+                write!(writer, "{byte:02x}")?;
+            }
+            writer.write_all(b"\",\"")?;
+            for byte in &entry.value {
+                write!(writer, "{byte:02x}")?;
+            }
+            writer.write_all(b"\"]")?;
+        }
+        writer.write_all(b"]")
+    }
+}
+
+fn hex(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+/// PHP Cookie registration raw-URL-decodes values but does not map '+' to
+/// space and does not percent-decode names.
+fn decode_cookie_value(raw: &[u8]) -> Result<Vec<u8>, Error> {
+    let mut value = Vec::new();
+    value
+        .try_reserve_exact(raw.len())
+        .map_err(|_| Error::Allocation)?;
+    let mut offset = 0;
+    while offset < raw.len() {
+        if raw[offset] == b'%'
+            && offset + 2 < raw.len()
+            && let (Some(hi), Some(lo)) = (hex(raw[offset + 1]), hex(raw[offset + 2]))
+        {
+            value.push((hi << 4) | lo);
+            offset += 3;
+        } else {
+            value.push(raw[offset]);
+            offset += 1;
+        }
+    }
+    Ok(value)
+}
+
+/// Parse only scalar cookie names (no '[' array syntax) from a validated
+/// Cookie header. First registered normalized name wins; duplicate values
+/// never overwrite earlier ones. Hard input and retained-byte limits apply
+/// before copying values. Header framing and multiple Cookie-header merging
+/// remain the transport's responsibility.
+pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookies, Error> {
+    if header.len() > limits.header_bytes {
+        return Err(Error::HeaderBytes);
+    }
+    // These bytes cannot occur in a valid HTTP header field value. Reject
+    // them instead of silently modeling PHP's transport-specific truncation.
+    if header.iter().any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n')) {
+        return Err(Error::InvalidHeader);
+    }
+
+    let mut entries: Vec<Cookie> = Vec::new();
+    let mut pairs = 0usize;
+    let mut retained = 0usize;
+    for segment in header.split(|&byte| byte == b';') {
+        let segment = segment.trim_ascii_start();
+        if segment.is_empty() {
+            continue;
+        }
+        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
+        if pairs > limits.pairs {
+            return Err(Error::Pairs);
+        }
+
+        let name_end = segment.iter().position(|&byte| byte == b'=');
+        let (raw_name, raw_value) = match name_end {
+            Some(pos) => (&segment[..pos], &segment[pos + 1..]),
+            None => (segment, b"".as_slice()),
+        };
+        if raw_name.is_empty() {
+            continue;
+        }
+        if raw_name.contains(&b'[') {
+            // PHP array names need the full collision/append projection.
+            // Do not silently publish an incorrect scalar value.
+            return Err(Error::UnsupportedArrayName);
+        }
+        if raw_name.len() > limits.name_bytes {
+            return Err(Error::NameBytes);
+        }
+        if raw_value.len() > limits.value_bytes {
+            return Err(Error::ValueBytes);
+        }
+        let mut name = Vec::new();
+        name.try_reserve_exact(raw_name.len())
+            .map_err(|_| Error::Allocation)?;
+        // PHP replaces spaces and dots in incoming variable names.
+        name.extend(raw_name.iter().map(|&byte| {
+            if matches!(byte, b' ' | b'.') {
+                b'_'
+            } else {
+                byte
+            }
+        }));
+        if entries.iter().any(|entry| entry.name == name) {
+            continue;
+        }
+
+        // Percent decoding can only shorten the value.
+        let next = retained
+            .checked_add(name.len())
+            .and_then(|n| n.checked_add(raw_value.len()))
+            .ok_or(Error::RetainedBytes)?;
+        if next > limits.retained_bytes {
+            return Err(Error::RetainedBytes);
+        }
+        entries.try_reserve(1).map_err(|_| Error::Allocation)?;
+        entries.push(Cookie {
+            name,
+            value: decode_cookie_value(raw_value)?,
+        });
+        retained = next;
+    }
+    Ok(ScalarCookies { entries })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn pairs(header: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+        parse_scalar_header(header, Limits::default())
+            .unwrap()
+            .entries()
+            .iter()
+            .map(|entry| (entry.name.clone(), entry.value.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn php_cookie_scalars_are_first_wins_after_name_normalization() {
+        assert_eq!(
+            pairs(b"a.b=first; a_b=second; a=1; a=2"),
+            vec![
+                (b"a_b".to_vec(), b"first".to_vec()),
+                (b"a".to_vec(), b"1".to_vec()),
+            ]
+        );
+        assert_eq!(
+            pairs(b"a_b=first; a.b=second"),
+            vec![(b"a_b".to_vec(), b"first".to_vec())]
+        );
+    }
+
+    #[test]
+    fn php_cookie_decodes_values_but_not_names_or_pluses() {
+        assert_eq!(
+            pairs(b" a =hello+%2B%00%FF; %41=raw; no_equals; quoted=\"value\""),
+            vec![
+                (b"a_".to_vec(), b"hello++\0\xff".to_vec()),
+                (b"%41".to_vec(), b"raw".to_vec()),
+                (b"no_equals".to_vec(), Vec::new()),
+                (b"quoted".to_vec(), b"\"value\"".to_vec()),
+            ]
+        );
+        let output = parse_scalar_header(b"a=%FF", Limits::default()).unwrap();
+        let mut json = Vec::new();
+        output.write_json(&mut json).unwrap();
+        assert_eq!(json, br#"[["61","ff"]]"#);
+    }
+
+    #[test]
+    fn php_cookie_header_boundaries_and_unsupported_arrays_fail_closed() {
+        assert_eq!(
+            parse_scalar_header(b"a=1; x[y]=2", Limits::default()).unwrap_err(),
+            Error::UnsupportedArrayName
+        );
+        for invalid in [b"a=1\r\n".as_slice(), b"a=\0", b"a=1\n"] {
+            assert_eq!(
+                parse_scalar_header(invalid, Limits::default()).unwrap_err(),
+                Error::InvalidHeader
+            );
+        }
+        let tiny = Limits {
+            header_bytes: 3,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_scalar_header(b"a=12", tiny).unwrap_err(),
+            Error::HeaderBytes
+        );
+        let quota = Limits {
+            pairs: 2,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_scalar_header(b"a=1;;b=2;c=3", quota).unwrap_err(),
+            Error::Pairs
+        );
+    }
+
+    #[test]
+    fn php_cookie_bytes_and_retained_limits_are_independent() {
+        for (limits, error) in [
+            (
+                Limits {
+                    name_bytes: 1,
+                    ..Limits::default()
+                },
+                Error::NameBytes,
+            ),
+            (
+                Limits {
+                    value_bytes: 1,
+                    ..Limits::default()
+                },
+                Error::ValueBytes,
+            ),
+            (
+                Limits {
+                    retained_bytes: 3,
+                    ..Limits::default()
+                },
+                Error::RetainedBytes,
+            ),
+        ] {
+            assert_eq!(
+                parse_scalar_header(b"ab=12", limits).unwrap_err(),
+                error
+            );
+        }
+        // A duplicate does not consume retained-value capacity twice, but
+        // still consumes wire and pair quotas.
+        let limits = Limits {
+            retained_bytes: 3,
+            ..Limits::default()
+        };
+        assert_eq!(
+            pairs(b"a=1; a=longer"),
+            vec![(b"a".to_vec(), b"1".to_vec())]
+        );
+        assert!(parse_scalar_header(b"a=1; a=longer", limits).is_ok());
+    }
+}
