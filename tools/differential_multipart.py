@@ -108,6 +108,11 @@ CASES = [
     ("file-readback-eintr-oracle", [
         (b"upload", bytes((i * 59 + 13) % 256 for i in range(8192 * 2 + 11)), b"readback-eintr.bin")
     ]),
+    # Positional-read fault-injection companion: the non-faulted, 8 KiB + 7
+    # binary upload must match PHP 8.4 FILES metadata and all payload bytes.
+    ("file-overreported-read-guard-oracle", [
+        (b"upload", bytes((i * 29 + 173) % 256 for i in range(8192 + 7)), b"overreport.bin")
+    ]),
     ("file-offset-sensitive-binary", [(b"upload", bytes((i * 31 + 17) % 251 for i in range(8192 * 2 + 17)), b"offset.bin")]),
     # More than four copy blocks, exercising every post-write source check.
     ("file-four-blocks-plus-one", [(b"upload", bytes((i * 73 + 19) % 256 for i in range(8192 * 4 + 1)), b"four-blocks.bin")]),
