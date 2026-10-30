@@ -59,16 +59,19 @@ values only.
   chunk framing, decompression, and transport deadlines are upstream concerns.
 - Boundaries contain 1–70 allowed ASCII bytes. Delimiters and header lines use
   CRLF. The body begins with `--BOUNDARY`.
-- Only `Content-Disposition: form-data` with a nonempty `name` and optional
-  `filename` is supported. Header and parameter names ignore ASCII case;
-  quoted pairs are unescaped. Raw names, filenames, binary values, duplicates,
+- Only `Content-Disposition: form-data` with a nonempty final `name` and
+  optional `filename` is supported. Header and parameter names ignore ASCII
+  case; quoted pairs are unescaped. Like PHP 8.4 HTTP SAPI, repeated `name` or
+  `filename` parameters use the last value. Well-formed unknown parameters
+  (including `filename*`) are ignored rather than interpreted; empty semicolon
+  separators are accepted. Raw names, filenames, binary values, duplicates,
   and part order are retained.
 - Optional upload content type accepts a `token/token` media type followed
   by semicolon parameters; only bytes before the first semicolon are retained,
   matching PHP 8.4 `$_FILES[*]["type"]` (including pre-semicolon spaces).
   Nested multipart types remain unsupported. Invalid/duplicate essential
-  headers, folding, control bytes, transfer encodings, and unknown disposition
-  parameters are rejected.
+  header lines, folding, control bytes, transfer encodings, and malformed
+  disposition parameters are rejected.
 - Preambles, epilogues, delimiter padding, and bare LF are rejected. A closing
   delimiter commits the parse; only EOF or one trailing CRLF followed by EOF is
   accepted.

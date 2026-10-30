@@ -171,17 +171,49 @@ CASES = [
     ("file-type-opaque-param", [(b"f", b"hi", b"x.txt", b"text/plain; invalid")]),
     ("file-type-mixedcase", [(b"f", b"hi", b"x.txt", b"TEXT/PLAIN; charset=UTF-8")]),
 
+    # PHP 8.4 HTTP SAPI accepts duplicate disposition keys (last one wins)
+    # and ignores syntactically valid extension parameters, including filename*.
+    ("disposition-duplicate-name", [
+        (b"new", b"renamed", None, b"application/octet-stream",
+         b"form-data; name=old; name=new"),
+    ]),
+    ("disposition-duplicate-filename", [
+        (b"up", b"\x00\xffN", b"new.bin", b"application/octet-stream",
+         b"form-data; name=up; filename=old.bin; filename=new.bin"),
+    ]),
+    ("disposition-filename-star-field", [
+        (b"plain", b"\x00\xffV", None, b"application/octet-stream",
+         b"form-data; name=plain; filename*=UTF-8''unused.bin"),
+    ]),
+    ("disposition-filename-star-ignored", [
+        (b"up", b"payload", b"plain.bin", b"application/octet-stream",
+         b"form-data; name=up; filename=plain.bin; filename*=UTF-8''encoded.bin"),
+    ]),
+    ("disposition-unknown-quoted", [
+        (b"up", b"payload", b"doc.bin", b"application/octet-stream",
+         b'form-data; name=up; audit="a;b"; filename=doc.bin'),
+    ]),
+    ("disposition-empty-separators", [
+        (b"up", b"payload", b"doc.bin", b"application/octet-stream",
+         b"form-data; name=up;; filename=doc.bin;"),
+    ]),
 ]
 
 def body_for(parts):
     output = bytearray()
     for part in parts:
         name, data, filename = part[:3]
-        content_type = part[3] if len(part) == 4 else b"application/octet-stream"
+        content_type = part[3] if len(part) >= 4 else b"application/octet-stream"
         output.extend(b"--" + BOUNDARY + b"\r\n")
-        output.extend(b'Content-Disposition: form-data; name="' + name + b'"')
+        if len(part) == 5:
+            # Raw disposition fixtures exercise PHP SAPI parameter handling.
+            # The first tuple fields still describe expected parsed metadata.
+            output.extend(b"Content-Disposition: " + part[4])
+        else:
+            output.extend(b'Content-Disposition: form-data; name="' + name + b'"')
+            if filename is not None:
+                output.extend(b'; filename="' + filename + b'"')
         if filename is not None:
-            output.extend(b'; filename="' + filename + b'"')
             output.extend(b"\r\nContent-Type: " + content_type)
         output.extend(b"\r\n\r\n")
         output.extend(data)

@@ -1359,6 +1359,11 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
             return Err(Error::Malformed);
         }
         value = trim(&value[1..]);
+        // PHP 8.4 tolerates empty separators and a terminal semicolon in
+        // Content-Disposition. The bounded header-line limit still applies.
+        if value.is_empty() || value[0] == b';' {
+            continue;
+        }
         let end = value.iter().position(|b| !token(*b)).unwrap_or(value.len());
         if end == 0 {
             return Err(Error::Malformed);
@@ -1399,16 +1404,14 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
             value = trim(&value[end..]);
         }
         let param = Param { bytes, quoted };
+        // PHP 8.4's multipart SAPI uses the last name/filename parameter.
+        // Other syntactically valid parameters, including RFC 5987's
+        // filename*, are ignored: filename* alone is an ordinary POST field,
+        // not an upload. Keep syntax validation and header byte quotas.
         if key.eq_ignore_ascii_case(b"name") {
-            if name.replace(param).is_some() {
-                return Err(Error::Malformed);
-            }
+            name = Some(param);
         } else if key.eq_ignore_ascii_case(b"filename") {
-            if filename.replace(param).is_some() {
-                return Err(Error::Malformed);
-            }
-        } else {
-            return Err(Error::Unsupported);
+            filename = Some(param);
         }
     }
     let name = name.ok_or(Error::Malformed)?;

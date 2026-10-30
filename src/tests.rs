@@ -336,13 +336,10 @@ fn cumulative_limits_include_empty_files_and_all_fields() {
 fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
     let spool = Spool::new();
     let headers: &[&[u8]] = &[
-        b"Content-Disposition: form-data; name=a; name=b",
-        b"Content-Disposition: form-data; name=a; filename=x; filename=y",
         b"Content-Disposition: form-data; name=a\r\nContent-Disposition: form-data; name=b",
         b"Content-Disposition: form-data; name=a\r\nContent-Type: text/plain\r\nContent-Type: text/html",
         b"Content-Disposition: form-data; name=a\r\nContent-Transfer-Encoding: base64",
         b"Content-Disposition: form-data; name=a\r\nContent-Type: multipart/mixed",
-        b"Content-Disposition: form-data; name=a; filename*=UTF-8''x",
         b"Content-Disposition: form-data; name=\"\"",
         b"Content-Disposition: form-data; name=\"unterminated",
         b"Content-Disposition: form-data; name=\"trailing\\",
@@ -372,6 +369,66 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
     assert_eq!(view.name, b"a;\"b");
     // PHP preserves quoted filename backslashes, including consecutive ones.
     assert_eq!(view.filename, Some(b"C:\\\\x.bin".as_slice()));
+}
+
+
+#[test]
+fn php_84_disposition_duplicate_parameters_and_extensions() {
+    let spool = Spool::new();
+    // PHP 8.4 HTTP SAPI uses the final name/filename, ignores filename* and
+    // other well-formed extensions, and tolerates empty semicolon separators.
+    // Retain strict validation of the enclosing header and its byte quotas.
+    let cases: &[(&[u8], &[u8], Option<&[u8]>)] = &[
+        (
+            b"Content-Disposition: form-data; name=first; name=last",
+            b"last",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=up; filename=old.bin; filename=new.bin",
+            b"up",
+            Some(b"new.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=field; filename*=UTF-8''unused.bin",
+            b"field",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=up; filename*=UTF-8''unused.bin; filename=real.bin",
+            b"up",
+            Some(b"real.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=up; audit=\"a;b\"; filename=real.bin",
+            b"up",
+            Some(b"real.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=up;; filename=real.bin;",
+            b"up",
+            Some(b"real.bin"),
+        ),
+    ];
+    for (header, expected_name, expected_filename) in cases {
+        let request = parse(&body(&[(header, b"\0\xffX")]), Limits::default(), &spool).unwrap();
+        let part = request.parts().next().unwrap();
+        assert_eq!(part.name, *expected_name, "{header:?}");
+        assert_eq!(part.filename, *expected_filename, "{header:?}");
+        drop(request);
+        spool.empty();
+    }
+
+    // Ignored attributes must still be syntactically valid; an unterminated
+    // quoted extension or a missing equals sign must not be accepted.
+    for header in [
+        b"Content-Disposition: form-data; name=up; extra".as_slice(),
+        b"Content-Disposition: form-data; name=up; extra=\"unterminated".as_slice(),
+        b"Content-Disposition: form-data; name=up; extra=\"trailing\\"".as_slice(),
+    ] {
+        assert!(parse(&body(&[(header, b"x")]), Limits::default(), &spool).is_err());
+        spool.empty();
+    }
 }
 
 #[test]
