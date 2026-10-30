@@ -26,6 +26,15 @@ CASES = [
     ("tab-after-semicolon", b"a=1;\tb=2"),
     ("case-sensitive", b"a=1; A=2"),
     ("multi-block", b"x=" + b"Z" * 4097 + b"; y=tail"),
+    ("unclosed-bracket", b"foo[bar=one; foo_bar=two"),
+    ("unclosed-bracket-reverse-collision", b"foo_bar=first; foo[bar=second"),
+    ("nested-unclosed-brackets", b"foo[[bar=one; x[ y.z=two"),
+    ("unclosed-bracket-no-equals", b"lonely["),
+    ("unclosed-bracket-empty-value", b"empty[="),
+    ("unclosed-bracket-percent-value", b"foo[bar=%00%FF+"),
+    ("unclosed-bracket-normalized-collision", b"a[b.c=one; a_b_c=two"),
+    ("bracket-root-ignored", b"[bad=ignored; [okay]=ignored; ok=yes"),
+    ("unmatched-close-literal", b"foo]bar=value"),
 ]
 
 

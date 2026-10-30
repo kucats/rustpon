@@ -1,9 +1,10 @@
 //! Bounded PHP 8.4 HTTP Cookie-header scalar projection.
 //!
 //! The caller supplies one already-extracted, transport-validated Cookie
-//! header value. This experimental slice intentionally rejects PHP array
-//! cookie names; native SAPI integration and array registration are separate
-//! work. PHP preserves the first value for a normalized scalar name.
+//! header value. This experimental slice rejects actual PHP array cookie
+//! names; a name with an unterminated '[' is flattened to a scalar as in PHP
+//! 8.4. Native SAPI integration and array registration are separate work.
+//! PHP preserves the first value for a normalized scalar name.
 
 use std::io::{self, Write};
 
@@ -110,11 +111,13 @@ fn decode_cookie_value(raw: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(value)
 }
 
-/// Parse only scalar cookie names (no '[' array syntax) from a validated
-/// Cookie header. First registered normalized name wins; duplicate values
-/// never overwrite earlier ones. Hard input and retained-byte limits apply
-/// before copying values. Header framing and multiple Cookie-header merging
-/// remain the transport's responsibility.
+/// Parse scalar cookie names from a validated Cookie header. PHP flattens
+/// unterminated '[' syntax into scalar underscores and ignores names whose
+/// first non-whitespace byte is '['; completed bracket paths still require
+/// array support and are rejected. First registered normalized name wins.
+/// Hard input and retained-byte limits apply before copying values. Header
+/// framing and multiple Cookie-header merging remain the transport's
+/// responsibility.
 pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookies, Error> {
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
@@ -149,13 +152,23 @@ pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookie
         if raw_name.is_empty() {
             continue;
         }
-        if raw_name.contains(&b'[') {
-            // PHP array names need the full collision/append projection.
-            // Do not silently publish an incorrect scalar value.
-            return Err(Error::UnsupportedArrayName);
-        }
         if raw_name.len() > limits.name_bytes {
             return Err(Error::NameBytes);
+        }
+        // php_register_variable_ex skips names with an empty root, even if
+        // the opening bracket never closes. Count the wire pair but do not
+        // allocate or publish a cookie for it.
+        if raw_name.first() == Some(&b'[') {
+            continue;
+        }
+        // An unclosed first bracket is *not* an array in PHP 8.4: its
+        // remaining name bytes are flattened into a scalar identifier.
+        // A closing bracket anywhere after the first '[' instead enters
+        // actual PHP array handling, intentionally outside this slice.
+        if let Some(open) = raw_name.iter().position(|&byte| byte == b'[')
+            && raw_name[open + 1..].contains(&b']')
+        {
+            return Err(Error::UnsupportedArrayName);
         }
         if raw_value.len() > limits.value_bytes {
             return Err(Error::ValueBytes);
@@ -163,9 +176,10 @@ pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookie
         let mut name = Vec::new();
         name.try_reserve_exact(raw_name.len())
             .map_err(|_| Error::Allocation)?;
-        // PHP replaces spaces and dots in incoming variable names.
+        // PHP replaces spaces/dots in scalar names and additionally
+        // flattens each '[' when the first bracket never closes.
         name.extend(raw_name.iter().map(|&byte| {
-            if matches!(byte, b' ' | b'.') {
+            if matches!(byte, b' ' | b'.' | b'[') {
                 b'_'
             } else {
                 byte
@@ -236,6 +250,48 @@ mod tests {
         let mut json = Vec::new();
         output.write_json(&mut json).unwrap();
         assert_eq!(json, br#"[["61","ff"]]"#);
+    }
+
+
+    #[test]
+    fn php_cookie_unterminated_brackets_flatten_without_losing_first_wins() {
+        assert_eq!(
+            pairs(b"foo[bar=one; foo_bar=two; foo[[baz=3; no_equals[; foo[ a.b=4"),
+            vec![
+                (b"foo_bar".to_vec(), b"one".to_vec()),
+                (b"foo__baz".to_vec(), b"3".to_vec()),
+                (b"no_equals_".to_vec(), Vec::new()),
+                (b"foo__a_b".to_vec(), b"4".to_vec()),
+            ]
+        );
+        assert_eq!(
+            pairs(b"foo_bar=first; foo[bar=second"),
+            vec![(b"foo_bar".to_vec(), b"first".to_vec())]
+        );
+        assert_eq!(
+            pairs(b"[bad=ignored; [okay]=ignored; a=1"),
+            vec![(b"a".to_vec(), b"1".to_vec())]
+        );
+    }
+
+    #[test]
+    fn php_cookie_completed_array_path_still_fails_closed() {
+        assert_eq!(
+            parse_scalar_header(b"a=1; nested[child]=2", Limits::default()).unwrap_err(),
+            Error::UnsupportedArrayName
+        );
+        assert_eq!(
+            parse_scalar_header(b"a[child]tail=1", Limits::default()).unwrap_err(),
+            Error::UnsupportedArrayName
+        );
+        let small = Limits {
+            name_bytes: 3,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_scalar_header(b"long[=x", small).unwrap_err(),
+            Error::NameBytes
+        );
     }
 
     #[test]

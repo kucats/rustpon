@@ -1896,9 +1896,13 @@ Cookie *names* are not percent-decoded. The result owns ordered, normalized
 scalar name/value byte pairs and can emit binary-safe hex tuple JSON.
 The caller must validate HTTP framing and the behavior of multiple headers.
 
-This intentionally small vertical slice **rejects bracketed array cookie
-names** instead of silently producing incorrect `$_COOKIE` arrays. It does not
-register variables with Zend/SAPI, implement scalar/array collisions, or
+PHP 8.4 flattens an **unterminated** bracket in a Cookie name to an
+underscore (for example, `foo[bar` becomes `foo_bar`), and ignores a
+name beginning with `[` because it has no root variable. The first scalar
+wins after that normalization. Completed bracket paths, such as
+`foo[bar]`, still fail closed with `UnsupportedArrayName` rather than
+silently producing incorrect `$_COOKIE` arrays. This standalone slice does
+not register variables with Zend/SAPI, implement scalar/array collisions, or
 replace PHP's cookie request lifecycle. Header, pair, name, value and retained
 byte quotas are independent; they are not full process RSS guarantees.
 
