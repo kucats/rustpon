@@ -355,6 +355,16 @@ HTTP headers, resolve conflicting Content-Length/Transfer-Encoding, or serve
 requests, and must never be fed untrusted framing metadata directly.
 The HTTP SAPI differential suite exercises both the streaming fallback and
 trusted-length preflight against the same PHP 8.4 responses.
+Multipart Content-Length ingress uses a checked length-limited reader rather
+than `Read::take`: a custom I/O source claiming more bytes than its short
+read buffer is rejected as `InvalidData`, even when its claimed count fits
+the parser's larger 8192-byte buffer. Fault injection covers the accepted
+and over-`post_max_size` paths, including a malformed second-block read and
+automatic staged-upload cleanup. The PHP 8.4 HTTP SAPI oracle also checks an
+8199-byte binary upload (including NUL and 0xff) under both admission modes.
+These checks do not authenticate HTTP framing or eliminate filesystem
+pathname races; callers still need a trusted upstream transport.
+
 
 An additional opt-in PHP 8.4 nesting slice is exposed by
 `Request::into_post_with_php_limits(limits, max_input_vars,
