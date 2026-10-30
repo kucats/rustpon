@@ -69,6 +69,12 @@ CASES = [
     ("file-transactional-vec-oracle", [
         (b"upload", bytes((i * 43 + 251) % 256 for i in range(8192 + 29)), b"transaction.bin")
     ]),
+    # Admitted transactional copy must preserve PHP's last-write-wins
+    # $_FILES identity even when the surviving payload crosses a copy block.
+    ("file-transactional-vec-overwrite-oracle", [
+        (b"upload", b"replaced", b"transaction.bin"),
+        (b"upload", bytes((i * 43 + 251) % 256 for i in range(8192 + 29)), b"transaction.bin"),
+    ]),
     # Source-read EINTR regression companion: unchanged 8 KiB + 19 byte
     # uploads must remain byte-for-byte identical to PHP 8.4 HTTP SAPI.
     ("file-interrupted-source-read-oracle", [
