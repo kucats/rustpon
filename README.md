@@ -67,10 +67,12 @@ values only.
   (including `filename*`) are ignored rather than interpreted; empty semicolon
   separators are accepted. Raw names, filenames, binary values, duplicates,
   and part order are retained.
-- Optional upload content type accepts a `token/token` media type followed
-  by semicolon parameters; only bytes before the first semicolon are retained,
-  matching PHP 8.4 `$_FILES[*]["type"]` (including pre-semicolon spaces).
-  Nested multipart types remain unsupported. Invalid/duplicate essential
+- Optional upload content type is opaque client-provided metadata: PHP 8.4
+  accepts empty values, unusual labels without a slash and non-token bytes.
+  Only the bytes before the first semicolon reach `$_FILES[*]["type"]`.
+  Leading horizontal whitespace is stripped, but trailing spaces/tabs (also
+  before a semicolon) are retained. Nested multipart types remain unsupported.
+  Invalid/duplicate essential
   header lines, folding, control bytes, transfer encodings, and malformed
   disposition parameters are rejected.
 - Preambles, epilogues, delimiter padding, and bare LF are rejected. A closing

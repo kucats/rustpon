@@ -340,6 +340,7 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
         b"Content-Disposition: form-data; name=a\r\nContent-Type: text/plain\r\nContent-Type: text/html",
         b"Content-Disposition: form-data; name=a\r\nContent-Transfer-Encoding: base64",
         b"Content-Disposition: form-data; name=a\r\nContent-Type: multipart/mixed",
+        b"Content-Disposition: form-data; name=a\r\nContent-Type: text/plain\0unsafe",
         b"Content-Disposition: form-data; name=\"\"",
         b"Content-Disposition: form-data; name=\"unterminated",
         b"Content-Disposition: form-data; name=\"trailing\\",
@@ -498,6 +499,36 @@ fn php_84_upload_content_type_parameters_and_whitespace() {
         (
             b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: application/octet-stream",
             b"application/octet-stream",
+        ),
+        // PHP 8.4 records even empty or syntactically unusual type labels,
+        // preserving trailing horizontal whitespace exactly as received.
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type:",
+            b"",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type:   ",
+            b"",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: whatever",
+            b"whatever",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: foo/bar/baz",
+            b"foo/bar/baz",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: foo/bar, baz",
+            b"foo/bar, baz",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: \ttext/plain\t",
+            b"text/plain\t",
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=f.bin\r\nContent-Type: text/plain ",
+            b"text/plain ",
         ),
     ];
     for &(header, expected) in cases {

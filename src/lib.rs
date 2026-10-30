@@ -1368,24 +1368,19 @@ fn parse_header(line: &[u8]) -> Result<Header<'_>, Error> {
         return Err(Error::Unsupported);
     }
     if key.eq_ignore_ascii_case(b"content-type") {
-        // PHP 8.4 exposes the media type before the first semicolon in
-        // `$_FILES["..."]["type"]`, including spaces preceding that
-        // semicolon. Parameters are client-controlled and not interpreted.
-        let media = value.split(|b| *b == b';').next().unwrap_or(value);
+        // PHP 8.4 treats a part's Content-Type as opaque metadata. It even
+        // accepts empty values and labels that are not token/token MIME types.
+        // Drop only leading HTTP header whitespace, retaining trailing spaces
+        // and tabs before the semicolon (or at end of the header) verbatim.
+        let raw = line[colon + 1..].trim_ascii_start();
+        let media = raw.split(|b| *b == b';').next().unwrap_or(raw);
+        // Nested multipart parsing remains outside this bounded prototype.
+        // Do not reject other unusual media labels: PHP publishes them.
         let validated = trim(media);
-        let slash = validated
-            .iter()
-            .position(|b| *b == b'/')
-            .ok_or(Error::Malformed)?;
-        if slash == 0
-            || slash + 1 == validated.len()
-            || !validated[..slash].iter().copied().all(token)
-            || !validated[slash + 1..].iter().copied().all(token)
-        {
-            return Err(Error::Unsupported);
-        }
-        if validated[..slash].eq_ignore_ascii_case(b"multipart") {
-            return Err(Error::Unsupported);
+        if let Some(slash) = validated.iter().position(|b| *b == b'/') {
+            if validated[..slash].eq_ignore_ascii_case(b"multipart") {
+                return Err(Error::Unsupported);
+            }
         }
         return Ok(Header::ContentType(media));
     }
