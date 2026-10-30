@@ -336,7 +336,8 @@ mod tests {
         assert_eq!(admitted.copy_accepted_to_vec(0, 0).unwrap(), None);
         assert_eq!(admitted.copy_accepted_to_vec(2, 0).unwrap(), None);
         assert_eq!(
-            admitted.copy_accepted_to_vec(1, binary.len() - 1)
+            admitted
+                .copy_accepted_to_vec(1, binary.len() - 1)
                 .unwrap_err()
                 .kind(),
             io::ErrorKind::InvalidInput
