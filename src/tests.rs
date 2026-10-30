@@ -2986,3 +2986,89 @@ fn upload_copy_checks_source_after_interrupted_destination_write() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_checks_source_after_interrupted_source_read() {
+    let spool = Spool::new();
+    let payload: Vec<u8> = (0..BLOCK + 19)
+        .map(|index| ((index * 37 + 23) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let source = upload.file.as_ref().unwrap();
+    let baseline = validate_staged_copy_source(source, upload.len()).unwrap();
+    let mut buffer = [0_u8; BLOCK];
+    let mut calls = 0;
+
+    // An injected read can return EINTR after another actor has changed the
+    // source inode. The next read must not run, and no bytes may be published.
+    let error = read_staged_copy_chunk(
+        source,
+        &mut buffer,
+        0,
+        upload.len(),
+        &baseline,
+        |file, bytes, offset| {
+            calls += 1;
+            if calls == 1 {
+                file.set_permissions(fs::Permissions::from_mode(0o644))?;
+                Err(io::ErrorKind::Interrupted.into())
+            } else {
+                file.read_at(bytes, offset)
+            }
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(calls, 1, "must validate before retrying the read");
+    assert_eq!(buffer, [0_u8; BLOCK]);
+
+    source
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+    let restored = validate_staged_copy_source(source, upload.len()).unwrap();
+    let mut retry_calls = 0;
+    let count = read_staged_copy_chunk(
+        source,
+        &mut buffer,
+        0,
+        upload.len(),
+        &restored,
+        |file, bytes, offset| {
+            retry_calls += 1;
+            if retry_calls == 1 {
+                Err(io::ErrorKind::Interrupted.into())
+            } else {
+                file.read_at(bytes, offset)
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(retry_calls, 2);
+    assert_eq!(count, BLOCK);
+    assert_eq!(&buffer[..count], &payload[..BLOCK]);
+
+    // A permanently interrupted source must terminate at the same finite
+    // retry budget as a permanently interrupted destination.
+    let mut stalled_calls = 0;
+    let error = read_staged_copy_chunk(
+        source,
+        &mut buffer,
+        0,
+        upload.len(),
+        &restored,
+        |_, _, _| {
+            stalled_calls += 1;
+            Err(io::ErrorKind::Interrupted.into())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(stalled_calls, MAX_CONSECUTIVE_INTERRUPTS);
+
+    let mut copied = Vec::new();
+    assert_eq!(upload.copy_to(&mut copied).unwrap(), payload.len() as u64);
+    assert_eq!(copied, payload);
+    drop(request);
+    spool.empty();
+}
