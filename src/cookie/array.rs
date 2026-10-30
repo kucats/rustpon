@@ -1,7 +1,7 @@
-//! Experimental bounded PHP 8.4 Cookie registration with up to two array levels.
+//! Experimental bounded PHP 8.4 Cookie registration with up to three array levels.
 //!
 //! Scalar roots are first-wins, while an array path replaces an earlier
-//! scalar root and repeated array indices are last-wins. Three or more bracket
+//! scalar root and repeated array indices are last-wins. Four or more bracket
 //! levels fail closed; this is not a Zend/SAPI registration API.
 
 use super::{Error, Limits, decode_cookie_value};
@@ -114,7 +114,7 @@ struct Entry {
 }
 
 /// Owns a bounded ordered projection of one validated Cookie header.
-/// This slice models scalar roots and up to two bracket levels.
+/// This slice models scalar roots and up to three bracket levels.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CookieTree {
     entries: Vec<Entry>,
@@ -171,8 +171,9 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 }
 
 /// Convert an already-extracted single Cookie header into a PHP-style tree.
-/// Accepted array forms: root[key], root[], root[key][child], root[][child],
-/// and root[key][]. One ASCII whitespace byte also acts as an append key.
+/// Accepted array forms include root[key], root[][child], root[key][],
+/// root[key][child][leaf], root[][child][leaf] and root[key][][leaf].
+/// One ASCII whitespace byte also acts as an append key.
 /// A trailing suffix after the final ']' is ignored; malformed or deeper
 /// bracket paths are rejected without partial output.
 /// Header, pair, field and retained-byte limits remain independent.
@@ -255,23 +256,35 @@ fn parse_one_level_header_inner(
             });
         if let Some((open, close)) = bracket {
             let suffix = &raw_name[close + 1..];
-            // PHP interprets an immediately following bracket as a second
-            // array dimension. An arbitrary suffix is ignored only if it
-            // cannot introduce another bracket path.
-            let second_index = if let Some(rest) = suffix.strip_prefix(b"[") {
+            // Only consecutive brackets add dimensions. A fourth level or
+            // bracket after arbitrary trailing text fails closed.
+            let (second_index, third_index) = if let Some(rest) = suffix.strip_prefix(b"[") {
                 let end = rest
                     .iter()
                     .position(|&byte| byte == b']')
                     .ok_or(Error::UnsupportedArrayName)?;
-                if rest[end + 1..].contains(&b'[') {
-                    return Err(Error::UnsupportedArrayName);
-                }
-                Some(&rest[..end])
+                let trailing = &rest[end + 1..];
+                let third = if let Some(tail) = trailing.strip_prefix(b"[") {
+                    let final_end = tail
+                        .iter()
+                        .position(|&byte| byte == b']')
+                        .ok_or(Error::UnsupportedArrayName)?;
+                    if tail[final_end + 1..].contains(&b'[') {
+                        return Err(Error::UnsupportedArrayName);
+                    }
+                    Some(&tail[..final_end])
+                } else {
+                    if trailing.contains(&b'[') {
+                        return Err(Error::UnsupportedArrayName);
+                    }
+                    None
+                };
+                (Some(&rest[..end]), third)
             } else {
                 if suffix.contains(&b'[') {
                     return Err(Error::UnsupportedArrayName);
                 }
-                None
+                (None, None)
             };
             if raw_value.len() > limits.value_bytes {
                 return Err(Error::ValueBytes);
@@ -318,7 +331,18 @@ fn parse_one_level_header_inner(
                     Some(index) => array.nested_mut(index)?,
                     None => array.append_nested()?,
                 };
-                if is_append_index(second) {
+                if let Some(third) = third_index {
+                    let leaf_parent = if is_append_index(second) {
+                        nested.append_nested()?
+                    } else {
+                        nested.nested_mut(key(second)?)?
+                    };
+                    if is_append_index(third) {
+                        leaf_parent.append(value)?;
+                    } else {
+                        leaf_parent.insert(key(third)?, value)?;
+                    }
+                } else if is_append_index(second) {
                     nested.append(value)?;
                 } else {
                     nested.insert(key(second)?, value)?;
@@ -596,4 +620,72 @@ mod tests {
             Error::AppendExhausted
         );
     }
+
+    #[test]
+    fn php_cookie_three_level_paths_promote_overwrite_and_append() {
+        let tree = parse(
+            b"a[x][y]=old; a[x][y][z]=one; a[x][y][z]=two; a[x][y][]=tail; a[][v][w]=next",
+        );
+        let Value::Array(root) = &tree.entries[0].value else {
+            panic!("expected root array");
+        };
+        let Value::Array(x) = &root.elements[0].value else {
+            panic!("expected first-level array");
+        };
+        let Value::Array(y) = &x.elements[0].value else {
+            panic!("expected second-level array");
+        };
+        assert_eq!(y.elements[0].key, Key::Bytes(b"z".to_vec()));
+        assert_eq!(y.elements[0].value, Value::Scalar(b"two".to_vec()));
+        assert_eq!(y.elements[1].key, Key::Integer(0));
+        assert_eq!(y.elements[1].value, Value::Scalar(b"tail".to_vec()));
+        assert_eq!(root.elements[1].key, Key::Integer(0));
+        let Value::Array(appended) = &root.elements[1].value else {
+            panic!("expected appended array");
+        };
+        let Value::Array(v) = &appended.elements[0].value else {
+            panic!("expected nested array");
+        };
+        assert_eq!(v.elements[0].value, Value::Scalar(b"next".to_vec()));
+    }
+
+    #[test]
+    fn php_cookie_three_level_depth_and_quota_fail_closed() {
+        for invalid in [
+            b"a[x][y][z][w]=one".as_slice(),
+            b"a[x][y][=one",
+            b"a[x][y]noise[z]=one",
+            b"a[x][y][z]noise[w]=one",
+        ] {
+            assert_eq!(
+                parse_one_level_header(invalid, Limits::default()).unwrap_err(),
+                Error::UnsupportedArrayName
+            );
+        }
+        let limited = Limits {
+            retained_bytes: 12,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_one_level_header(b"a[x][y][z]=one", limited).unwrap_err(),
+            Error::RetainedBytes
+        );
+        let quota = parse_one_level_header_with_php_max_input_vars(
+            b"a[x][y][z]=first; a[x][y][z]=second",
+            Limits::default(),
+            1,
+        )
+        .unwrap();
+        let Value::Array(root) = &quota.entries[0].value else {
+            panic!("expected root array");
+        };
+        let Value::Array(x) = &root.elements[0].value else {
+            panic!("expected first-level array");
+        };
+        let Value::Array(y) = &x.elements[0].value else {
+            panic!("expected second-level array");
+        };
+        assert_eq!(y.elements[0].value, Value::Scalar(b"first".to_vec()));
+    }
+
 }

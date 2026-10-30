@@ -130,3 +130,15 @@ fn cookie_cli_php_variable_quota_bounds_array_projection() {
     assert!(ok, "{stderr}");
     assert_eq!(stdout, concat!(r#"{"cookie_tree":["a",[]]}"#, "\n"));
 }
+
+
+#[test]
+fn cookie_cli_three_level_arrays_preserve_last_wins_and_binary_data() {
+    let (ok, stdout, stderr) = run_array(
+        b"a[x][y][z]=%00%FF; a[x][y][z]=last; a[x][y][]=tail",
+    );
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","6c617374"]"#));
+    assert!(stdout.contains(r#"["s","7461696c"]"#));
+    assert!(!stdout.contains(r#"["s","00ff"]"#));
+}

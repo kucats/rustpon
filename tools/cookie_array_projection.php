@@ -1,5 +1,5 @@
 <?php
-// PHP 8.4 real HTTP SAPI oracle for scalar and one-level array cookies.
+// PHP 8.4 real HTTP SAPI oracle for scalar and up-to-three-level array cookies.
 header('Content-Type: application/json');
 function cookie_tagged($value): array {
     if (is_array($value)) {
