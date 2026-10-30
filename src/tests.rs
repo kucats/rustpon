@@ -2938,14 +2938,22 @@ fn upload_copy_readback_rejects_same_size_drift_and_truncation() {
     let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
     let upload = request.upload_mut(0).unwrap();
     let source = upload.file.as_ref().unwrap().try_clone().unwrap();
+    let baseline = validate_staged_copy_source(&source, upload.len()).unwrap();
 
-    validate_staged_copy_bytes(&source, 0, &payload[..BLOCK]).unwrap();
-    validate_staged_copy_bytes(&source, BLOCK as u64, &payload[BLOCK..BLOCK * 2]).unwrap();
+    validate_staged_copy_bytes(&source, 0, &payload[..BLOCK], upload.len(), &baseline).unwrap();
+    validate_staged_copy_bytes(
+        &source,
+        BLOCK as u64,
+        &payload[BLOCK..BLOCK * 2],
+        upload.len(),
+        &baseline,
+    )
+    .unwrap();
     source
         .write_at(&[payload[BLOCK - 1] ^ 0xff], (BLOCK - 1) as u64)
         .unwrap();
     assert_eq!(
-        validate_staged_copy_bytes(&source, 0, &payload[..BLOCK])
+        validate_staged_copy_bytes(&source, 0, &payload[..BLOCK], upload.len(), &baseline)
             .unwrap_err()
             .kind(),
         io::ErrorKind::InvalidData
@@ -2960,7 +2968,7 @@ fn upload_copy_readback_rejects_same_size_drift_and_truncation() {
 
     source.set_len((BLOCK - 1) as u64).unwrap();
     assert_eq!(
-        validate_staged_copy_bytes(&source, 0, &payload[..BLOCK])
+        validate_staged_copy_bytes(&source, 0, &payload[..BLOCK], upload.len(), &baseline)
             .unwrap_err()
             .kind(),
         io::ErrorKind::InvalidData
