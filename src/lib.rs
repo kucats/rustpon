@@ -417,7 +417,13 @@ impl Upload {
             // Read back the completed block before transferring the next one.
             // This catches persistent byte drift even when metadata alone
             // cannot distinguish the two inode contents.
-            validate_staged_copy_bytes(file, offset, &buffer[..count], expected_length, &source_before)?;
+            validate_staged_copy_bytes(
+                file,
+                offset,
+                &buffer[..count],
+                expected_length,
+                &source_before,
+            )?;
             validate_staged_copy_snapshot(file, expected_length, &source_before)?;
             offset += count as u64;
         }
