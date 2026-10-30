@@ -204,6 +204,11 @@ def main():
             for label, parts in cases:
                 data = body_for(parts)
                 php = php_post(port, data)
+                # PHP 8.4 HTTP SAPI's anonymous upload staging is owner-only.
+                # The Rust unit tests enforce the same private inode invariant.
+                if any(mode != 0o600 for mode in php["upload_modes"]):
+                    failures += 1
+                    print(f"FAIL {label}: PHP temporary upload modes={php['upload_modes']!r}", file=sys.stderr)
                 rust = subprocess.run([str(opt.rust_bin), "--post", BOUNDARY.decode(), spool],
                                       input=data, capture_output=True, timeout=15, check=False)
                 if rust.returncode:

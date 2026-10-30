@@ -149,13 +149,19 @@ pub struct Upload {
     no_tmp_dir: bool,
 }
 
+// Special mode bits are not meaningful for anonymous upload payloads and
+// can indicate an injected inode. Keep the rule shared by staging and copy.
+fn private_staging_mode(metadata: &fs::Metadata) -> bool {
+    metadata.permissions().mode() & 0o7077 == 0
+}
+
 // The source is checked before copying and after each emitted block.
 // A failed check requires the caller to discard destination bytes.
 fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<fs::Metadata> {
     let metadata = file.metadata()?;
     if !metadata.is_file()
         || metadata.nlink() != 0
-        || metadata.permissions().mode() & 0o077 != 0
+        || !private_staging_mode(&metadata)
         || metadata.len() != expected_length
     {
         return Err(io::ErrorKind::InvalidData.into());
@@ -172,7 +178,12 @@ fn validate_staged_copy_snapshot(
     baseline: &fs::Metadata,
 ) -> io::Result<()> {
     let current = validate_staged_copy_source(file, expected_length)?;
-    if baseline.mtime() != current.mtime()
+    if baseline.dev() != current.dev()
+        || baseline.ino() != current.ino()
+        || baseline.uid() != current.uid()
+        || baseline.gid() != current.gid()
+        || baseline.permissions().mode() != current.permissions().mode()
+        || baseline.mtime() != current.mtime()
         || baseline.mtime_nsec() != current.mtime_nsec()
         || baseline.ctime() != current.ctime()
         || baseline.ctime_nsec() != current.ctime_nsec()
@@ -1319,7 +1330,7 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
 fn private_staging_inode(metadata: &fs::Metadata, directory_owner: Option<u32>) -> bool {
     metadata.is_file()
         && directory_owner == Some(metadata.uid())
-        && metadata.permissions().mode() & 0o077 == 0
+        && private_staging_mode(metadata)
 }
 
 /// Filename creation is independent of client metadata. create_new prevents

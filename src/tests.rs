@@ -2193,6 +2193,68 @@ fn staged_inode_requires_private_mode_and_matching_directory_owner() {
 }
 
 #[test]
+fn staged_inode_rejects_special_permission_bits() {
+    let spool = Spool::new();
+    let path = spool.0.join("special-mode-check");
+    fs::write(&path, b"").unwrap();
+    let owner = fs::metadata(&spool.0).unwrap().uid();
+
+    // Some Unix filesystems strip or reject individual special bits.
+    // Assert the invariant whenever the filesystem retains the bit.
+    for mode in [0o1600, 0o2600, 0o4600] {
+        if fs::set_permissions(&path, fs::Permissions::from_mode(mode)).is_err() {
+            continue;
+        }
+        let metadata = fs::metadata(&path).unwrap();
+        if metadata.permissions().mode() & 0o7000 != 0 {
+            assert!(!private_staging_inode(&metadata, Some(owner)));
+        }
+    }
+
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(private_staging_inode(
+        &fs::metadata(&path).unwrap(),
+        Some(owner)
+    ));
+    fs::remove_file(path).unwrap();
+    spool.empty();
+}
+
+#[test]
+fn upload_copy_rejects_special_permission_bits_without_emitting_data() {
+    let spool = Spool::new();
+    let mut request = parse(&body(&[(FILE, b"xyz")]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+
+    for mode in [0o1600, 0o2600, 0o4600] {
+        let file = upload.file.as_ref().unwrap();
+        if file.set_permissions(fs::Permissions::from_mode(mode)).is_err() {
+            continue;
+        }
+        if file.metadata().unwrap().permissions().mode() & 0o7000 != 0 {
+            let mut output = Vec::new();
+            assert_eq!(
+                upload.copy_to(&mut output).unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+            assert!(output.is_empty());
+        }
+    }
+
+    upload
+        .file
+        .as_ref()
+        .unwrap()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+    let mut recovered = Vec::new();
+    assert_eq!(upload.copy_to(&mut recovered).unwrap(), 3);
+    assert_eq!(recovered, b"xyz");
+    drop(request);
+    spool.empty();
+}
+
+#[test]
 fn post_create_staged_inode_permission_relaxation_is_rejected() {
     let spool = Spool::new();
     let original = fs::symlink_metadata(&spool.0).unwrap();

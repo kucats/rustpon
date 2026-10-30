@@ -42,6 +42,7 @@ function normalized_files(
     return (string)$value;
 }
 $files = [];
+$uploadModes = [];
 foreach ($_FILES as $name => $info) {
     // The current corpus uses flat, distinct file-field names. Nested
     // $_FILES shapes are a separate compatibility milestone.
@@ -50,6 +51,9 @@ foreach ($_FILES as $name => $info) {
     }
     $data = file_get_contents($info['tmp_name']);
     if ($data === false) { throw new RuntimeException('Cannot read upload'); }
+    $mode = fileperms($info['tmp_name']);
+    if ($mode === false) { throw new RuntimeException('Cannot stat upload'); }
+    $uploadModes[] = $mode & 07777;
     // Never disclose server-side temporary paths or host-specific metadata.
     $files[] = [
         bin2hex((string)$name),
@@ -61,6 +65,7 @@ foreach ($_FILES as $name => $info) {
 }
 header('Content-Type: application/json');
 echo json_encode(['post_tree' => tagged($_POST), 'files' => $files,
+                  'upload_modes' => $uploadModes,
                   'files_tree' => tagged(normalized_files($_FILES)),
                   'files_tree_typed' => tagged(normalized_files($_FILES, 0, false, true))],
                  JSON_THROW_ON_ERROR), "\n";

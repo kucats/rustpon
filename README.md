@@ -108,11 +108,15 @@ pathname still names the opened file before unlinking it. After unlink,
 it revalidates the original private directory's device/inode and permissions,
 then verifies that the opened inode has zero remaining hard links before writing
 request bytes. The opened inode must also remain a regular file with no
-group/other permission bits, and its owner must match the spool directory's
-owner both before and after unlink.
+group/other or setuid/setgid/sticky permission bits, and its owner must match
+the spool directory's owner both before and after unlink.
 Before copying a completed upload, `Upload::copy_to` rechecks that its
 file descriptor still refers to a regular, unlinked (`nlink=0`), private
-inode whose on-disk length matches the recorded upload length.
+inode without special permission bits whose on-disk length matches the
+recorded upload length. The per-read/write metadata snapshot additionally
+checks owner UID, group GID, inode identity and exact mode bits. The Linux
+PHP 8.4 HTTP SAPI differential suite checks its upload temp files use mode
+0600; Rust tests inject special permission bits and verify fail-closed copy.
 The copy uses positional (`pread`-style) reads from explicit offsets rather
 than changing the descriptor's shared file offset. A destination writer or
 other code seeking through a cloned descriptor cannot skip or duplicate
