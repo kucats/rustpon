@@ -28,6 +28,8 @@ OVERRIDES = {
     "file-invalid-nested-tail": [],
     "file-invalid-root-ignored": [1],
     "file-overwrite": [1],
+    "file-transactional-vec-overwrite-oracle": [1],
+    "file-transactional-vec-triple-overwrite-oracle": [2],
     "file-nested-then-flat": [1],
     "file-flat-then-nested": [1],
     "file-same-index": [1],
@@ -176,6 +178,14 @@ def main():
         for size in [0, 1, 8191, 8192, 8193, 16384, 16385, 32785]:
             data = bytes((index * 37 + 19) % 256 for index in range(size))
             cases.append((f"copy-boundary-{size}", [(b"upload", data, b"data.bin")]))
+        # A third same-name upload must replace both earlier descriptors,
+        # even when the surviving binary payload crosses an 8 KiB boundary.
+        triple_payload = bytes((i * 43 + 251) % 256 for i in range(8192 + 29))
+        cases.append(("file-transactional-vec-triple-overwrite-oracle", [
+            (b"upload", b"first", b"transaction.bin"),
+            (b"upload", b"second", b"transaction.bin"),
+            (b"upload", triple_payload, b"transaction.bin"),
+        ]))
         for i in range(40):
             fields = [(rng.choice(names), rng.choice(values), None)
                       for _ in range(rng.randrange(1, 6))]
@@ -199,6 +209,14 @@ def main():
                 assert typed == actual_php["files_tree_typed"], (label, typed, actual_php["files_tree_typed"])
                 assert list(Path(spool).iterdir()) == [], (label, "staging directory leak")
 
+                eligible = OVERRIDES.get(
+                    label,
+                    [i for i, part in enumerate(parts) if part[2] is not None],
+                )
+                assert len(eligible) == len(set(eligible)), (label, "duplicate survivor index")
+                assert all(0 <= i < len(parts) and parts[i][2] is not None
+                           for i in eligible), (label, "invalid survivor index")
+
                 handle = ctypes.c_uint64(0)
                 status = session_open(*fixed, ctypes.byref(handle))
                 assert status == OK and handle.value > 0, (label, status)
@@ -207,10 +225,6 @@ def main():
                     status, stateful_metadata = run(session_files, (handle.value,))
                     assert status == OK and stateful_metadata == encoded, (label, status)
                     # Session API must not reparse between size query and copy.
-                    eligible = OVERRIDES.get(
-                        label,
-                        [i for i, part in enumerate(parts) if part[2] is not None],
-                    )
                     for index, part in enumerate(parts):
                         _, data, filename = part[:3]
                         if filename is None:
@@ -236,10 +250,6 @@ def main():
                 assert session_close(handle.value) == 8, (label, "stale handle")
                 assert list(Path(spool).iterdir()) == [], (label, "session cleanup")
 
-                eligible = OVERRIDES.get(
-                    label,
-                    [i for i, part in enumerate(parts) if part[2] is not None],
-                )
                 for index, part in enumerate(parts):
                     _, data, filename = part[:3]
                     if filename is None:
