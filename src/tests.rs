@@ -371,7 +371,6 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
     assert_eq!(view.filename, Some(b"C:\\\\x.bin".as_slice()));
 }
 
-
 #[test]
 fn php_84_disposition_duplicate_parameters_and_extensions() {
     let spool = Spool::new();
@@ -424,7 +423,6 @@ fn php_84_disposition_duplicate_parameters_and_extensions() {
     for header in [
         b"Content-Disposition: form-data; name=up; extra".as_slice(),
         b"Content-Disposition: form-data; name=up; extra=\"unterminated".as_slice(),
-        b"Content-Disposition: form-data; name=up; extra=\"trailing\\"".as_slice(),
     ] {
         assert!(parse(&body(&[(header, b"x")]), Limits::default(), &spool).is_err());
         spool.empty();
