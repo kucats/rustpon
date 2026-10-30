@@ -465,7 +465,13 @@ fn parse_reader_with_php_query_string_length_impl(
         });
     }
     let mut bounded = reader.take(query_length);
-    let request = parse_reader_impl(&mut bounded, limits, arg_separators, true, count_ignored_names)?;
+    let request = parse_reader_impl(
+        &mut bounded,
+        limits,
+        arg_separators,
+        true,
+        count_ignored_names,
+    )?;
     if bounded.limit() != 0 {
         return Err(Error::Truncated);
     }
@@ -727,13 +733,8 @@ mod tests {
 
         let mut short = Cursor::new(b"a=1".to_vec());
         assert_eq!(
-            parse_reader_with_php_query_string_length(
-                &mut short,
-                Limits::default(),
-                4,
-                b"&",
-            )
-            .unwrap_err(),
+            parse_reader_with_php_query_string_length(&mut short, Limits::default(), 4, b"&",)
+                .unwrap_err(),
             Error::Truncated
         );
 
@@ -754,13 +755,9 @@ mod tests {
         assert_eq!(oversized.position(), 0);
 
         let mut empty = Cursor::new(b"NEXT".to_vec());
-        let request = parse_reader_with_php_query_string_length(
-            &mut empty,
-            Limits::default(),
-            0,
-            b"&",
-        )
-        .unwrap();
+        let request =
+            parse_reader_with_php_query_string_length(&mut empty, Limits::default(), 0, b"&")
+                .unwrap();
         assert_eq!(empty.position(), 0);
         assert_eq!(request.parts().len(), 0);
     }

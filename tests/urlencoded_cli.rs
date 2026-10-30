@@ -139,10 +139,7 @@ fn cli_php_query_length_does_not_consume_following_bytes() {
     assert!(stdout.contains(r#"["s","62"],["s","32"]"#));
     assert!(!stdout.contains(r#"["s","756e6578706563746564"]"#));
 
-    let short = run_with_args(
-        &["--php-query-string", "--php-query-length", "4"],
-        b"a=1",
-    );
+    let short = run_with_args(&["--php-query-string", "--php-query-length", "4"], b"a=1");
     assert!(!short.status.success());
     assert!(short.stdout.is_empty());
     assert!(String::from_utf8_lossy(&short.stderr).contains("Truncated"));
