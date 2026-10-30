@@ -854,10 +854,7 @@ mod tests {
                 if self.interrupt_next {
                     return Err(std::io::ErrorKind::Interrupted.into());
                 }
-                let count = buffer
-                    .len()
-                    .min(3)
-                    .min(self.bytes.len() - self.position);
+                let count = buffer.len().min(3).min(self.bytes.len() - self.position);
                 buffer[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
                 self.position += count;
                 Ok(count)
@@ -922,7 +919,10 @@ mod tests {
         .unwrap();
         assert_eq!(reader.position(), query.len() as u64);
         assert_eq!(request.stats().body_bytes, query.len() as u64);
-        assert_eq!(fields(&request), vec![(b"payload".to_vec(), vec![b'Z'; 8192])]);
+        assert_eq!(
+            fields(&request),
+            vec![(b"payload".to_vec(), vec![b'Z'; 8192])]
+        );
     }
 
     #[test]
