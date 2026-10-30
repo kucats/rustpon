@@ -69,6 +69,11 @@ CASES = [
     ("file-transactional-vec-oracle", [
         (b"upload", bytes((i * 43 + 251) % 256 for i in range(8192 + 29)), b"transaction.bin")
     ]),
+    # Source-read EINTR regression companion: unchanged 8 KiB + 19 byte
+    # uploads must remain byte-for-byte identical to PHP 8.4 HTTP SAPI.
+    ("file-interrupted-source-read-oracle", [
+        (b"upload", bytes((i * 37 + 23) % 256 for i in range(8192 + 19)), b"source-eintr.bin")
+    ]),
     # A Rust writer may return EINTR after modifying its source descriptor.
     # The normal (non-injected) path must still match PHP's binary upload.
     ("file-interrupted-writer-oracle", [
