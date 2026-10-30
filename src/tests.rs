@@ -458,8 +458,7 @@ fn php_84_disposition_ignores_trailing_parameter_text() {
         ),
     ];
     for &(header, expected_name, expected_filename) in cases {
-        let request = parse(&body(&[(header, b"\0\xffX")]), Limits::default(), &spool)
-            .unwrap();
+        let request = parse(&body(&[(header, b"\0\xffX")]), Limits::default(), &spool).unwrap();
         let view = request.parts().next().unwrap();
         assert_eq!(view.name, expected_name, "{header:?}");
         assert_eq!(view.filename, expected_filename, "{header:?}");
