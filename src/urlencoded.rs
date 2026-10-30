@@ -464,18 +464,40 @@ fn parse_reader_with_php_query_string_length_impl(
             stats: Stats::default(),
         });
     }
-    let mut bounded = reader.take(query_length);
-    let request = parse_reader_impl(
-        &mut bounded,
-        limits,
-        arg_separators,
-        true,
-        count_ignored_names,
-    )?;
-    if bounded.limit() != 0 {
-        return Err(Error::Truncated);
+    let mut parser = FormParser::new(limits)?
+        .with_php_arg_separators(arg_separators)
+        .with_php_nul_name_truncation();
+    if count_ignored_names {
+        parser = parser.with_php_input_var_counting();
     }
-    Ok(request)
+    // Do not use Read::take here: it adjusts its remaining quota using the
+    // reader's reported count before we can reject a faulty Read that claims
+    // to have returned more bytes than the supplied slice can contain.
+    let mut remaining = query_length;
+    let mut buffer = [0u8; 8192];
+    let mut consecutive_interrupts = 0usize;
+    while remaining != 0 {
+        let allowed = remaining.min(buffer.len() as u64) as usize;
+        match reader.read(&mut buffer[..allowed]) {
+            Ok(0) => return Err(Error::Truncated),
+            Ok(count) if count > allowed => {
+                return Err(Error::Io(std::io::ErrorKind::InvalidData));
+            }
+            Ok(count) => {
+                remaining -= count as u64;
+                consecutive_interrupts = 0;
+                parser.feed(&buffer[..count])?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+                consecutive_interrupts += 1;
+                if consecutive_interrupts >= crate::MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(Error::Io(std::io::ErrorKind::Interrupted));
+                }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    parser.finish()
 }
 
 fn parse_reader_impl(
@@ -782,6 +804,125 @@ mod tests {
         assert!(json.contains(r#"["s","61"],["s","31"]"#));
         assert!(!json.contains(r#"["s","62"]"#));
         assert!(!json.contains(r#"["s","63"]"#));
+    }
+
+    #[test]
+    fn php_query_string_length_rejects_overreported_read_counts() {
+        struct Overreport;
+        impl Read for Overreport {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                Ok(buffer.len() + 1)
+            }
+        }
+
+        // A length shorter than the read buffer used to underflow the
+        // Read::take quota before our own count validation could run.
+        for length in [3, 8193] {
+            assert_eq!(
+                parse_reader_with_php_query_string_length(
+                    &mut Overreport,
+                    Limits::default(),
+                    length,
+                    b"&",
+                )
+                .unwrap_err(),
+                Error::Io(std::io::ErrorKind::InvalidData)
+            );
+            assert_eq!(
+                parse_reader_with_php_query_string_length_counting_vars(
+                    &mut Overreport,
+                    Limits::default(),
+                    length,
+                    b"&",
+                )
+                .unwrap_err(),
+                Error::Io(std::io::ErrorKind::InvalidData)
+            );
+        }
+    }
+
+    #[test]
+    fn php_query_string_length_retries_interruptions_without_overreading() {
+        struct InterruptedChunks {
+            bytes: Vec<u8>,
+            position: usize,
+            interrupt_next: bool,
+        }
+        impl Read for InterruptedChunks {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.interrupt_next = !self.interrupt_next;
+                if self.interrupt_next {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                let count = buffer
+                    .len()
+                    .min(3)
+                    .min(self.bytes.len() - self.position);
+                buffer[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
+                self.position += count;
+                Ok(count)
+            }
+        }
+        let query = b"a=1|b=2|c=3";
+        let mut wire = query.to_vec();
+        wire.extend_from_slice(b"|NEXT=ignored");
+        let mut reader = InterruptedChunks {
+            bytes: wire,
+            position: 0,
+            interrupt_next: false,
+        };
+        let request = parse_reader_with_php_query_string_length_counting_vars(
+            &mut reader,
+            Limits::default(),
+            query.len() as u64,
+            b"|",
+        )
+        .unwrap();
+        assert_eq!(reader.position, query.len());
+        assert_eq!(
+            fields(&request),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+                (b"c".to_vec(), b"3".to_vec()),
+            ]
+        );
+
+        struct AlwaysInterrupted;
+        impl Read for AlwaysInterrupted {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::Interrupted.into())
+            }
+        }
+        assert_eq!(
+            parse_reader_with_php_query_string_length(
+                &mut AlwaysInterrupted,
+                Limits::default(),
+                1,
+                b"&",
+            )
+            .unwrap_err(),
+            Error::Io(std::io::ErrorKind::Interrupted)
+        );
+    }
+
+    #[test]
+    fn php_query_string_length_handles_multiple_blocks_and_exact_eof() {
+        let mut query = b"payload=".to_vec();
+        query.extend_from_slice(&[b'Z'; 8192]);
+        let mut wire = query.clone();
+        wire.extend_from_slice(b"&unexpected=1");
+        let mut reader = Cursor::new(wire);
+        let request = parse_reader_with_php_query_string_length(
+            &mut reader,
+            Limits::default(),
+            query.len() as u64,
+            b"&",
+        )
+        .unwrap();
+        assert_eq!(reader.position(), query.len() as u64);
+        assert_eq!(request.stats().body_bytes, query.len() as u64);
+        assert_eq!(fields(&request), vec![(b"payload".to_vec(), vec![b'Z'; 8192])]);
     }
 
     #[test]

@@ -23,6 +23,7 @@ CASES = [
     ("|", "binary", b"v=%00%FF%7C|x=3"),
     ("|;", "empty", b""),
     ("|;", "medium", b"v=" + b"X" * 2049),
+    ("&", "four-kib-boundary", b"payload=" + b"X" * 4088 + b"&last=yes"),
 ]
 QUOTA_CASES = [
     ("&", "plain", b"a=1&b=2&c=3&d=4"),
