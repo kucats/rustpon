@@ -113,7 +113,15 @@ the spool directory's owner both before and after unlink.
 Before copying a completed upload, `Upload::copy_to` rechecks that its
 file descriptor still refers to a regular, unlinked (`nlink=0`), private
 inode without special permission bits whose on-disk length matches the
-recorded upload length. The per-read/write metadata snapshot additionally
+recorded upload length. The parser also captures the staging inode's device,
+inode, UID, GID and exact permission mode before accepting upload bytes.
+The copy rejects a replacement descriptor or a changed private mode **before
+emitting output**, even if the replacement is anonymous and the same size.
+Rust regression tests swap two equal-length upload descriptors and change
+0600 to 0400, then verify rejection and successful retry after restoration.
+The PHP 8.4 HTTP SAPI differential suite includes two distinct equal-length
+binary uploads. These checks do not prevent in-place data modifications or
+make file staging atomic. The per-read/write metadata snapshot additionally
 checks owner UID, group GID, inode identity and exact mode bits. The Linux
 PHP 8.4 HTTP SAPI differential suite checks its upload temp files use mode
 0600; Rust tests inject special permission bits and verify fail-closed copy.
