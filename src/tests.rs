@@ -377,7 +377,8 @@ fn php_84_disposition_quoted_escape_decoding_matches_http_sapi() {
     // PHP 8.4 removes a backslash only before another slash or a quote.
     // Unknown quoted escapes remain literal; filename decoding follows the
     // same rule as form names, before PHP path basename normalization.
-    let cases: &[(&[u8], &[u8], Option<&[u8]>)] = &[
+    type ParamCase<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>);
+    let cases: &[ParamCase<'_>] = &[
         (
             b"Content-Disposition: form-data; name=\"a\\xb\"",
             b"a\\xb",
