@@ -586,12 +586,9 @@ mod tests {
     #[test]
     fn php_query_string_honors_ini_separators_and_decoded_nul_names() {
         let body = b"a=1|n%00tail=2;%7C=encoded&x=3";
-        let request = parse_reader_with_php_query_string(
-            &mut Cursor::new(body),
-            Limits::default(),
-            b"|;",
-        )
-        .unwrap();
+        let request =
+            parse_reader_with_php_query_string(&mut Cursor::new(body), Limits::default(), b"|;")
+                .unwrap();
         assert_eq!(
             fields(&request),
             vec![

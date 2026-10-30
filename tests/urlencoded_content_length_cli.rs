@@ -164,10 +164,7 @@ fn cli_query_string_counts_get_quota_without_post_sapi_adjustment() {
         assert_eq!(json.contains(r#"["s","62"],["s","32"]"#), accepted_b);
         assert_eq!(json.contains(r#"["s","63"],["s","33"]"#), accepted_c);
     }
-    let bad = run(
-        &["--php-query-string", "--php-content-length", "3"],
-        b"a=1",
-    );
+    let bad = run(&["--php-query-string", "--php-content-length", "3"], b"a=1");
     assert!(!bad.status.success());
     assert!(bad.stdout.is_empty());
 }
