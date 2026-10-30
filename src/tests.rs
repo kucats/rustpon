@@ -3280,3 +3280,64 @@ fn upload_readback_interrupted_read_rechecks_source_before_retry() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_rejects_overreported_positional_reads() {
+    let spool = Spool::new();
+    // Same 8 KiB + 7 byte payload as the real PHP 8.4 HTTP SAPI oracle.
+    let payload: Vec<u8> = (0..BLOCK + 7)
+        .map(|index| ((index * 29 + 173) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let source = upload.file.as_ref().unwrap();
+    let baseline = validate_staged_copy_source(source, upload.len()).unwrap();
+
+    // An injected positional reader can claim more bytes than were offered.
+    // Both the full block and the short final block must fail closed, before
+    // the invalid count can become a slice bound or be published as output.
+    for (offset, capacity) in [(0_u64, 1_usize), (0, BLOCK), (BLOCK as u64, 7)] {
+        let mut buffer = vec![0_u8; capacity];
+        let mut calls = 0;
+        let error = read_staged_copy_chunk(
+            source,
+            &mut buffer,
+            offset,
+            upload.len(),
+            &baseline,
+            |_, bytes, _| {
+                calls += 1;
+                Ok(bytes.len() + 1)
+            },
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(calls, 1, "invalid progress must never be retried");
+        assert!(buffer.iter().all(|byte| *byte == 0));
+    }
+
+    // The readback path shares the same checked helper.
+    let mut readback_calls = 0;
+    let error = validate_staged_copy_bytes_with_reader(
+        source,
+        BLOCK as u64,
+        &payload[BLOCK..],
+        upload.len(),
+        &baseline,
+        |_, bytes, _| {
+            readback_calls += 1;
+            Ok(bytes.len() + 1)
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(readback_calls, 1);
+
+    // Failure is local to this attempt: the unchanged staged upload remains
+    // copyable and has exactly the same bytes as the PHP HTTP SAPI oracle.
+    let mut copied = Vec::new();
+    assert_eq!(upload.copy_to(&mut copied).unwrap(), payload.len() as u64);
+    assert_eq!(copied, payload);
+    drop(request);
+    spool.empty();
+}
