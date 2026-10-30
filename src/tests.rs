@@ -2392,6 +2392,68 @@ fn upload_copy_rejects_permission_and_length_tampering_before_output() {
 }
 
 #[test]
+fn upload_copy_rejects_replaced_anonymous_inode_before_output() {
+    let spool = Spool::new();
+    let mut original = parse(&body(&[(FILE, b"abc")]), Limits::default(), &spool).unwrap();
+    let mut substitute = parse(&body(&[(FILE, b"xyz")]), Limits::default(), &spool).unwrap();
+
+    // Both files are private, anonymous and the same length. A check based
+    // only on metadata taken at copy time would accept the wrong upload.
+    let first = original.upload_mut(0).unwrap();
+    let second = substitute.upload_mut(0).unwrap();
+    let first_identity = first.initial_identity.unwrap();
+    let second_identity = second.initial_identity.unwrap();
+    assert_ne!(first_identity.inode, second_identity.inode);
+    std::mem::swap(&mut first.file, &mut second.file);
+    let mut output = Vec::new();
+    assert_eq!(
+        first.copy_to(&mut output).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(output.is_empty());
+
+    // Restoring the original descriptor permits a complete retry.
+    std::mem::swap(&mut first.file, &mut second.file);
+    assert_eq!(first.copy_to(&mut output).unwrap(), 3);
+    assert_eq!(output, b"abc");
+    drop(original);
+    drop(substitute);
+    spool.empty();
+}
+
+#[test]
+fn upload_copy_rejects_private_mode_change_since_staging() {
+    let spool = Spool::new();
+    let mut request = parse(&body(&[(FILE, b"abc")]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let file = upload.file.as_ref().unwrap();
+    assert_eq!(file.metadata().unwrap().permissions().mode() & 0o777, 0o600);
+
+    // 0400 is still private and passes the existing mode predicate, but
+    // it is not the exact inode mode accepted at request staging.
+    file.set_permissions(fs::Permissions::from_mode(0o400))
+        .unwrap();
+    assert!(private_staging_mode(&file.metadata().unwrap()));
+    let mut output = Vec::new();
+    assert_eq!(
+        upload.copy_to(&mut output).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(output.is_empty());
+
+    upload
+        .file
+        .as_ref()
+        .unwrap()
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+    assert_eq!(upload.copy_to(&mut output).unwrap(), 3);
+    assert_eq!(output, b"abc");
+    drop(request);
+    spool.empty();
+}
+
+#[test]
 fn upload_copy_rejects_linked_file_even_with_private_permissions() {
     let spool = Spool::new();
     let named = spool.0.join("linked-upload");
@@ -2400,6 +2462,7 @@ fn upload_copy_rejects_linked_file_even_with_private_permissions() {
     let file = OpenOptions::new().read(true).open(&named).unwrap();
     assert_eq!(file.metadata().unwrap().nlink(), 1);
     let mut upload = Upload {
+        initial_identity: Some(StagingIdentity::from_metadata(&file.metadata().unwrap())),
         file: Some(file),
         length: 3,
         discarded: false,
