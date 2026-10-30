@@ -108,9 +108,7 @@ fn root_key(raw: &[u8], flatten_open_brackets: bool) -> Result<Key, Error> {
         .try_reserve_exact(raw.len())
         .map_err(|_| Error::Allocation)?;
     normalized.extend(raw.iter().map(|&byte| {
-        if matches!(byte, b' ' | b'.')
-            || (flatten_open_brackets && byte == b'[')
-        {
+        if matches!(byte, b' ' | b'.') || (flatten_open_brackets && byte == b'[') {
             b'_'
         } else {
             byte
@@ -140,7 +138,10 @@ pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTre
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
     }
-    if header.iter().any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n')) {
+    if header
+        .iter()
+        .any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    {
         return Err(Error::InvalidHeader);
     }
     let mut entries: Vec<Entry> = Vec::new();
@@ -169,12 +170,15 @@ pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTre
         if raw_name.first() == Some(&b'[') {
             continue;
         }
-        let bracket = raw_name.iter().position(|&byte| byte == b'[').and_then(|open| {
-            raw_name[open + 1..]
-                .iter()
-                .position(|&byte| byte == b']')
-                .map(|offset| (open, open + 1 + offset))
-        });
+        let bracket = raw_name
+            .iter()
+            .position(|&byte| byte == b'[')
+            .and_then(|open| {
+                raw_name[open + 1..]
+                    .iter()
+                    .position(|&byte| byte == b']')
+                    .map(|offset| (open, open + 1 + offset))
+            });
         if let Some((open, close)) = bracket {
             if raw_name[close + 1..].contains(&b'[') {
                 return Err(Error::UnsupportedArrayName);
@@ -187,27 +191,33 @@ pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTre
             // quota, but the quota does not represent process RSS.
             charge(
                 &mut retained,
-                raw_name.len().checked_add(raw_value.len()).ok_or(Error::RetainedBytes)?,
+                raw_name
+                    .len()
+                    .checked_add(raw_value.len())
+                    .ok_or(Error::RetainedBytes)?,
                 limits,
             )?;
             let root = root_key(&raw_name[..open], false)?;
             let index_bytes = &raw_name[open + 1..close];
             let append = index_bytes.is_empty()
                 || (index_bytes.len() == 1 && index_bytes[0].is_ascii_whitespace());
-            let child_key = if append { None } else { Some(key(index_bytes)?) };
-            let value = decode_cookie_value(raw_value)?;
-            let root_position = if let Some(position) =
-                entries.iter().position(|entry| entry.key == root)
-            {
-                position
+            let child_key = if append {
+                None
             } else {
-                entries.try_reserve(1).map_err(|_| Error::Allocation)?;
-                entries.push(Entry {
-                    key: root,
-                    value: Value::Array(Array::default()),
-                });
-                entries.len() - 1
+                Some(key(index_bytes)?)
             };
+            let value = decode_cookie_value(raw_value)?;
+            let root_position =
+                if let Some(position) = entries.iter().position(|entry| entry.key == root) {
+                    position
+                } else {
+                    entries.try_reserve(1).map_err(|_| Error::Allocation)?;
+                    entries.push(Entry {
+                        key: root,
+                        value: Value::Array(Array::default()),
+                    });
+                    entries.len() - 1
+                };
             if matches!(entries[root_position].value, Value::Scalar(_)) {
                 entries[root_position].value = Value::Array(Array::default());
             }
@@ -230,7 +240,10 @@ pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTre
             }
             charge(
                 &mut retained,
-                raw_name.len().checked_add(raw_value.len()).ok_or(Error::RetainedBytes)?,
+                raw_name
+                    .len()
+                    .checked_add(raw_value.len())
+                    .ok_or(Error::RetainedBytes)?,
                 limits,
             )?;
             let value = decode_cookie_value(raw_value)?;
@@ -381,11 +394,8 @@ mod tests {
     #[test]
     fn exhausted_append_is_an_error_instead_of_overwriting() {
         assert_eq!(
-            parse_one_level_header(
-                b"a[9223372036854775807]=x; a[]=y",
-                Limits::default()
-            )
-            .unwrap_err(),
+            parse_one_level_header(b"a[9223372036854775807]=x; a[]=y", Limits::default())
+                .unwrap_err(),
             Error::AppendExhausted
         );
     }
