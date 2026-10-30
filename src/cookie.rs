@@ -121,7 +121,10 @@ pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookie
     }
     // These bytes cannot occur in a valid HTTP header field value. Reject
     // them instead of silently modeling PHP's transport-specific truncation.
-    if header.iter().any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n')) {
+    if header
+        .iter()
+        .any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n'))
+    {
         return Err(Error::InvalidHeader);
     }
 
@@ -290,10 +293,7 @@ mod tests {
                 Error::RetainedBytes,
             ),
         ] {
-            assert_eq!(
-                parse_scalar_header(b"ab=12", limits).unwrap_err(),
-                error
-            );
+            assert_eq!(parse_scalar_header(b"ab=12", limits).unwrap_err(), error);
         }
         // A duplicate does not consume retained-value capacity twice, but
         // still consumes wire and pair quotas.
