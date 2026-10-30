@@ -1930,3 +1930,20 @@ Linux CI compares one-level array cases against a real PHP 8.4 HTTP SAPI,
 while Rust tests run on Linux and macOS. This API only projects metadata:
 no Zend integration, native $_COOKIE population, or FPM worker changes.
 
+
+## PHP 8.4 HTTP Cookie max_input_vars admission
+
+The opt-in `cookie::parse_scalar_header_with_php_max_input_vars` and
+`cookie::array::parse_one_level_header_with_php_max_input_vars` adapters
+match PHP 8.4 HTTP SAPI variable-count admission while retaining independent
+hard header-byte, wire-pair, name, value, and retained-byte limits.
+`cookie --php-max-input-vars N [--php-arrays]` exposes the same behavior.
+Without this flag, existing parsing behavior is preserved.
+PHP `max_input_vars=0` admits no Cookie variables. Each nonempty wire name
+consumes a slot, including duplicates and names PHP ignores because the root
+starts with `[`; empty names (`=value`) and separator-only segments do not.
+Once the quota is reached, later variables are not registered or decoded.
+The entire header still undergoes hard byte-size and CR/LF/NUL validation.
+A real PHP 8.4 HTTP SAPI is used as the differential oracle with limits
+0, 1, 2 and 3. This is a standalone experimental admission adapter, not a
+Zend or native PHP-FPM integration.

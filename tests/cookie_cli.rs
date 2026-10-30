@@ -78,3 +78,46 @@ fn cookie_cli_nested_array_fails_without_json() {
     assert!(stdout.is_empty());
     assert!(stderr.contains("UnsupportedArrayName"), "{stderr}");
 }
+
+fn run_limited(header: &[u8], array_mode: bool, limit: &str) -> (bool, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cookie"));
+    if array_mode {
+        command.arg("--php-arrays");
+    }
+    let mut child = command
+        .args(["--php-max-input-vars", limit])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(header).unwrap();
+    let result = child.wait_with_output().unwrap();
+    (
+        result.status.success(),
+        String::from_utf8(result.stdout).unwrap(),
+        String::from_utf8(result.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn cookie_cli_php_variable_quota_counts_duplicates() {
+    let (ok, stdout, stderr) = run_limited(b"a=1; a=2; b=3", false, "2");
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, concat!(r#"{"cookie_pairs":[["61","31"]]}"#, "\n"));
+    let (ok, stdout, stderr) = run_limited(b"a=1", false, "0");
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, concat!(r#"{"cookie_pairs":[]}"#, "\n"));
+}
+
+#[test]
+fn cookie_cli_php_variable_quota_bounds_array_projection() {
+    let (ok, stdout, stderr) = run_limited(b"a[x]=1; a[y]=2; a[z]=3", true, "2");
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","78"]"#));
+    assert!(stdout.contains(r#"["s","79"]"#));
+    assert!(!stdout.contains(r#"["s","7a"]"#));
+    let (ok, stdout, stderr) = run_limited(b"a[x]=1", true, "0");
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, concat!(r#"{"cookie_tree":["a",[]]}"#, "\n"));
+}

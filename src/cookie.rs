@@ -122,6 +122,25 @@ fn decode_cookie_value(raw: &[u8]) -> Result<Vec<u8>, Error> {
 /// framing and multiple Cookie-header merging remain the transport's
 /// responsibility.
 pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookies, Error> {
+    parse_scalar_header_inner(header, limits, None)
+}
+
+/// Apply PHP 8.4 HTTP SAPI's max_input_vars admission to a Cookie header.
+/// Zero admits no variables; duplicates and ignored bracket-root names still
+/// consume slots. Independent hard byte/pair limits remain enforced.
+pub fn parse_scalar_header_with_php_max_input_vars(
+    header: &[u8],
+    limits: Limits,
+    max_input_vars: usize,
+) -> Result<ScalarCookies, Error> {
+    parse_scalar_header_inner(header, limits, Some(max_input_vars))
+}
+
+fn parse_scalar_header_inner(
+    header: &[u8],
+    limits: Limits,
+    mut php_remaining: Option<usize>,
+) -> Result<ScalarCookies, Error> {
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
     }
@@ -142,16 +161,23 @@ pub fn parse_scalar_header(header: &[u8], limits: Limits) -> Result<ScalarCookie
         if segment.is_empty() {
             continue;
         }
-        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
-        if pairs > limits.pairs {
-            return Err(Error::Pairs);
-        }
-
         let name_end = segment.iter().position(|&byte| byte == b'=');
         let (raw_name, raw_value) = match name_end {
             Some(pos) => (&segment[..pos], &segment[pos + 1..]),
             None => (segment, b"".as_slice()),
         };
+        if !raw_name.is_empty()
+            && let Some(remaining) = php_remaining.as_mut()
+        {
+            if *remaining == 0 {
+                break;
+            }
+            *remaining -= 1;
+        }
+        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
+        if pairs > limits.pairs {
+            return Err(Error::Pairs);
+        }
         if raw_name.is_empty() {
             continue;
         }
@@ -323,6 +349,56 @@ mod tests {
         assert_eq!(
             parse_scalar_header(b"a=1;;b=2;c=3", quota).unwrap_err(),
             Error::Pairs
+        );
+    }
+
+    #[test]
+    fn php_cookie_variable_quota_counts_duplicates_and_ignored_names() {
+        let limits = Limits::default();
+        let result = parse_scalar_header_with_php_max_input_vars(
+            b"=ignored; a=one; a=two; b=three",
+            limits,
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            result.entries(),
+            &[Cookie {
+                name: b"a".to_vec(),
+                value: b"one".to_vec(),
+            }]
+        );
+        let ignored = parse_scalar_header_with_php_max_input_vars(
+            b"[ignored]=x; a=one; b=two",
+            limits,
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            ignored.entries(),
+            &[Cookie {
+                name: b"a".to_vec(),
+                value: b"one".to_vec(),
+            }]
+        );
+        assert!(
+            parse_scalar_header_with_php_max_input_vars(b"a=one; b=two", limits, 0)
+                .unwrap()
+                .entries()
+                .is_empty()
+        );
+        let small = Limits {
+            name_bytes: 1,
+            ..limits
+        };
+        // PHP quota stops registration before decoding oversized later names.
+        assert!(
+            parse_scalar_header_with_php_max_input_vars(
+                b"a=1; very_long_after_the_php_quota=2",
+                small,
+                1,
+            )
+            .is_ok()
         );
     }
 

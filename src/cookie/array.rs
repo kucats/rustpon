@@ -135,6 +135,24 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 /// opens another bracket. Nested paths are rejected without partial output.
 /// Header, pair, field and retained-byte limits remain independent.
 pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTree, Error> {
+    parse_one_level_header_inner(header, limits, None)
+}
+
+/// Apply PHP 8.4 HTTP SAPI's Cookie max_input_vars quota before registering
+/// nonempty raw names, including duplicates and ignored bracket-root names.
+pub fn parse_one_level_header_with_php_max_input_vars(
+    header: &[u8],
+    limits: Limits,
+    max_input_vars: usize,
+) -> Result<CookieTree, Error> {
+    parse_one_level_header_inner(header, limits, Some(max_input_vars))
+}
+
+fn parse_one_level_header_inner(
+    header: &[u8],
+    limits: Limits,
+    mut php_remaining: Option<usize>,
+) -> Result<CookieTree, Error> {
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
     }
@@ -153,14 +171,22 @@ pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTre
         if segment.is_empty() {
             continue;
         }
-        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
-        if pairs > limits.pairs {
-            return Err(Error::Pairs);
-        }
         let (raw_name, raw_value) = match segment.iter().position(|&byte| byte == b'=') {
             Some(position) => (&segment[..position], &segment[position + 1..]),
             None => (segment, b"".as_slice()),
         };
+        if !raw_name.is_empty()
+            && let Some(remaining) = php_remaining.as_mut()
+        {
+            if *remaining == 0 {
+                break;
+            }
+            *remaining -= 1;
+        }
+        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
+        if pairs > limits.pairs {
+            return Err(Error::Pairs);
+        }
         if raw_name.is_empty() {
             continue;
         }
@@ -388,6 +414,42 @@ mod tests {
         assert_eq!(
             parse_one_level_header(b"a=1\r\n", Limits::default()).unwrap_err(),
             Error::InvalidHeader
+        );
+    }
+
+    #[test]
+    fn php_cookie_variable_quota_counts_repeated_array_indices() {
+        let tree = parse_one_level_header_with_php_max_input_vars(
+            b"a[x]=first; a[x]=second; a[y]=third; nested[k][z]=ignored",
+            Limits::default(),
+            2,
+        )
+        .unwrap();
+        let Value::Array(array) = &tree.entries[0].value else {
+            panic!("expected array");
+        };
+        assert_eq!(array.elements.len(), 1);
+        assert_eq!(array.elements[0].key, Key::Bytes(b"x".to_vec()));
+        assert_eq!(array.elements[0].value, b"second");
+        assert!(
+            parse_one_level_header_with_php_max_input_vars(
+                b"[ignored]=x; a[x]=one; b=two",
+                Limits::default(),
+                1,
+            )
+            .unwrap()
+            .entries
+            .is_empty()
+        );
+        assert!(
+            parse_one_level_header_with_php_max_input_vars(
+                b"a[x]=one; b=two",
+                Limits::default(),
+                0,
+            )
+            .unwrap()
+            .entries
+            .is_empty()
         );
     }
 

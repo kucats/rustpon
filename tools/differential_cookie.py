@@ -61,6 +61,18 @@ ARRAY_CASES = [
     ("multiple-root-arrays", b"a[x]=1; b[2]=2; c=3; b[]=4"),
 ]
 
+LIMIT_CASES = [
+    ("ordinary", b"a=1; b=2; c=3; d=4"),
+    ("duplicate-consumes-slot", b"a=1; a=2; b=3"),
+    ("ignored-empty-name", b"=ignored; a=1; b=2; c=3"),
+    ("blank-separators", b";; a=1;;b=2; c=3"),
+    ("ignored-bracket-root", b"[bad]=ignored; a=1; b=2"),
+    ("array-append", b"a[]=first; a[]=second; a[]=third"),
+    ("array-promotion", b"a=one; a[x]=two; b=three"),
+    ("array-duplicate-index", b"a[x]=one; a[x]=two; b=three"),
+]
+
+
 def php_cookie(port, header, key="cookie_pairs"):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
@@ -76,9 +88,12 @@ def php_cookie(port, header, key="cookie_pairs"):
         connection.close()
 
 
-def rust_cookie(binary, header, arrays=False):
+def rust_cookie(binary, header, arrays=False, max_input_vars=None):
+    command = [str(binary)] + (["--php-arrays"] if arrays else [])
+    if max_input_vars is not None:
+        command.extend(["--php-max-input-vars", str(max_input_vars)])
     result = subprocess.run(
-        [str(binary)] + (["--php-arrays"] if arrays else []),
+        command,
         input=header, capture_output=True, timeout=15, check=False,
     )
     if result.returncode:
@@ -131,11 +146,44 @@ def main():
     finally:
         server.terminate()
         server.wait(timeout=10)
+    # With HTTP Cookie headers PHP 8.4 counts nonempty wire names, including
+    # duplicates and skipped bracket-root names; an ini limit of zero skips all.
+    scalar_router = Path(__file__).resolve().with_name("cookie_projection.php")
+    for limit in (0, 1, 2, 3):
+        for arrays, router, expected_key, cases in (
+            (False, scalar_router, "cookie_pairs", LIMIT_CASES[:5]),
+            (True, array_router, "cookie_tree", LIMIT_CASES),
+        ):
+            server, port = start_server(
+                args.php_bin, 1, router, max_input_vars=limit,
+            )
+            try:
+                for label, header in cases:
+                    try:
+                        expected = php_cookie(port, header, key=expected_key)
+                        actual = rust_cookie(
+                            args.rust_bin, header, arrays=arrays,
+                            max_input_vars=limit,
+                        )
+                        if expected != actual:
+                            raise AssertionError(f"PHP={expected!r}, Rust={actual!r}")
+                        passed += 1
+                    except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+                        failures += 1
+                        print(
+                            f"FAIL Cookie max_input_vars={limit} "
+                            f"{'array' if arrays else 'scalar'} {label}: {error}",
+                            file=sys.stderr,
+                        )
+            finally:
+                server.terminate()
+                server.wait(timeout=10)
     if failures:
         raise SystemExit(f"{failures} PHP 8.4 HTTP Cookie cases failed")
     print(
         f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
-        f"({len(CASES)} scalar, {len(ARRAY_CASES)} one-level array)"
+        f"({len(CASES)} scalar, {len(ARRAY_CASES)} one-level array, "
+        f"{4 * (5 + len(LIMIT_CASES))} quota cases)"
     )
 
 
