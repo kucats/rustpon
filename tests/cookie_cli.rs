@@ -72,8 +72,8 @@ fn cookie_cli_one_level_array_is_binary_safe() {
 }
 
 #[test]
-fn cookie_cli_three_level_array_fails_without_json() {
-    let (ok, stdout, stderr) = run_array(b"a=first; a[x][y][z]=second");
+fn cookie_cli_four_level_array_fails_without_json() {
+    let (ok, stdout, stderr) = run_array(b"a=first; a[x][y][z][w]=second");
     assert!(!ok);
     assert!(stdout.is_empty());
     assert!(stderr.contains("UnsupportedArrayName"), "{stderr}");
