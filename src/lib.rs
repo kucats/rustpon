@@ -938,7 +938,10 @@ impl Parser {
             };
             let initial_identity = file
                 .as_ref()
-                .map(|file| file.metadata().map(|meta| StagingIdentity::from_metadata(&meta)))
+                .map(|file| {
+                    file.metadata()
+                        .map(|meta| StagingIdentity::from_metadata(&meta))
+                })
                 .transpose()
                 .map_err(Error::from)?;
             Payload::File(Upload {
