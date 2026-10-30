@@ -75,6 +75,13 @@ CASES = [
         (b"upload", b"replaced", b"transaction.bin"),
         (b"upload", bytes((i * 43 + 251) % 256 for i in range(8192 + 29)), b"transaction.bin"),
     ]),
+    # PHP replaces both earlier same-name uploads. The surviving payload
+    # exercises binary copy across the 8 KiB block boundary.
+    ("file-transactional-vec-triple-overwrite-oracle", [
+        (b"upload", b"first", b"transaction.bin"),
+        (b"upload", b"second", b"transaction.bin"),
+        (b"upload", bytes((i * 43 + 251) % 256 for i in range(8192 + 29)), b"transaction.bin"),
+    ]),
     # Source-read EINTR regression companion: unchanged 8 KiB + 19 byte
     # uploads must remain byte-for-byte identical to PHP 8.4 HTTP SAPI.
     ("file-interrupted-source-read-oracle", [
@@ -283,6 +290,8 @@ def main():
                     "file-zero-overwritten": [1],
                     "file-append-zero-binary": [0, 1],
                     "file-overwrite": [1],
+                    "file-transactional-vec-overwrite-oracle": [1],
+                    "file-transactional-vec-triple-overwrite-oracle": [2],
                     "file-nested-then-flat": [1],
                     "file-flat-then-nested": [1],
                     "file-same-index": [1],
@@ -308,13 +317,26 @@ def main():
                 # The raw wire IR retains overwritten uploads; PHP FILES does not.
                 # PHP FILES tree equality above covers duplicate-name semantics.
                 # Wire IR also retains uploads rejected by MAX_FILE_SIZE.
-                if php["files"] and label not in ("file-overwrite", "max-changed",
-                        "max-collision-recovery", "file-zero-overwritten",
-                        "file-nested-then-flat", "file-flat-then-nested",
-                        "file-same-index", "file-normalized-root",
-                        "file-invalid-after-good", "file-invalid-root-ignored"):
+                # The wire IR retains overwritten uploads, whereas PHP
+                # exposes only the last descriptor of a repeated scalar field.
+                # Validate the winning bytes instead of counting both files.
+                transactional_overwrites = (
+                    "file-transactional-vec-overwrite-oracle",
+                    "file-transactional-vec-triple-overwrite-oracle",
+                )
+                raw_indices = None
+                if php["files"]:
+                    if label in transactional_overwrites:
+                        raw_indices = set(admission_data["accepted_indices"])
+                    elif label not in ("file-overwrite", "max-changed",
+                            "max-collision-recovery", "file-zero-overwritten",
+                            "file-nested-then-flat", "file-flat-then-nested",
+                            "file-same-index", "file-normalized-root",
+                            "file-invalid-after-good", "file-invalid-root-ignored"):
+                        raw_indices = set(range(len(parts)))
+                if raw_indices is not None:
                     raw = subprocess.run([str(opt.rust_bin), BOUNDARY.decode(), spool],
-                                         input=data, capture_output=True, timeout=15, check=False)
+                                          input=data, capture_output=True, timeout=15, check=False)
                     if raw.returncode:
                         failures += 1
                         print(f"FAIL {label}: raw multipart error {raw.stderr[:200]!r}", file=sys.stderr)
@@ -323,14 +345,20 @@ def main():
                     expected_files = [
                         [part["name_hex"],
                          bytes.fromhex(part["filename_hex"])
-                              .replace(b"\\", b"/").split(b"/")[-1].hex(),
+                               .replace(b"\\", b"/").split(b"/")[-1].hex(),
                          part["content_type_hex"] or "",
                          len(bytes.fromhex(part["data_hex"])), part["data_hex"]]
-                        for part in wire if part["filename_hex"] is not None
+                        for index, part in enumerate(wire)
+                        if index in raw_indices and part["filename_hex"] is not None
                     ]
                     if php["files"] != expected_files:
                         failures += 1
-                        print(f"FAIL {label}: PHP files={php['files']!r} Rust files={expected_files!r}", file=sys.stderr)
+                        # Avoid printing megabytes of binary hex in CI logs.
+                        print(f"FAIL {label}: PHP file lengths="
+                              f"{[record[3] for record in php['files']]!r}, "
+                              f"Rust lengths={[record[3] for record in expected_files]!r}, "
+                              f"admitted={admission_data['accepted_indices']!r}",
+                              file=sys.stderr)
         print(f"PHP SAPI multipart: {len(cases)} cases, {failures} failures")
         return int(failures != 0)
     finally:
