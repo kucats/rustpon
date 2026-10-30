@@ -377,7 +377,8 @@ fn php_84_disposition_duplicate_parameters_and_extensions() {
     // PHP 8.4 HTTP SAPI uses the final name/filename, ignores filename* and
     // other well-formed extensions, and tolerates empty semicolon separators.
     // Retain strict validation of the enclosing header and its byte quotas.
-    let cases: &[(&[u8], &[u8], Option<&[u8]>)] = &[
+    type DispositionCase<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>);
+    let cases: &[DispositionCase<'_>] = &[
         (
             b"Content-Disposition: form-data; name=first; name=last",
             b"last",
