@@ -1453,6 +1453,15 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
             bytes = &value[..end];
             value = trim(&value[end..]);
         }
+        // PHP 8.4's multipart SAPI stops unquoted values at horizontal
+        // whitespace and quoted values at their closing quote. Stray text
+        // after either terminator is ignored until the next semicolon, which
+        // may introduce another (including a duplicate) parameter. The
+        // complete header line is already subject to the byte/work quotas.
+        if !value.is_empty() && value[0] != b';' {
+            let end = value.iter().position(|&b| b == b';').unwrap_or(value.len());
+            value = &value[end..];
+        }
         let param = Param { bytes, quoted };
         // PHP 8.4's multipart SAPI uses the last name/filename parameter.
         // Other syntactically valid parameters, including RFC 5987's

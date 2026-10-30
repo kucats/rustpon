@@ -64,7 +64,11 @@ values only.
   case; quoted parameter escapes are decoded only for \" and \\,
   while other backslashes remain literal. Unquoted `name` and `filename`
   values retain PHP-compatible non-token bytes such as `=`, `:`, backslash
-  and UTF-8, stopping at horizontal whitespace or `;`. Like PHP 8.4 HTTP SAPI,
+  and UTF-8, stopping at horizontal whitespace or `;`. PHP 8.4 also ignores
+  trailing text following an unquoted value's whitespace terminator or a
+  quoted value's closing quote up to the next semicolon; later parameters
+  (including duplicate `name`/`filename` values) still take effect.
+  Like PHP 8.4 HTTP SAPI,
   repeated `name` or
   `filename` parameters use the last value. Well-formed unknown parameters
   (including `filename*`) are ignored rather than interpreted; empty semicolon

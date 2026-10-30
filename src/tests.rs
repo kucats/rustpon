@@ -425,6 +425,58 @@ fn php_84_disposition_unquoted_values_match_http_sapi() {
 }
 
 #[test]
+fn php_84_disposition_ignores_trailing_parameter_text() {
+    let spool = Spool::new();
+    // Measured against PHP 8.4.24's HTTP SAPI. The suffix is not part of
+    // the name/filename, and a later duplicate parameter still wins.
+    type Case<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>);
+    let cases: &[Case<'_>] = &[
+        (
+            b"Content-Disposition: form-data; name=alpha ignored",
+            b"alpha",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=alpha\tignored; filename=file.bin",
+            b"alpha",
+            Some(b"file.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=up; filename=hello world.bin",
+            b"up",
+            Some(b"hello"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=\"up\"suffix; filename=\"done.bin\"junk",
+            b"up",
+            Some(b"done.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=first skipped; name=last; filename=old.bin ignored; filename=new.bin",
+            b"last",
+            Some(b"new.bin"),
+        ),
+    ];
+    for &(header, expected_name, expected_filename) in cases {
+        let request = parse(&body(&[(header, b"\0\xffX")]), Limits::default(), &spool)
+            .unwrap();
+        let view = request.parts().next().unwrap();
+        assert_eq!(view.name, expected_name, "{header:?}");
+        assert_eq!(view.filename, expected_filename, "{header:?}");
+        drop(request);
+        spool.empty();
+    }
+    // Compatibility does not relax hard header-line byte limits.
+    let mut limited = Limits::default();
+    limited.header_line_bytes = 24;
+    assert_eq!(
+        parse(&body(&[(cases[0].0, b"x")]), limited, &spool).unwrap_err(),
+        Error::Limit(Limit::HeaderLineBytes)
+    );
+    spool.empty();
+}
+
+#[test]
 fn php_84_disposition_quoted_escape_decoding_matches_http_sapi() {
     let spool = Spool::new();
     // PHP 8.4 removes a backslash only before another slash or a quote.

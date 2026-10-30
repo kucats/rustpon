@@ -228,6 +228,28 @@ CASES = [
         (b"upload", b"\x00\xffX", b'ab"cd.bin', b"application/octet-stream",
          b'form-data; name=upload; filename=ab"cd.bin'),
     ]),
+    # PHP 8.4 stops at whitespace for unquoted values and at the closing
+    # quote for quoted values, ignoring suffix text up to the next semicolon.
+    ("disposition-name-ignored-space-suffix", [
+        (b"alpha", b"payload", None, b"application/octet-stream",
+         b"form-data; name=alpha ignored"),
+    ]),
+    ("disposition-name-ignored-tab-suffix", [
+        (b"alpha", b"\x00\xffX", b"file.bin", b"application/octet-stream",
+         b"form-data; name=alpha\tignored; filename=file.bin"),
+    ]),
+    ("disposition-filename-ignored-space-suffix", [
+        (b"up", b"\x00\xffX", b"hello", b"application/octet-stream",
+         b"form-data; name=up; filename=hello world.bin"),
+    ]),
+    ("disposition-quoted-ignored-suffix", [
+        (b"up", b"\x00\xffX", b"done.bin", b"application/octet-stream",
+         b'form-data; name="up"suffix; filename="done.bin"junk'),
+    ]),
+    ("disposition-duplicate-after-suffix", [
+        (b"last", b"\x00\xffX", b"new.bin", b"application/octet-stream",
+         b"form-data; name=first skipped; name=last; filename=old.bin ignored; filename=new.bin"),
+    ]),
     # PHP 8.4 HTTP SAPI accepts duplicate disposition keys (last one wins)
     # and ignores syntactically valid extension parameters, including filename*.
     ("disposition-duplicate-name", [
