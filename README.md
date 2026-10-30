@@ -1911,19 +1911,20 @@ and prints the tagged `cookie_pairs` array only on complete success.
 Linux CI compares scalar cases with a real PHP 8.4 HTTP SAPI, including
 duplicate names, percent escapes, whitespace and a multi-block value.
 
-### Bounded two-level Cookie array registration (opt-in)
+### Bounded three-level Cookie array registration (opt-in)
 
 The separate cookie::array::parse_one_level_header API (name retained for
 compatibility) and cookie --php-arrays harness now project PHP 8.4 HTTP
-Cookie paths root[index], root[], root[index][child], root[][child] and
-root[index][]. One ASCII whitespace byte, including vertical tab, acts as
-an append index. Typed 64-bit keys and ordered binary-safe values survive
-nested JSON projection. Scalar roots are first-wins, while array paths
-promote previous scalar roots or children to arrays, replace repeated
+Cookie paths root[index], root[], root[index][child], root[][child],
+root[index][], root[index][child][leaf], root[][child][leaf], and
+root[index][][leaf]. One ASCII whitespace byte, including vertical tab,
+acts as an append index. Typed 64-bit keys and ordered binary-safe values
+survive nested JSON projection. Scalar roots are first-wins, while array
+paths promote previous scalar roots or children to arrays, replace repeated
 indices, and ignore later scalar-root duplicates.
 The CLI emits cookie_tree in tagged JSON; cookie_pairs remains unchanged.
 
-Three or more bracket levels, malformed second brackets, and paths containing
+Four or more bracket levels, malformed brackets, and paths containing
 another opening bracket after unrelated trailing text fail closed with
 UnsupportedArrayName. An exhausted append fails with AppendExhausted.
 Conservative retained-byte accounting charges overwritten nested fields.

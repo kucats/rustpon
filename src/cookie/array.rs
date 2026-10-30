@@ -623,9 +623,8 @@ mod tests {
 
     #[test]
     fn php_cookie_three_level_paths_promote_overwrite_and_append() {
-        let tree = parse(
-            b"a[x][y]=old; a[x][y][z]=one; a[x][y][z]=two; a[x][y][]=tail; a[][v][w]=next",
-        );
+        let tree =
+            parse(b"a[x][y]=old; a[x][y][z]=one; a[x][y][z]=two; a[x][y][]=tail; a[][v][w]=next");
         let Value::Array(root) = &tree.entries[0].value else {
             panic!("expected root array");
         };
@@ -687,5 +686,4 @@ mod tests {
         };
         assert_eq!(y.elements[0].value, Value::Scalar(b"first".to_vec()));
     }
-
 }
