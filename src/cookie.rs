@@ -252,7 +252,6 @@ mod tests {
         assert_eq!(json, br#"[["61","ff"]]"#);
     }
 
-
     #[test]
     fn php_cookie_unterminated_brackets_flatten_without_losing_first_wins() {
         assert_eq!(
