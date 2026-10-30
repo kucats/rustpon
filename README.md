@@ -156,7 +156,7 @@ discard the entire destination on every copy error**. For callers that need a re
 partially published, `Upload::copy_to_vec(max_bytes)` stages the entire
 payload in a private, explicitly size-capped `Vec<u8>` and returns it only
 after all copy checks succeed. An error drops the private buffer; the
-application's `max_bytes` cap is enforced before allocation. This opt-in API
+application's `max_bytes` cap is enforced before allocation. The admitted-request adapter also exposes `AdmittedRequest::copy_accepted_to_vec(index, max_bytes)`, which returns `None` for rejected or overwritten upload indices and uses the same all-or-error, application-capped buffer for surviving uploads. Its Rust regression test uses the 8,221-byte binary payload from the PHP 8.4 HTTP SAPI `file-transactional-vec-oracle` case and verifies cap rejection, exact byte equality and retry without partial publication. This opt-in API
 adds a full in-memory copy and does not guarantee an atomic source snapshot,
 prevent system OOM, or change `copy_to`'s streaming contract. Per-block validation
 does not provide an atomic source snapshot or guarantee detection of
