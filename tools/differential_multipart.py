@@ -64,6 +64,11 @@ CASES = [
     ("file-three-blocks-binary", [(b"upload", bytes(range(256)) * 96 + b"\xff", b"three.bin")]),
     # Short-write regression companion: PHP SAPI must preserve every binary byte.
     ("file-short-write-oracle", [(b"upload", bytes((i * 47 + 3) % 256 for i in range(8192 * 2 + 9)), b"short-write.bin")]),
+    # Transactional copy-to-Vec companion: 8 KiB + 29 binary bytes must
+    # match the PHP 8.4 HTTP SAPI upload exactly, including the last block.
+    ("file-transactional-vec-oracle", [
+        (b"upload", bytes((i * 43 + 251) % 256 for i in range(8192 + 29)), b"transaction.bin")
+    ]),
     # A Rust writer may return EINTR after modifying its source descriptor.
     # The normal (non-injected) path must still match PHP's binary upload.
     ("file-interrupted-writer-oracle", [

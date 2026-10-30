@@ -149,7 +149,13 @@ HTTP SAPI differential coverage includes binary uploads spanning more than
 four blocks. Timestamp checks are not atomic and cannot detect every
 concurrent rewrite (including clock-granularity or timestamp-restoration
 cases). A failed copy may already have emitted a prefix, so callers **must
-discard the entire destination on every copy error**. Per-block validation
+discard the entire destination on every copy error**. For callers that need a result which is never
+partially published, `Upload::copy_to_vec(max_bytes)` stages the entire
+payload in a private, explicitly size-capped `Vec<u8>` and returns it only
+after all copy checks succeed. An error drops the private buffer; the
+application's `max_bytes` cap is enforced before allocation. This opt-in API
+adds a full in-memory copy and does not guarantee an atomic source snapshot,
+prevent system OOM, or change `copy_to`'s streaming contract. Per-block validation
 does not provide an atomic source snapshot or guarantee detection of
 same-length in-place rewrites. After each completed block, the copy also
 re-reads that block using positional I/O and compares the bytes against what

@@ -656,6 +656,52 @@ fn bounded_interrupted_and_zero_write_failures() {
 }
 
 #[test]
+fn upload_copy_to_vec_is_bounded_and_never_returns_partial_bytes() {
+    let spool = Spool::new();
+    // A binary payload crossing the internal 8 KiB copy boundary.
+    let payload: Vec<u8> = (0..BLOCK + 29)
+        .map(|index| ((index * 43 + 251) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    assert_eq!(
+        upload.copy_to_vec(payload.len() - 1).unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+
+    // Mutate the source after the first pread. The private buffer must be
+    // dropped on error, rather than returned with a partially copied prefix.
+    let source = upload.file.as_ref().unwrap().try_clone().unwrap();
+    let mut injected = false;
+    assert_eq!(
+        upload
+            .copy_to_vec_with_read_hook(payload.len(), || {
+                if !injected {
+                    source
+                        .set_permissions(fs::Permissions::from_mode(0o644))
+                        .unwrap();
+                    injected = true;
+                }
+            })
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert!(injected);
+    source
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+    assert_eq!(upload.copy_to_vec(payload.len()).unwrap(), payload);
+    drop(request);
+    spool.empty();
+
+    let mut empty = parse(&body(&[(FILE, b"")]), Limits::default(), &spool).unwrap();
+    assert!(empty.upload_mut(0).unwrap().copy_to_vec(0).unwrap().is_empty());
+    drop(empty);
+    spool.empty();
+}
+
+#[test]
 fn upload_copy_fault_injection_preserves_retry_and_bytes() {
     struct FaultWriter {
         bytes: Vec<u8>,

@@ -274,6 +274,38 @@ impl Upload {
         self.copy_to_with_read_hook(output, || {})
     }
 
+    /// Return an upload as an owned byte buffer only after all integrity
+    /// checks succeed. Unlike copy_to, a failure cannot expose a partial
+    /// prefix to the caller. max_bytes is an explicit application-controlled
+    /// limit on the returned payload length, not an RSS guarantee.
+    /// This duplicates the upload in memory; prefer copy_to for large files
+    /// when the destination can be discarded on any error.
+    pub fn copy_to_vec(&mut self, max_bytes: usize) -> io::Result<Vec<u8>> {
+        self.copy_to_vec_with_read_hook(max_bytes, || {})
+    }
+
+    // Test hook exercises the same transactional staging path with a
+    // deterministic source mutation between pread and destination write.
+    fn copy_to_vec_with_read_hook(
+        &mut self,
+        max_bytes: usize,
+        after_read: impl FnMut(),
+    ) -> io::Result<Vec<u8>> {
+        if self.discarded || self.file.is_none() {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        let required = usize::try_from(self.length).map_err(|_| io::ErrorKind::InvalidInput)?;
+        if required > max_bytes {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(required)
+            .map_err(|_| io::ErrorKind::OutOfMemory)?;
+        self.copy_to_with_read_hook(&mut bytes, after_read)?;
+        Ok(bytes)
+    }
+
     // The hook is a no-op in production. Tests use it to inject an inode
     // mutation deterministically *after* pread and *before* the first write.
     fn copy_to_with_read_hook(
