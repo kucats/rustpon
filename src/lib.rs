@@ -254,6 +254,35 @@ fn validate_staged_copy_bytes(file: &File, offset: u64, expected: &[u8]) -> io::
     Ok(())
 }
 
+// EINTR from a positional source read is not evidence that the staged inode
+// stayed unchanged. Check its identity and metadata before retrying, just as
+// destination write retries do. The reader parameter permits deterministic
+// fault injection without relying on OS signal timing.
+fn read_staged_copy_chunk(
+    file: &File,
+    output: &mut [u8],
+    offset: u64,
+    expected_length: u64,
+    baseline: &fs::Metadata,
+    mut read: impl FnMut(&File, &mut [u8], u64) -> io::Result<usize>,
+) -> io::Result<usize> {
+    let mut interrupts = 0;
+    loop {
+        match read(file, output, offset) {
+            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            Ok(count) => return Ok(count),
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {
+                validate_staged_copy_snapshot(file, expected_length, baseline)?;
+                interrupts += 1;
+                if interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
+                    return Err(error);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 impl Upload {
     pub fn len(&self) -> u64 {
         self.length
@@ -334,25 +363,17 @@ impl Upload {
         // from a destination writer that seeks through a cloned descriptor.
         let mut offset = 0_u64;
         let mut buffer = [0_u8; BLOCK];
-        let mut read_interrupts = 0;
         while offset < self.length {
             // This is at most BLOCK, so the cast is safe on all Unix targets.
             let capacity = (self.length - offset).min(BLOCK as u64) as usize;
-            let count = match file.read_at(&mut buffer[..capacity], offset) {
-                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
-                Ok(count) => {
-                    read_interrupts = 0;
-                    count
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => {
-                    read_interrupts += 1;
-                    if read_interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
-                        return Err(error);
-                    }
-                    continue;
-                }
-                Err(error) => return Err(error),
-            };
+            let count = read_staged_copy_chunk(
+                file,
+                &mut buffer[..capacity],
+                offset,
+                expected_length,
+                &source_before,
+                |source, bytes, position| source.read_at(bytes, position),
+            )?;
             // A source can change while pread fills the buffer, before the
             // destination has received anything. Reject observable mutations
             // before emitting the just-read block. This is still not an
