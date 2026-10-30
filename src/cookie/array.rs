@@ -491,7 +491,7 @@ mod tests {
     #[test]
     fn nested_paths_fail_closed_and_limits_cover_overwrites() {
         assert_eq!(
-            parse_one_level_header(b"a[x][y][z]=1", Limits::default()).unwrap_err(),
+            parse_one_level_header(b"a[x][y][z][w]=1", Limits::default()).unwrap_err(),
             Error::UnsupportedArrayName
         );
         assert_eq!(
@@ -551,7 +551,7 @@ mod tests {
     #[test]
     fn php_cookie_two_level_limits_and_malformed_paths_fail_closed() {
         for invalid in [
-            b"a[x][y][z]=one".as_slice(),
+            b"a[x][y][z][w]=one".as_slice(),
             b"a[x][y][=two",
             b"a[x]noise[y]=three",
         ] {
