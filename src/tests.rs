@@ -2860,3 +2860,76 @@ fn upload_copy_readback_rejects_same_size_drift_and_truncation() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_copy_checks_source_after_interrupted_destination_write() {
+    struct InterruptingWriter {
+        source: File,
+        tamper: bool,
+        calls: usize,
+        output: Vec<u8>,
+    }
+
+    impl Write for InterruptingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.calls += 1;
+            if self.calls == 1 {
+                if self.tamper {
+                    // Interrupted does not guarantee a custom writer had no
+                    // side effects. No second write may leak the read buffer.
+                    self.source
+                        .set_permissions(fs::Permissions::from_mode(0o644))?;
+                }
+                return Err(io::ErrorKind::Interrupted.into());
+            }
+            self.output.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    let spool = Spool::new();
+    let payload: Vec<u8> = (0..BLOCK + 13)
+        .map(|index| ((index * 97 + 11) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+
+    let mut tampering = InterruptingWriter {
+        source: upload.file.as_ref().unwrap().try_clone().unwrap(),
+        tamper: true,
+        calls: 0,
+        output: Vec::new(),
+    };
+    assert_eq!(
+        upload.copy_to(&mut tampering).unwrap_err().kind(),
+        io::ErrorKind::InvalidData
+    );
+    assert_eq!(tampering.calls, 1, "must not retry after source mutation");
+    assert!(tampering.output.is_empty());
+    tampering
+        .source
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+
+    // Ordinary EINTR is recoverable, and a subsequent copy also starts at
+    // offset zero without sharing a cursor with the previous writer.
+    let mut transient = InterruptingWriter {
+        source: upload.file.as_ref().unwrap().try_clone().unwrap(),
+        tamper: false,
+        calls: 0,
+        output: Vec::new(),
+    };
+    assert_eq!(
+        upload.copy_to(&mut transient).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(transient.calls, 3); // EINTR, full block, final short block.
+    assert_eq!(transient.output, payload);
+
+    drop(request);
+    spool.empty();
+}

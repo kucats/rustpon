@@ -1177,6 +1177,10 @@ fn write_chunk_checked(
                 if consecutive_interrupts >= MAX_CONSECUTIVE_INTERRUPTS {
                     return Err(error);
                 }
+                // An interrupted destination write may still have side
+                // effects on the source (e.g. through a cloned descriptor).
+                // Revalidate before retrying, not only after positive writes.
+                check()?;
             }
             Err(error) => return Err(error),
         }

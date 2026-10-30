@@ -136,8 +136,10 @@ and before its bytes are written**, detecting observable source modifications
 during the read without emitting the affected block. Deterministic fault
 injection covers permission changes and same-size rewrites at this boundary.
 Metadata is revalidated after **every successful destination write**, including
-short writes within an 8192-byte read block, and after the loop (including
-empty uploads). Persistent permission, link-count,
+short writes within an 8192-byte read block, and before retrying an interrupted
+destination write. A custom writer may have modified the staged inode before
+returning `Interrupted`; no further bytes are offered until validation succeeds.
+The check also runs after the loop (including empty uploads). Persistent permission, link-count,
 or length changes, and modifications to inode mtime/ctime, now abort before
 subsequent blocks are emitted. Deterministic fault injection checks that a
 destination writer mutating a cloned source descriptor after the first block
