@@ -251,8 +251,17 @@ GET honors `arg_separator.input`. Empty configuration falls back to
 truncates variable names. The companion `_counting_vars` API preserves
 empty-name fields for the GET input-variable quota.
 
+When the trusted SAPI supplies the exact QUERY_STRING byte length, use
+`parse_reader_with_php_query_string_length` or its
+`_length_counting_vars` companion. They consume exactly that many bytes
+without reading into the next request, reject premature EOF as `Truncated`,
+and enforce the independent hard body quota before any input is read.
+A zero-length query succeeds without consuming input. The caller must supply
+an already-validated length; these APIs do not parse HTTP framing.
+
 The CLI `urlencoded --php-query-string --php-arg-separators '|;'`
-emits a binary-safe `get_tree`. With `--php-max-input-vars N`, GET counts
+emits a binary-safe `get_tree`. Append `--php-query-length N` when stdin
+contains an N-byte query followed by unrelated bytes; the suffix is ignored. With `--php-max-input-vars N`, GET counts
 N nonblank wire pairs including ignored names, but not separator-only blanks.
 No POST SAPI N+1 adjustment applies. GitHub Actions compares against real PHP
 8.4 HTTP SAPI with custom INI separators, percent escapes, collisions and

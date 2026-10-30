@@ -116,3 +116,38 @@ fn cli_php_max_input_vars_counts_ignored_names_but_not_blank_pairs() {
         );
     }
 }
+
+#[test]
+fn cli_php_query_length_does_not_consume_following_bytes() {
+    let output = run_with_args(
+        &[
+            "--php-query-string",
+            "--php-arg-separators",
+            "|",
+            "--php-query-length",
+            "7",
+        ],
+        b"a=1|b=2|unexpected=3",
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains(r#"["s","61"],["s","31"]"#));
+    assert!(stdout.contains(r#"["s","62"],["s","32"]"#));
+    assert!(!stdout.contains(r#"["s","756e6578706563746564"]"#));
+
+    let short = run_with_args(
+        &["--php-query-string", "--php-query-length", "4"],
+        b"a=1",
+    );
+    assert!(!short.status.success());
+    assert!(short.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&short.stderr).contains("Truncated"));
+
+    let missing_mode = run_with_args(&["--php-query-length", "3"], b"a=1");
+    assert!(!missing_mode.status.success());
+    assert!(missing_mode.stdout.is_empty());
+}

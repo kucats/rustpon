@@ -410,6 +410,68 @@ pub fn parse_reader_with_php_query_string_counting_vars(
     parse_reader_impl(reader, limits, arg_separators, true, true)
 }
 
+/// Parse exactly `query_length` bytes of an already-extracted PHP GET
+/// QUERY_STRING. The reader is not advanced into a subsequent request, even
+/// when more data is available. An early EOF is a transactional Truncated
+/// error; the independent body quota is checked before reading any bytes.
+/// The caller remains responsible for HTTP framing and header validation.
+pub fn parse_reader_with_php_query_string_length(
+    reader: &mut impl Read,
+    limits: Limits,
+    query_length: u64,
+    arg_separators: &[u8],
+) -> Result<Request, Error> {
+    parse_reader_with_php_query_string_length_impl(
+        reader,
+        limits,
+        query_length,
+        arg_separators,
+        false,
+    )
+}
+
+/// Length-bounded GET parsing with PHP max_input_vars accounting, including
+/// ignored empty names. Use the exact GET variable quota during projection.
+pub fn parse_reader_with_php_query_string_length_counting_vars(
+    reader: &mut impl Read,
+    limits: Limits,
+    query_length: u64,
+    arg_separators: &[u8],
+) -> Result<Request, Error> {
+    parse_reader_with_php_query_string_length_impl(
+        reader,
+        limits,
+        query_length,
+        arg_separators,
+        true,
+    )
+}
+
+fn parse_reader_with_php_query_string_length_impl(
+    reader: &mut impl Read,
+    limits: Limits,
+    query_length: u64,
+    arg_separators: &[u8],
+    count_ignored_names: bool,
+) -> Result<Request, Error> {
+    if query_length > limits.body_bytes {
+        return Err(Error::Limit(Limit::BodyBytes));
+    }
+    if query_length == 0 {
+        return Ok(Request {
+            arena: Vec::new(),
+            parts: Vec::new(),
+            stats: Stats::default(),
+        });
+    }
+    let mut bounded = reader.take(query_length);
+    let request = parse_reader_impl(&mut bounded, limits, arg_separators, true, count_ignored_names)?;
+    if bounded.limit() != 0 {
+        return Err(Error::Truncated);
+    }
+    Ok(request)
+}
+
 fn parse_reader_impl(
     reader: &mut impl Read,
     limits: Limits,
@@ -629,6 +691,91 @@ mod tests {
                 (b"c".to_vec(), b"3".to_vec()),
             ]
         );
+        let limited = request
+            .into_post_with_max_input_vars(post::Limits::default(), 2)
+            .unwrap();
+        let mut output = Vec::new();
+        limited.write_json(&mut output).unwrap();
+        let json = String::from_utf8(output).unwrap();
+        assert!(json.contains(r#"["s","61"],["s","31"]"#));
+        assert!(!json.contains(r#"["s","62"]"#));
+        assert!(!json.contains(r#"["s","63"]"#));
+    }
+
+    #[test]
+    fn php_query_string_length_is_exact_and_transactional() {
+        let query = b"a=1|b=2";
+        let mut wire = query.to_vec();
+        wire.extend_from_slice(b"|unexpected=3");
+        let mut reader = Cursor::new(wire);
+        let request = parse_reader_with_php_query_string_length(
+            &mut reader,
+            Limits::default(),
+            query.len() as u64,
+            b"|",
+        )
+        .unwrap();
+        assert_eq!(reader.position(), query.len() as u64);
+        assert_eq!(request.stats().body_bytes, query.len() as u64);
+        assert_eq!(
+            fields(&request),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+            ]
+        );
+
+        let mut short = Cursor::new(b"a=1".to_vec());
+        assert_eq!(
+            parse_reader_with_php_query_string_length(
+                &mut short,
+                Limits::default(),
+                4,
+                b"&",
+            )
+            .unwrap_err(),
+            Error::Truncated
+        );
+
+        let mut oversized = Cursor::new(b"a=1".to_vec());
+        assert_eq!(
+            parse_reader_with_php_query_string_length(
+                &mut oversized,
+                Limits {
+                    body_bytes: 2,
+                    ..Limits::default()
+                },
+                3,
+                b"&",
+            )
+            .unwrap_err(),
+            Error::Limit(Limit::BodyBytes)
+        );
+        assert_eq!(oversized.position(), 0);
+
+        let mut empty = Cursor::new(b"NEXT".to_vec());
+        let request = parse_reader_with_php_query_string_length(
+            &mut empty,
+            Limits::default(),
+            0,
+            b"&",
+        )
+        .unwrap();
+        assert_eq!(empty.position(), 0);
+        assert_eq!(request.parts().len(), 0);
+    }
+
+    #[test]
+    fn php_query_string_length_keeps_empty_name_quota_positions() {
+        let query = b"a=1|=ignored|b=2|c=3";
+        let mut reader = Cursor::new(query);
+        let request = parse_reader_with_php_query_string_length_counting_vars(
+            &mut reader,
+            Limits::default(),
+            query.len() as u64,
+            b"|",
+        )
+        .unwrap();
         let limited = request
             .into_post_with_max_input_vars(post::Limits::default(), 2)
             .unwrap();

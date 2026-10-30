@@ -48,11 +48,16 @@ def php_get(port, query):
         connection.close()
 
 
-def rust_get(binary, query, separators, quota=None):
+def rust_get(binary, query, separators, quota=None, exact_length=False):
     cmd = [str(binary), "--php-query-string", "--php-arg-separators", separators]
     if quota is not None:
         cmd.extend(["--php-max-input-vars", str(quota)])
-    result = subprocess.run(cmd, input=query, capture_output=True, timeout=15, check=False)
+    body = query
+    if exact_length:
+        cmd.extend(["--php-query-length", str(len(query))])
+        # Must not reach the next request's bytes, regardless of INI separators.
+        body += b"&unexpected=x|unexpected=y;unexpected=z"
+    result = subprocess.run(cmd, input=body, capture_output=True, timeout=15, check=False)
     if result.returncode:
         raise RuntimeError(f"Rust exit {result.returncode}: {result.stderr[:200]!r}")
     return json.loads(result.stdout)["get_tree"]
@@ -76,10 +81,15 @@ def main():
         )
         try:
             expected = php_get(port, query)
-            actual = rust_get(args.rust_bin, query, separators)
-            if expected != actual:
-                raise AssertionError(f"PHP={expected!r} Rust={actual!r}")
-            count += 1
+            for exact in (False, True):
+                actual = rust_get(
+                    args.rust_bin, query, separators, exact_length=exact,
+                )
+                if expected != actual:
+                    raise AssertionError(
+                        f"exact_length={exact}: PHP={expected!r} Rust={actual!r}"
+                    )
+                count += 1
         except (AssertionError, RuntimeError, ValueError, KeyError) as error:
             failures += 1
             print(f"FAIL {label}, separators={separators!r}: {error}", file=sys.stderr)
@@ -94,10 +104,16 @@ def main():
             )
             try:
                 expected = php_get(port, query)
-                actual = rust_get(args.rust_bin, query, separators, quota)
-                if expected != actual:
-                    raise AssertionError(f"PHP={expected!r} Rust={actual!r}")
-                count += 1
+                for exact in (False, True):
+                    actual = rust_get(
+                        args.rust_bin, query, separators, quota,
+                        exact_length=exact,
+                    )
+                    if expected != actual:
+                        raise AssertionError(
+                            f"exact_length={exact}: PHP={expected!r} Rust={actual!r}"
+                        )
+                    count += 1
             except (AssertionError, RuntimeError, ValueError, KeyError) as error:
                 failures += 1
                 print(
