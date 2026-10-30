@@ -71,19 +71,19 @@ impl Array {
 
     fn nested_mut(&mut self, key: Key) -> Result<&mut Array, Error> {
         self.advance_next_index(&key);
-        let position = if let Some(position) = self.elements.iter().position(|entry| entry.key == key)
-        {
-            position
-        } else {
-            self.elements
-                .try_reserve(1)
-                .map_err(|_| Error::Allocation)?;
-            self.elements.push(Element {
-                key,
-                value: Value::Array(Array::default()),
-            });
-            self.elements.len() - 1
-        };
+        let position =
+            if let Some(position) = self.elements.iter().position(|entry| entry.key == key) {
+                position
+            } else {
+                self.elements
+                    .try_reserve(1)
+                    .map_err(|_| Error::Allocation)?;
+                self.elements.push(Element {
+                    key,
+                    value: Value::Array(Array::default()),
+                });
+                self.elements.len() - 1
+            };
         // PHP promotes a scalar child to an empty array when a later
         // bracket path descends into it.
         if matches!(self.elements[position].value, Value::Scalar(_)) {
@@ -498,9 +498,7 @@ mod tests {
 
     #[test]
     fn php_cookie_two_level_arrays_preserve_collisions_and_append_order() {
-        let tree = parse(
-            b"a[x]=old; a[x][y]=one; a[x][y]=two; a[x][z]=three; a[][v]=four",
-        );
+        let tree = parse(b"a[x]=old; a[x][y]=one; a[x][y]=two; a[x][z]=three; a[][v]=four");
         let Value::Array(root) = &tree.entries[0].value else {
             panic!("expected array root");
         };
@@ -519,9 +517,11 @@ mod tests {
 
         let mut json = Vec::new();
         tree.write_json(&mut json).unwrap();
-        assert!(String::from_utf8(json).unwrap().contains(
-            r#"[["s","78"],["a",[[["s","79"],["s","74776f"]]"#
-        ));
+        assert!(
+            String::from_utf8(json)
+                .unwrap()
+                .contains(r#"[["s","78"],["a",[[["s","79"],["s","74776f"]]"#)
+        );
     }
 
     #[test]

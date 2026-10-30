@@ -71,7 +71,7 @@ ARRAY_CASES = [
     ("two-level-trailing-text", b"a[x][y]tail=one"),
     ("two-level-numeric", b"a[1][2]=x; a[1][]=y"),
     ("two-level-binary", b"a[x][y]=%00%FF+"),
-    ("one-level-vertical-tab-append", b"a[\\x0b]=first; a[]=second"),
+    ("one-level-vertical-tab-append", b"a[\x0b]=first; a[]=second"),
 ]
 
 LIMIT_CASES = [
