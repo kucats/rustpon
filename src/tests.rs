@@ -3128,3 +3128,98 @@ fn upload_copy_checks_source_after_interrupted_source_read() {
     drop(request);
     spool.empty();
 }
+
+#[test]
+fn upload_readback_interrupted_read_rechecks_source_before_retry() {
+    let spool = Spool::new();
+    let payload: Vec<u8> = (0..BLOCK * 2 + 11)
+        .map(|index| ((index * 59 + 13) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let upload = request.upload_mut(0).unwrap();
+    let source = upload.file.as_ref().unwrap();
+    let baseline = validate_staged_copy_source(source, upload.len()).unwrap();
+    let mut calls = 0;
+
+    // A readback-only EINTR can hide a concurrent permission relaxation.
+    // Reject before the second read, even if the first block was emitted.
+    let error = validate_staged_copy_bytes_with_reader(
+        source,
+        0,
+        &payload[..BLOCK],
+        upload.len(),
+        &baseline,
+        |file, bytes, offset| {
+            calls += 1;
+            if calls == 1 {
+                file.set_permissions(fs::Permissions::from_mode(0o644))?;
+                Err(io::ErrorKind::Interrupted.into())
+            } else {
+                file.read_at(bytes, offset)
+            }
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(calls, 1, "readback must validate before retrying");
+
+    source
+        .set_permissions(fs::Permissions::from_mode(0o600))
+        .unwrap();
+    let restored = validate_staged_copy_source(source, upload.len()).unwrap();
+    let mut transient_calls = 0;
+    validate_staged_copy_bytes_with_reader(
+        source,
+        0,
+        &payload[..BLOCK],
+        upload.len(),
+        &restored,
+        |file, bytes, offset| {
+            transient_calls += 1;
+            if transient_calls == 1 {
+                Err(io::ErrorKind::Interrupted.into())
+            } else {
+                file.read_at(bytes, offset)
+            }
+        },
+    )
+    .unwrap();
+    assert_eq!(transient_calls, 2);
+
+    let mut stalled_calls = 0;
+    let error = validate_staged_copy_bytes_with_reader(
+        source,
+        0,
+        &payload[..BLOCK],
+        upload.len(),
+        &restored,
+        |_, _, _| {
+            stalled_calls += 1;
+            Err(io::ErrorKind::Interrupted.into())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(stalled_calls, MAX_CONSECUTIVE_INTERRUPTS);
+
+    // A faulty read implementation must not claim more bytes than requested.
+    assert_eq!(
+        validate_staged_copy_bytes_with_reader(
+            source,
+            0,
+            &payload[..BLOCK],
+            upload.len(),
+            &restored,
+            |_, bytes, _| Ok(bytes.len() + 1),
+        )
+        .unwrap_err()
+        .kind(),
+        io::ErrorKind::InvalidData
+    );
+
+    let mut copied = Vec::new();
+    assert_eq!(upload.copy_to(&mut copied).unwrap(), payload.len() as u64);
+    assert_eq!(copied, payload);
+    drop(request);
+    spool.empty();
+}

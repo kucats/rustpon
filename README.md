@@ -1818,3 +1818,16 @@ predicates can use these values. The PHP CLI differential suite checks
 all values and types, bitmask combinations, and unknown-name rejection.
 This does not implement PHP's error handler, `error_reporting()`, or
 Zend runtime warning/exception behavior. No new dependencies are required.
+
+## Interrupted readback integrity checks
+
+The post-write upload readback now reuses the initial positional reader's
+metadata-checked `Interrupted` retry path. A concurrent staged-inode
+permission or identity change during readback aborts before another read is
+attempted. Repeated interrupts terminate at the existing bounded retry
+quota; short/overreported reads fail closed. Rust fault-injection tests cover
+inode permission tampering, transient and persistent interruptions, and an
+invalid read count. The PHP 8.4 HTTP SAPI differential corpus includes an
+unchanged 16,395-byte binary upload crossing two 8-KiB copy blocks. This
+strengthens observable mutation detection but is not an atomic source
+snapshot; a streaming destination must still be discarded after any error.
