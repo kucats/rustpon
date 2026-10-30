@@ -132,6 +132,24 @@ impl AdmittedRequest {
             .map(|upload| upload.copy_to(output))
             .transpose()
     }
+
+    /// Return a complete, application-capped upload buffer only after all
+    /// staged-inode integrity checks succeed. Unlike copy_accepted, no
+    /// destination prefix escapes on failure. Rejected or overwritten file
+    /// indices return None without allocating a payload buffer.
+    ///
+    /// The caller must supply an explicit max_bytes budget. This allocates
+    /// a second in-memory copy and is not an atomic filesystem snapshot.
+    pub fn copy_accepted_to_vec(
+        &mut self,
+        index: usize,
+        max_bytes: usize,
+    ) -> io::Result<Option<Vec<u8>>> {
+        self.request
+            .upload_mut(index)
+            .map(|upload| upload.copy_to_vec(max_bytes))
+            .transpose()
+    }
 }
 
 fn enforce_server_quotas(request: &Request, policy: Policy) -> Result<(), Error> {
@@ -289,6 +307,50 @@ mod tests {
             retained += admitted.copy_accepted(entry, &mut sink).unwrap().unwrap();
         }
         assert_eq!(retained, 3);
+        drop(admitted);
+        spool.empty();
+    }
+
+    #[test]
+    fn admitted_copy_to_vec_enforces_cap_and_survivor_identity() {
+        let spool = Spool::new();
+        // Same deterministic PHP 8.4 HTTP SAPI oracle payload as
+        // file-transactional-vec-oracle in tools/differential_multipart.py.
+        let binary: Vec<u8> = (0..8192 + 29)
+            .map(|i| ((i * 43 + 251) % 256) as u8)
+            .collect();
+        let mut body = Vec::new();
+        for (name, data) in [
+            (b"upload".as_slice(), b"replaced".as_slice()),
+            (b"upload".as_slice(), binary.as_slice()),
+        ] {
+            body.extend_from_slice(b"--b\r\nContent-Disposition: form-data; name=\"");
+            body.extend_from_slice(name);
+            body.extend_from_slice(b"\"; filename=\"transaction.bin\"\r\n\r\n");
+            body.extend_from_slice(data);
+            body.extend_from_slice(b"\r\n");
+        }
+        body.extend_from_slice(b"--b--\r\n");
+        let mut admitted = admit(spool.parse(&body), Policy::default()).unwrap();
+        assert_eq!(admitted.accepted_indices().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(admitted.copy_accepted_to_vec(0, 0).unwrap(), None);
+        assert_eq!(admitted.copy_accepted_to_vec(2, 0).unwrap(), None);
+        assert_eq!(
+            admitted.copy_accepted_to_vec(1, binary.len() - 1)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        // A failed cap check must not consume the descriptor or publish a
+        // partial prefix. Retry with the exact cap and compare every byte.
+        assert_eq!(
+            admitted.copy_accepted_to_vec(1, binary.len()).unwrap(),
+            Some(binary.clone())
+        );
+        assert_eq!(
+            admitted.copy_accepted_to_vec(1, binary.len() + 1).unwrap(),
+            Some(binary)
+        );
         drop(admitted);
         spool.empty();
     }
