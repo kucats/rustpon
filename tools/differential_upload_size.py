@@ -57,7 +57,7 @@ COMBINED_CASES = [
 
 
 def start_server(php_bin, limit, router, file_limit=20, post_limit=1024,
-                 max_input_vars=None):
+                 max_input_vars=None, arg_separators=None):
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -66,6 +66,8 @@ def start_server(php_bin, limit, router, file_limit=20, post_limit=1024,
                "-d", f"max_file_uploads={file_limit}"]
     if max_input_vars is not None:
         command.extend(["-d", f"max_input_vars={max_input_vars}"])
+    if arg_separators is not None:
+        command.extend(["-d", f"arg_separator.input={arg_separators}"])
     command.extend(["-S", f"127.0.0.1:{port}", str(router)])
     server = subprocess.Popen(
         command,

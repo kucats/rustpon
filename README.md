@@ -241,6 +241,24 @@ PHP 8.4.24 and are checked against the CI PHP 8.4 HTTP SAPI oracle.
 The CLI is a test harness: callers must validate HTTP Content-Length framing
 and independently enforce transport quotas before invoking the adapter.
 
+## PHP 8.4 HTTP GET query-string adapter
+
+`urlencoded::parse_reader_with_php_query_string` processes a bounded,
+transport-extracted QUERY_STRING using PHP 8.4 GET semantics. Unlike URL-encoded
+POST (which PHP's HTTP SAPI splits at `&` regardless of INI settings),
+GET honors `arg_separator.input`. Empty configuration falls back to
+`&`; escaped separators are decoded after splitting, and decoded NUL
+truncates variable names. The companion `_counting_vars` API preserves
+empty-name fields for the GET input-variable quota.
+
+The CLI `urlencoded --php-query-string --php-arg-separators '|;'`
+emits a binary-safe `get_tree`. With `--php-max-input-vars N`, GET counts
+N nonblank wire pairs including ignored names, but not separator-only blanks.
+No POST SAPI N+1 adjustment applies. GitHub Actions compares against real PHP
+8.4 HTTP SAPI with custom INI separators, percent escapes, collisions and
+quota boundaries. Upstream HTTP framing and path parsing remain out of scope:
+this adapter does not install native `$_GET` values in Zend.
+
 ## PHP 8.4 URL-encoded separator option
 
 The default URL-encoded decoder splits fields only at raw `&`. PHP's

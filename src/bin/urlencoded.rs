@@ -10,9 +10,10 @@ fn run() -> Result<(), String> {
     let mut php_post_max_size: Option<u64> = None;
     let mut max_input_nesting_level = None;
     let mut php_semicolon_separator = false;
+    let mut php_query_string = false;
     let mut php_nul_name_truncation = false;
     let mut php_arg_separators: Option<String> = None;
-    let usage = "usage: urlencoded [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator | --php-arg-separators BYTES] [--php-nul-name-truncation] [--php-content-length BYTES [--php-post-max-size BYTES]] < body.bin";
+    let usage = "usage: urlencoded [--php-query-string] [--php-max-input-vars N] [--php-max-input-nesting-level N] [--php-semicolon-separator | --php-arg-separators BYTES] [--php-nul-name-truncation] [--php-content-length BYTES [--php-post-max-size BYTES]] < body.bin";
     while let Some(flag) = args.next() {
         if flag == "--php-semicolon-separator"
             && !php_semicolon_separator
@@ -23,6 +24,10 @@ fn run() -> Result<(), String> {
         }
         if flag == "--php-nul-name-truncation" && !php_nul_name_truncation {
             php_nul_name_truncation = true;
+            continue;
+        }
+        if flag == "--php-query-string" && !php_query_string {
+            php_query_string = true;
             continue;
         }
         let value = args.next().ok_or(usage)?;
@@ -69,10 +74,34 @@ fn run() -> Result<(), String> {
             "--php-content-length currently supports only the default '&' separator".to_owned(),
         );
     }
+    if php_query_string && php_content_length.is_some() {
+        return Err("--php-query-string cannot be combined with --php-content-length".to_owned());
+    }
+    let separators: &[u8] = if let Some(ref set) = php_arg_separators {
+        set.as_bytes()
+    } else if php_semicolon_separator {
+        b"&;"
+    } else {
+        b"&"
+    };
     // PHP counts explicit empty-name pairs and NUL-truncated names toward
     // max_input_vars, even though they do not appear in the published tree.
     // Preserve their wire positions only when this PHP quota is requested.
-    let request = if let Some(length) = php_content_length {
+    let request = if php_query_string {
+        if max_input_vars.is_some() {
+            urlencoded::parse_reader_with_php_query_string_counting_vars(
+                &mut io::stdin().lock(),
+                Limits::default(),
+                separators,
+            )
+        } else {
+            urlencoded::parse_reader_with_php_query_string(
+                &mut io::stdin().lock(),
+                Limits::default(),
+                separators,
+            )
+        }
+    } else if let Some(length) = php_content_length {
         if max_input_vars.is_some() {
             urlencoded::parse_reader_with_php_content_length_sapi_vars(
                 &mut io::stdin().lock(),
@@ -89,13 +118,6 @@ fn run() -> Result<(), String> {
             )
         }
     } else if max_input_vars.is_some() {
-        let separators: &[u8] = if let Some(ref separators) = php_arg_separators {
-            separators.as_bytes()
-        } else if php_semicolon_separator {
-            b"&;"
-        } else {
-            b"&"
-        };
         urlencoded::parse_reader_with_php_input_var_counting(
             &mut io::stdin().lock(),
             Limits::default(),
@@ -103,28 +125,16 @@ fn run() -> Result<(), String> {
             php_nul_name_truncation,
         )
     } else if php_nul_name_truncation {
-        let separators: &[u8] = if let Some(ref separators) = php_arg_separators {
-            separators.as_bytes()
-        } else if php_semicolon_separator {
-            b"&;"
-        } else {
-            b"&"
-        };
         urlencoded::parse_reader_with_php_nul_name_truncation(
             &mut io::stdin().lock(),
             Limits::default(),
             separators,
         )
-    } else if let Some(separators) = php_arg_separators {
+    } else if php_arg_separators.is_some() || php_semicolon_separator {
         urlencoded::parse_reader_with_php_arg_separators(
             &mut io::stdin().lock(),
             Limits::default(),
-            separators.as_bytes(),
-        )
-    } else if php_semicolon_separator {
-        urlencoded::parse_reader_with_php_semicolon_separator(
-            &mut io::stdin().lock(),
-            Limits::default(),
+            separators,
         )
     } else {
         urlencoded::parse_reader(&mut io::stdin().lock(), Limits::default())
@@ -148,8 +158,13 @@ fn run() -> Result<(), String> {
     }
     .map_err(|error| format!("post: {error:?}"))?;
     let mut output = io::BufWriter::new(io::stdout().lock());
+    let tree_key: &[u8] = if php_query_string {
+        b"{\"get_tree\":"
+    } else {
+        b"{\"post_tree\":"
+    };
     output
-        .write_all(b"{\"post_tree\":")
+        .write_all(tree_key)
         .map_err(|error| error.to_string())?;
     post.write_json(&mut output)
         .map_err(|error| error.to_string())?;

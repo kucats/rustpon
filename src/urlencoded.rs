@@ -387,6 +387,29 @@ pub fn parse_reader_with_php_input_var_counting(
     parse_reader_impl(reader, limits, separators, php_nul_name_truncation, true)
 }
 
+/// HTTP GET's raw QUERY_STRING is parsed with the caller's arg_separator.input
+/// set (empty means '&'); unlike URL-encoded HTTP POST it honors that INI
+/// value. Names truncate at decoded NUL, as in PHP 8.4 SAPI registration.
+/// The caller validates/extracts the query string and enforces transport limits.
+pub fn parse_reader_with_php_query_string(
+    reader: &mut impl Read,
+    limits: Limits,
+    arg_separators: &[u8],
+) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, arg_separators, true, false)
+}
+
+/// GET max_input_vars counts nonblank wire pairs, even ignored empty names.
+/// Blank separator-only pairs are excluded. Project with the exact quota N,
+/// not the N+1 allowance measured for PHP 8.4 HTTP POST.
+pub fn parse_reader_with_php_query_string_counting_vars(
+    reader: &mut impl Read,
+    limits: Limits,
+    arg_separators: &[u8],
+) -> Result<Request, Error> {
+    parse_reader_impl(reader, limits, arg_separators, true, true)
+}
+
 fn parse_reader_impl(
     reader: &mut impl Read,
     limits: Limits,
@@ -558,6 +581,66 @@ mod tests {
             .parts()
             .map(|p| (p.name.to_vec(), p.value.unwrap().to_vec()))
             .collect()
+    }
+
+    #[test]
+    fn php_query_string_honors_ini_separators_and_decoded_nul_names() {
+        let body = b"a=1|n%00tail=2;%7C=encoded&x=3";
+        let request = parse_reader_with_php_query_string(
+            &mut Cursor::new(body),
+            Limits::default(),
+            b"|;",
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&request),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"n".to_vec(), b"2".to_vec()),
+                (b"|".to_vec(), b"encoded&x=3".to_vec()),
+            ]
+        );
+        let fallback = parse_reader_with_php_query_string(
+            &mut Cursor::new(b"a=1|b=2&c=3"),
+            Limits::default(),
+            b"",
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&fallback),
+            vec![
+                (b"a".to_vec(), b"1|b=2".to_vec()),
+                (b"c".to_vec(), b"3".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn php_query_string_quota_charges_empty_names_not_blank_pairs() {
+        let request = parse_reader_with_php_query_string_counting_vars(
+            &mut Cursor::new(b"a=1||=ignored;b=2|c=3"),
+            Limits::default(),
+            b"|;",
+        )
+        .unwrap();
+        assert_eq!(
+            fields(&request),
+            vec![
+                (b"a".to_vec(), b"1".to_vec()),
+                (b"".to_vec(), b"ignored".to_vec()),
+                (b"b".to_vec(), b"2".to_vec()),
+                (b"c".to_vec(), b"3".to_vec()),
+            ]
+        );
+        let limited = request
+            .into_post_with_max_input_vars(post::Limits::default(), 2)
+            .unwrap();
+        let mut output = Vec::new();
+        limited.write_json(&mut output).unwrap();
+        let json = String::from_utf8(output).unwrap();
+        assert!(json.contains(r#"["s","61"],["s","31"]"#));
+        assert!(!json.contains(r#"["s","62"]"#));
+        assert!(!json.contains(r#"["s","63"]"#));
     }
 
     #[test]

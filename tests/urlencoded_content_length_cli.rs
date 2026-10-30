@@ -122,3 +122,52 @@ fn cli_content_length_applies_http_sapi_var_counting() {
         );
     }
 }
+
+#[test]
+fn cli_query_string_honors_ini_separators_and_publishes_get_tree() {
+    let output = run(
+        &["--php-query-string", "--php-arg-separators", "|;"],
+        b"a=1|n%00tail=2;%7C=encoded&x=3",
+    );
+    assert!(output.status.success(), "{:?}", output.stderr);
+    let json = String::from_utf8(output.stdout).unwrap();
+    assert!(json.contains(r#""get_tree":["a","#));
+    assert!(json.contains(r#"["s","61"],["s","31"]"#));
+    assert!(json.contains(r#"["s","6e"],["s","32"]"#));
+    assert!(json.contains(r#"["s","7c"],["s","656e636f64656426783d33"]"#));
+    assert!(!json.contains(r#""post_tree":"#));
+}
+
+#[test]
+fn cli_query_string_counts_get_quota_without_post_sapi_adjustment() {
+    let body = b"a=1||=ignored;b=2|c=3";
+    let cases = [
+        ("1", false, false),
+        ("2", false, false),
+        ("3", true, false),
+        ("4", true, true),
+    ];
+    for (quota, accepted_b, accepted_c) in cases {
+        let output = run(
+            &[
+                "--php-query-string",
+                "--php-arg-separators",
+                "|;",
+                "--php-max-input-vars",
+                quota,
+            ],
+            body,
+        );
+        assert!(output.status.success(), "{quota}: {:?}", output.stderr);
+        let json = String::from_utf8(output.stdout).unwrap();
+        assert!(json.contains(r#"["s","61"],["s","31"]"#));
+        assert_eq!(json.contains(r#"["s","62"],["s","32"]"#), accepted_b);
+        assert_eq!(json.contains(r#"["s","63"],["s","33"]"#), accepted_c);
+    }
+    let bad = run(
+        &["--php-query-string", "--php-content-length", "3"],
+        b"a=1",
+    );
+    assert!(!bad.status.success());
+    assert!(bad.stdout.is_empty());
+}
