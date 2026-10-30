@@ -78,6 +78,13 @@ CASES = [
     ("file-offset-sensitive-binary", [(b"upload", bytes((i * 31 + 17) % 251 for i in range(8192 * 2 + 17)), b"offset.bin")]),
     # More than four copy blocks, exercising every post-write source check.
     ("file-four-blocks-plus-one", [(b"upload", bytes((i * 73 + 19) % 256 for i in range(8192 * 4 + 1)), b"four-blocks.bin")]),
+    # The Rust copy path pins the original anonymous inode. Two equal-sized,
+    # distinct binary uploads must retain their own PHP 8.4 FILES metadata and
+    # payload bytes even when the staging descriptors have identical lengths.
+    ("same-size-distinct-inodes", [
+        (b"first", b"\x00\xff\x01", b"first.bin"),
+        (b"second", b"\xff\x00\x02", b"second.bin"),
+    ]),
     ("two-files", [(b"upload", b"first", b"one.bin"),
                    (b"attachment", b"second", b"two.bin")]),
     ("nested-files", [(b"f[x][]", b"first", b"one.bin"),
