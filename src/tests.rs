@@ -696,7 +696,14 @@ fn upload_copy_to_vec_is_bounded_and_never_returns_partial_bytes() {
     spool.empty();
 
     let mut empty = parse(&body(&[(FILE, b"")]), Limits::default(), &spool).unwrap();
-    assert!(empty.upload_mut(0).unwrap().copy_to_vec(0).unwrap().is_empty());
+    assert!(
+        empty
+            .upload_mut(0)
+            .unwrap()
+            .copy_to_vec(0)
+            .unwrap()
+            .is_empty()
+    );
     drop(empty);
     spool.empty();
 }
