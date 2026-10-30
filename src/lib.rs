@@ -139,6 +139,9 @@ pub struct Stats {
 pub struct Upload {
     // No descriptor exists when PHP-mode staging cannot create a temporary file.
     file: Option<File>,
+    // Capture the exact inode at staging, not only at the start of copying.
+    // Otherwise a same-length, private replacement FD can be silently copied.
+    initial_identity: Option<StagingIdentity>,
     length: u64,
     discarded: bool,
     // Opt-in PHP EOF recovery only; partial uploads must never be copied.
@@ -147,6 +150,30 @@ pub struct Upload {
     write_failed: bool,
     // Missing staging directory in opt-in PHP mode (UPLOAD_ERR_NO_TMP_DIR=6).
     no_tmp_dir: bool,
+}
+
+// Immutable identity recorded before writing any uploaded bytes. A copy must
+// still refer to this exact inode and its original ownership/mode, even when
+// a replacement descriptor would otherwise pass all point-in-time checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StagingIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+}
+
+impl StagingIdentity {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            mode: metadata.permissions().mode(),
+        }
+    }
 }
 
 // Special mode bits are not meaningful for anonymous upload payloads and
@@ -267,6 +294,9 @@ impl Upload {
         // Reject tampering before emitting any bytes. This is a point-in-time
         // check, not a substitute for descriptor-relative upload creation.
         let source_before = validate_staged_copy_source(file, self.length)?;
+        if Some(StagingIdentity::from_metadata(&source_before)) != self.initial_identity {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
         // File::try_clone shares the kernel file offset with the original.
         // pread-style reads avoid both that shared offset and interference
         // from a destination writer that seeks through a cloned descriptor.
@@ -906,8 +936,14 @@ impl Parser {
                 }
                 Err(error) => return Err(error),
             };
+            let initial_identity = file
+                .as_ref()
+                .map(|file| file.metadata().map(|metadata| StagingIdentity::from_metadata(&metadata)))
+                .transpose()
+                .map_err(Error::from)?;
             Payload::File(Upload {
                 file,
+                initial_identity,
                 length: 0,
                 discarded: no_tmp_dir,
                 partial: false,
