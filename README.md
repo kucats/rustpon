@@ -146,6 +146,11 @@ returning `Interrupted`; no further bytes are offered until validation succeeds.
 Source-read `Interrupted` retries also revalidate the staged inode before
 attempting another positional read; injected permission tampering fails before
 the retry, while a transient interruption resumes within a fixed retry quota.
+A faulty positional-read adapter reporting more bytes than its supplied
+buffer is rejected with `InvalidData` in the shared copy/readback helper,
+before its count can be used as a slice bound. Fault-injection regressions cover
+1-byte reads, an 8192-byte block, and a short final block. This is defensive
+validation of an invalid I/O contract, not a PHP or operating-system CVE fix.
 The check also runs after the loop (including empty uploads). Persistent permission, link-count,
 or length changes, and modifications to inode mtime/ctime, now abort before
 subsequent blocks are emitted. Deterministic fault injection checks that a
