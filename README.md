@@ -61,7 +61,8 @@ values only.
   CRLF. The body begins with `--BOUNDARY`.
 - Only `Content-Disposition: form-data` with a nonempty final `name` and
   optional `filename` is supported. Header and parameter names ignore ASCII
-  case; quoted pairs are unescaped. Like PHP 8.4 HTTP SAPI, repeated `name` or
+  case; quoted parameter escapes are decoded only for \" and \\,
+  while other backslashes remain literal. Like PHP 8.4 HTTP SAPI, repeated `name` or
   `filename` parameters use the last value. Well-formed unknown parameters
   (including `filename*`) are ignored rather than interpreted; empty semicolon
   separators are accepted. Raw names, filenames, binary values, duplicates,

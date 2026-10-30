@@ -948,7 +948,6 @@ impl Parser {
                     self.limits.name_bytes,
                     Limit::NameBytes,
                     self.limits.retained_bytes,
-                    true,
                 )?);
                 if let Some(filename) = filename {
                     self.headers.filename = Some(store_param(
@@ -957,7 +956,6 @@ impl Parser {
                         self.limits.filename_bytes,
                         Limit::FilenameBytes,
                         self.limits.retained_bytes,
-                        false,
                     )?);
                 }
             }
@@ -1295,20 +1293,28 @@ fn store_param(
     max: usize,
     limit: Limit,
     retained: usize,
-    unescape_quoted: bool,
 ) -> Result<Range<usize>, Error> {
     let start = arena.len();
-    let mut escaped = false;
+    let mut index = 0;
     let mut count = 0;
-    for &byte in param.bytes {
-        if unescape_quoted && param.quoted && byte == b'\\' && !escaped {
-            escaped = true;
-            continue;
+    while index < param.bytes.len() {
+        // PHP 8.4's multipart SAPI unescapes only quoted \" and \\.
+        // An unrecognized quoted pair (such as \x or \;) keeps its slash.
+        // Apply the same rule to field names and submitted filenames.
+        if param.quoted
+            && param.bytes[index] == b'\\'
+            && param
+                .bytes
+                .get(index + 1)
+                .is_some_and(|&next| next == b'\\' || next == b'"')
+        {
+            index += 1;
         }
+        let byte = param.bytes[index];
         count = add_usize(count, 1, max, limit)?;
         add_usize(arena.len(), 1, retained, Limit::RetainedBytes)?;
         arena.push(byte);
-        escaped = false;
+        index += 1;
     }
     Ok(start..arena.len())
 }

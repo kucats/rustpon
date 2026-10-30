@@ -202,6 +202,32 @@ CASES = [
         (b"up", b"payload", b"doc.bin", b"application/octet-stream",
          b"form-data; name=up;; filename=doc.bin;"),
     ]),
+    # PHP 8.4 HTTP SAPI decodes only escaped quotes and backslashes inside
+    # quoted Content-Disposition parameters. Other backslashes are literal.
+    ("disposition-quoted-name-unknown-escape", [
+        (b"a\\xb", b"field", None, b"application/octet-stream",
+         b'form-data; name="a\\xb"'),
+    ]),
+    ("disposition-quoted-name-double-backslash", [
+        (b"a\\b", b"field", None, b"application/octet-stream",
+         b'form-data; name="a\\\\b"'),
+    ]),
+    ("disposition-quoted-name-escaped-quote", [
+        (b'a"b', b"field", None, b"application/octet-stream",
+         b'form-data; name="a\\"b"'),
+    ]),
+    ("disposition-quoted-filename-escaped-quote", [
+        (b"upload", b"xyz", b'foo"bar.bin', b"application/octet-stream",
+         b'form-data; name="upload"; filename="foo\\"bar.bin"'),
+    ]),
+    ("disposition-quoted-filename-double-backslash", [
+        (b"upload", b"\x00\xff", b"folder\\leaf.bin", b"application/octet-stream",
+         b'form-data; name="upload"; filename="folder\\\\leaf.bin"'),
+    ]),
+    ("disposition-quoted-filename-unknown-escape", [
+        (b"upload", b"payload", b"folder\\q.bin", b"application/octet-stream",
+         b'form-data; name="upload"; filename="folder\\q.bin"'),
+    ]),
 ]
 
 def body_for(parts):

@@ -367,8 +367,56 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
     .unwrap();
     let view = request.parts().next().unwrap();
     assert_eq!(view.name, b"a;\"b");
-    // PHP preserves quoted filename backslashes, including consecutive ones.
-    assert_eq!(view.filename, Some(b"C:\\\\x.bin".as_slice()));
+    // PHP 8.4 collapses a doubled quoted filename backslash to one.
+    assert_eq!(view.filename, Some(b"C:\\x.bin".as_slice()));
+}
+
+#[test]
+fn php_84_disposition_quoted_escape_decoding_matches_http_sapi() {
+    let spool = Spool::new();
+    // PHP 8.4 removes a backslash only before another slash or a quote.
+    // Unknown quoted escapes remain literal; filename decoding follows the
+    // same rule as form names, before PHP path basename normalization.
+    let cases: &[(&[u8], &[u8], Option<&[u8]>)] = &[
+        (
+            b"Content-Disposition: form-data; name=\"a\\xb\"",
+            b"a\\xb",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=\"a\\\\b\"",
+            b"a\\b",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=\"a\\\"b\"",
+            b"a\"b",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=\"foo\\\"bar.bin\"",
+            b"f",
+            Some(b"foo\"bar.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=\"folder\\\\leaf.bin\"",
+            b"f",
+            Some(b"folder\\leaf.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=f; filename=\"folder\\q.bin\"",
+            b"f",
+            Some(b"folder\\q.bin"),
+        ),
+    ];
+    for &(header, expected_name, expected_filename) in cases {
+        let request = parse(&body(&[(header, b"xyz")]), Limits::default(), &spool).unwrap();
+        let view = request.parts().next().unwrap();
+        assert_eq!(view.name, expected_name, "{header:?}");
+        assert_eq!(view.filename, expected_filename, "{header:?}");
+        drop(request);
+        spool.empty();
+    }
 }
 
 #[test]
