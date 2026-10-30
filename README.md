@@ -1910,3 +1910,23 @@ The `cookie` CLI reads at most 64 KiB plus one overflow byte from stdin
 and prints the tagged `cookie_pairs` array only on complete success.
 Linux CI compares scalar cases with a real PHP 8.4 HTTP SAPI, including
 duplicate names, percent escapes, whitespace and a multi-block value.
+
+### One-level Cookie array registration (opt-in)
+
+The separate cookie::array::parse_one_level_header API and
+cookie --php-arrays harness add a bounded PHP 8.4 HTTP SAPI comparison
+slice for root[index], root[] and a single-whitespace append index.
+They preserve typed 64-bit integer keys and ordered binary-safe values.
+Duplicate array indices use the latest value, scalar roots remain first-wins,
+array paths replace earlier scalars, and later scalars cannot replace arrays.
+The CLI emits cookie_tree in tagged JSON; the original cookie_pairs
+scalar mode is unchanged.
+
+Actual nested paths (for example, root[a][b]) fail closed with
+UnsupportedArrayName; an exhausted append index fails with
+AppendExhausted rather than silently overwriting data. Conservative
+cumulative retained-byte accounting also charges overwritten array values.
+Linux CI compares one-level array cases against a real PHP 8.4 HTTP SAPI,
+while Rust tests run on Linux and macOS. This API only projects metadata:
+no Zend integration, native $_COOKIE population, or FPM worker changes.
+

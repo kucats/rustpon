@@ -38,7 +38,30 @@ CASES = [
 ]
 
 
-def php_cookie(port, header):
+ARRAY_CASES = [
+    ("two-children", b"a[x]=1; a[y]=2"),
+    ("duplicate-child-last-wins", b"a[x]=1; a[x]=2; a[y]=3"),
+    ("scalar-promoted-to-array", b"a=first; a=second; a[x]=3"),
+    ("array-ignores-later-scalar", b"a[x]=1; a=ignored; a[y]=2"),
+    ("append-twice", b"a[]=x; a[]=y"),
+    ("explicit-zero-then-append", b"a[0]=x; a[]=y"),
+    ("append-then-explicit-zero", b"a[]=x; a[0]=y; a[]=z"),
+    ("numeric-gap-append", b"a[2]=x; a[]=y"),
+    ("negative-index-append", b"a[-2]=x; a[]=y"),
+    ("numeric-leading-zero", b"a[01]=x; a[]=y"),
+    ("single-space-append", b"a[ ]=x; a[]=y"),
+    ("two-space-key", b"a[  ]=x; a[]=y"),
+    ("normalized-root-collision", b"a.b[x]=1; a_b[y]=2"),
+    ("numeric-root-and-string-root", b"0[x]=1; 01[y]=2"),
+    ("binary-percent-value", b"a[x]=%00%FF+; b[y]=ok"),
+    ("unterminated-scalar-bracket", b"a[foo=one; a_foo=two; b[x]=three"),
+    ("trailing-after-bracket", b"a[foo]tail=1; a[bar]=2"),
+    ("plus-sign-index", b"a[+1]=x; a[]=y"),
+    ("negative-zero-key", b"a[-0]=x; a[]=y"),
+    ("multiple-root-arrays", b"a[x]=1; b[2]=2; c=3; b[]=4"),
+]
+
+def php_cookie(port, header, key="cookie_pairs"):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
         connection.request(
@@ -48,18 +71,19 @@ def php_cookie(port, header):
         data = response.read()
         if response.status != 200:
             raise RuntimeError(f"PHP HTTP {response.status}: {data[:200]!r}")
-        return json.loads(data)["cookie_pairs"]
+        return json.loads(data)[key]
     finally:
         connection.close()
 
 
-def rust_cookie(binary, header):
+def rust_cookie(binary, header, arrays=False):
     result = subprocess.run(
-        [str(binary)], input=header, capture_output=True, timeout=15, check=False,
+        [str(binary)] + (["--php-arrays"] if arrays else []),
+        input=header, capture_output=True, timeout=15, check=False,
     )
     if result.returncode:
         raise RuntimeError(f"Rust exit {result.returncode}: {result.stderr[:300]!r}")
-    return json.loads(result.stdout)["cookie_pairs"]
+    return json.loads(result.stdout)["cookie_tree" if arrays else "cookie_pairs"]
 
 
 def main():
@@ -91,9 +115,28 @@ def main():
     finally:
         server.terminate()
         server.wait(timeout=10)
+    array_router = Path(__file__).resolve().with_name("cookie_array_projection.php")
+    server, port = start_server(args.php_bin, 1, array_router)
+    try:
+        for label, header in ARRAY_CASES:
+            try:
+                expected = php_cookie(port, header, key="cookie_tree")
+                actual = rust_cookie(args.rust_bin, header, arrays=True)
+                if expected != actual:
+                    raise AssertionError(f"PHP={expected!r}, Rust={actual!r}")
+                passed += 1
+            except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+                failures += 1
+                print(f"FAIL Cookie array {label}: {error}", file=sys.stderr)
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
     if failures:
-        raise SystemExit(f"{failures} PHP 8.4 HTTP Cookie scalar cases failed")
-    print(f"PHP {version} Cookie HTTP SAPI: {passed} scalar cases matched")
+        raise SystemExit(f"{failures} PHP 8.4 HTTP Cookie cases failed")
+    print(
+        f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
+        f"({len(CASES)} scalar, {len(ARRAY_CASES)} one-level array)"
+    )
 
 
 if __name__ == "__main__":

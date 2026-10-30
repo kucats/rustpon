@@ -6,6 +6,8 @@
 //! 8.4. Native SAPI integration and array registration are separate work.
 //! PHP preserves the first value for a normalized scalar name.
 
+pub mod array;
+
 use std::io::{self, Write};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +20,7 @@ pub enum Error {
     Allocation,
     InvalidHeader,
     UnsupportedArrayName,
+    AppendExhausted,
 }
 
 #[derive(Clone, Copy, Debug)]
