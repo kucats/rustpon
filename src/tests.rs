@@ -2228,7 +2228,10 @@ fn upload_copy_rejects_special_permission_bits_without_emitting_data() {
 
     for mode in [0o1600, 0o2600, 0o4600] {
         let file = upload.file.as_ref().unwrap();
-        if file.set_permissions(fs::Permissions::from_mode(mode)).is_err() {
+        if file
+            .set_permissions(fs::Permissions::from_mode(mode))
+            .is_err()
+        {
             continue;
         }
         if file.metadata().unwrap().permissions().mode() & 0o7000 != 0 {

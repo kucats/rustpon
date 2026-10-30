@@ -1328,9 +1328,7 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
 // caller cannot accidentally stage into an untrusted user's 0700 directory.
 // A restrictive umask may remove owner bits; only group/other access matters.
 fn private_staging_inode(metadata: &fs::Metadata, directory_owner: Option<u32>) -> bool {
-    metadata.is_file()
-        && directory_owner == Some(metadata.uid())
-        && private_staging_mode(metadata)
+    metadata.is_file() && directory_owner == Some(metadata.uid()) && private_staging_mode(metadata)
 }
 
 /// Filename creation is independent of client metadata. create_new prevents
