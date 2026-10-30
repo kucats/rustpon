@@ -20,8 +20,7 @@ fn run() -> Result<(), String> {
     cookies
         .write_json(&mut out)
         .map_err(|error| error.to_string())?;
-    out.write_all(b"}\n")
-        .map_err(|error| error.to_string())?;
+    out.write_all(b"}\n").map_err(|error| error.to_string())?;
     out.flush().map_err(|error| error.to_string())
 }
 
