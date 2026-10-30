@@ -178,14 +178,8 @@ def main():
         for size in [0, 1, 8191, 8192, 8193, 16384, 16385, 32785]:
             data = bytes((index * 37 + 19) % 256 for index in range(size))
             cases.append((f"copy-boundary-{size}", [(b"upload", data, b"data.bin")]))
-        # A third same-name upload must replace both earlier descriptors,
-        # even when the surviving binary payload crosses an 8 KiB boundary.
-        triple_payload = bytes((i * 43 + 251) % 256 for i in range(8192 + 29))
-        cases.append(("file-transactional-vec-triple-overwrite-oracle", [
-            (b"upload", b"first", b"transaction.bin"),
-            (b"upload", b"second", b"transaction.bin"),
-            (b"upload", triple_payload, b"transaction.bin"),
-        ]))
+        # Triple overwrite is part of corpus.CASES and exercises both the
+        # HTTP SAPI and stateful/one-shot FFI differential suites.
         for i in range(40):
             fields = [(rng.choice(names), rng.choice(values), None)
                       for _ in range(rng.randrange(1, 6))]
