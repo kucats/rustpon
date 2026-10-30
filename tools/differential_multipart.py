@@ -182,13 +182,13 @@ CASES = [
     ("file-type-mixedcase", [(b"f", b"hi", b"x.txt", b"TEXT/PLAIN; charset=UTF-8")]),
     # The PHP 8.4 SAPI does not require valid MIME syntax for per-file
     # Content-Type metadata. Leading OWS is stripped, trailing OWS retained.
-    ("file-type-empty", [(b"f", b"\\x00\\xffhi", b"x.txt", b"")]),
-    ("file-type-blank", [(b"f", b"\\x00\\xffhi", b"x.txt", b"   ")]),
-    ("file-type-no-slash", [(b"f", b"\\x00\\xffhi", b"x.txt", b"whatever")]),
-    ("file-type-extra-slash", [(b"f", b"\\x00\\xffhi", b"x.txt", b"foo/bar/baz")]),
-    ("file-type-comma", [(b"f", b"\\x00\\xffhi", b"x.txt", b"foo/bar, baz")]),
-    ("file-type-trailing-space", [(b"f", b"\\x00\\xffhi", b"x.txt", b"text/plain ")]),
-    ("file-type-tabs", [(b"f", b"\\x00\\xffhi", b"x.txt", b"\\ttext/plain\\t")]),
+    ("file-type-empty", [(b"f", b"\x00\xffhi", b"x.txt", b"")]),
+    ("file-type-blank", [(b"f", b"\x00\xffhi", b"x.txt", b"   ")]),
+    ("file-type-no-slash", [(b"f", b"\x00\xffhi", b"x.txt", b"whatever")]),
+    ("file-type-extra-slash", [(b"f", b"\x00\xffhi", b"x.txt", b"foo/bar/baz")]),
+    ("file-type-comma", [(b"f", b"\x00\xffhi", b"x.txt", b"foo/bar, baz")]),
+    ("file-type-trailing-space", [(b"f", b"\x00\xffhi", b"x.txt", b"text/plain ")]),
+    ("file-type-tabs", [(b"f", b"\x00\xffhi", b"x.txt", b"\ttext/plain\t")]),
 
     # PHP 8.4 HTTP SAPI accepts duplicate disposition keys (last one wins)
     # and ignores syntactically valid extension parameters, including filename*.
