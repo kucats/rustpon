@@ -1724,6 +1724,31 @@ enum ReaderMode {
     PhpPartial,
 }
 
+// A Content-Length quota must be enforced before processing a Read result.
+// std::io::Take cannot report when a broken reader claims more bytes than the
+// short slice it was offered (the count may still fit the parser's BLOCK).
+// Reject that invalid I/O contract without consuming bytes from the next
+// transport message or admitting uninitialized bytes into the parser.
+struct CheckedLengthReader<'a, R: Read> {
+    reader: &'a mut R,
+    remaining: u64,
+}
+
+impl<R: Read> Read for CheckedLengthReader<'_, R> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        let allowed = self.remaining.min(buffer.len() as u64) as usize;
+        if allowed == 0 {
+            return Ok(0);
+        }
+        let count = self.reader.read(&mut buffer[..allowed])?;
+        if count > allowed {
+            return Err(io::ErrorKind::InvalidData.into());
+        }
+        self.remaining -= count as u64;
+        Ok(count)
+    }
+}
+
 fn parse_reader_with_php_limits_impl(
     reader: &mut impl Read,
     boundary: &[u8],
@@ -1826,7 +1851,10 @@ pub fn parse_reader_with_php_content_length(
             stats: Stats::default(),
         });
     }
-    let mut bounded = reader.take(content_length);
+    let mut bounded = CheckedLengthReader {
+        reader,
+        remaining: content_length,
+    };
     if php_max_post_bytes.is_some_and(|max| max != 0 && content_length > max) {
         // Preflight before parsing even the first byte: malformed multipart
         // input cannot cause upload staging or a parser error in this branch.
@@ -1848,7 +1876,7 @@ pub fn parse_reader_with_php_content_length(
                 Err(error) => return Err(error.into()),
             }
         }
-        if bounded.limit() != 0 {
+        if bounded.remaining != 0 {
             return Err(Error::Truncated);
         }
         return Ok(Request {
@@ -1868,7 +1896,7 @@ pub fn parse_reader_with_php_content_length(
         php_max_upload_bytes,
         php_max_post_bytes,
     )?;
-    if bounded.limit() != 0 {
+    if bounded.remaining != 0 {
         return Err(Error::Truncated);
     }
     Ok(request)
