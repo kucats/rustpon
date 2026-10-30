@@ -1722,6 +1722,115 @@ fn php_content_length_preflight_read_errors_fail_closed() {
 }
 
 #[test]
+fn php_content_length_rejects_overreported_short_slice_reads() {
+    // A buggy Read claims one more byte than Content-Length. That count
+    // still fits the parser's 8192-byte buffer, so checking only the parser
+    // buffer size would incorrectly accept bytes outside the HTTP message.
+    struct Overreport<'a> {
+        body: &'a [u8],
+        calls: usize,
+    }
+    impl Read for Overreport<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            assert_eq!(buffer.len(), self.body.len());
+            buffer.copy_from_slice(self.body);
+            self.calls += 1;
+            Ok(buffer.len() + 1)
+        }
+    }
+    let spool = Spool::new();
+    let wire = body(&[(FIELD, b"ok")]);
+    assert!(wire.len() + 1 < BLOCK);
+    for php_max in [None, Some(1)] {
+        let mut reader = Overreport {
+            body: &wire,
+            calls: 0,
+        };
+        assert_eq!(
+            parse_reader_with_php_content_length(
+                &mut reader,
+                b"AaB03x",
+                Limits::default(),
+                &spool.0,
+                None,
+                php_max,
+                wire.len() as u64,
+            )
+            .unwrap_err(),
+            Error::Io(io::ErrorKind::InvalidData)
+        );
+        assert_eq!(reader.calls, 1);
+        spool.empty();
+    }
+}
+
+#[test]
+fn php_content_length_overreported_second_block_releases_uploads() {
+    struct LateOverreport {
+        body: Vec<u8>,
+        offset: usize,
+        calls: usize,
+    }
+    impl Read for LateOverreport {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if self.offset == self.body.len() {
+                return Ok(0);
+            }
+            let count = buffer.len().min(self.body.len() - self.offset);
+            buffer[..count].copy_from_slice(&self.body[self.offset..self.offset + count]);
+            self.offset += count;
+            self.calls += 1;
+            Ok(count + usize::from(self.calls == 2))
+        }
+    }
+    let spool = Spool::new();
+    let wire = body(&[(FILE, &vec![0xA5; BLOCK + 7])]);
+    let mut reader = LateOverreport {
+        body: wire.clone(),
+        offset: 0,
+        calls: 0,
+    };
+    assert_eq!(
+        parse_reader_with_php_content_length(
+            &mut reader,
+            b"AaB03x",
+            Limits::default(),
+            &spool.0,
+            None,
+            None,
+            wire.len() as u64,
+        )
+        .unwrap_err(),
+        Error::Io(io::ErrorKind::InvalidData)
+    );
+    assert_eq!(reader.calls, 2);
+    // The first block may have been staged; an aborted parser owns and
+    // drops its anonymous descriptors. No data is published on error.
+    spool.empty();
+
+    // A well-behaved reader must still preserve the exact Content-Length
+    // boundary and the full binary payload.
+    let mut pipelined = wire.clone();
+    pipelined.extend_from_slice(b"NEXT REQUEST");
+    let mut valid = Cursor::new(pipelined);
+    let request = parse_reader_with_php_content_length(
+        &mut valid,
+        b"AaB03x",
+        Limits::default(),
+        &spool.0,
+        None,
+        None,
+        wire.len() as u64,
+    )
+    .unwrap();
+    assert_eq!(valid.position(), wire.len() as u64);
+    assert_eq!(request.stats().body_bytes, wire.len() as u64);
+    assert_eq!(request.parts().len(), 1);
+    drop(request);
+    spool.empty();
+}
+
+#[test]
 fn php_partial_eof_publishes_unfinished_fields_with_bounded_lookahead() {
     let spool = Spool::new();
     let prefix = b"--AaB03x\r\nContent-Disposition: form-data; name=tail\r\n\r\n";
