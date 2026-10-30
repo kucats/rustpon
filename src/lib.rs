@@ -1377,10 +1377,12 @@ fn parse_header(line: &[u8]) -> Result<Header<'_>, Error> {
         // Nested multipart parsing remains outside this bounded prototype.
         // Do not reject other unusual media labels: PHP publishes them.
         let validated = trim(media);
-        if let Some(slash) = validated.iter().position(|b| *b == b'/') {
-            if validated[..slash].eq_ignore_ascii_case(b"multipart") {
-                return Err(Error::Unsupported);
-            }
+        if validated
+            .iter()
+            .position(|b| *b == b'/')
+            .is_some_and(|slash| validated[..slash].eq_ignore_ascii_case(b"multipart"))
+        {
+            return Err(Error::Unsupported);
         }
         return Ok(Header::ContentType(media));
     }
