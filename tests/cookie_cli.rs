@@ -72,11 +72,20 @@ fn cookie_cli_one_level_array_is_binary_safe() {
 }
 
 #[test]
-fn cookie_cli_nested_array_fails_without_json() {
-    let (ok, stdout, stderr) = run_array(b"a=first; a[x][y]=second");
+fn cookie_cli_three_level_array_fails_without_json() {
+    let (ok, stdout, stderr) = run_array(b"a=first; a[x][y][z]=second");
     assert!(!ok);
     assert!(stdout.is_empty());
     assert!(stderr.contains("UnsupportedArrayName"), "{stderr}");
+}
+
+#[test]
+fn cookie_cli_two_level_array_emits_typed_binary_json() {
+    let (ok, stdout, stderr) = run_array(b"a[x][y]=%00%FF; a[x][y]=last; a[0][]=tail");
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","6c617374"]"#));
+    assert!(stdout.contains(r#"["s","7461696c"]"#));
+    assert!(!stdout.contains(r#"["s","00ff"]"#));
 }
 
 fn run_limited(header: &[u8], array_mode: bool, limit: &str) -> (bool, String, String) {
