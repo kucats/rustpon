@@ -298,6 +298,12 @@ fn read_staged_copy_chunk(
     loop {
         match read(file, output, offset) {
             Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+            // An I/O adapter reporting more bytes than the supplied slice
+            // is invalid. Reject it here, before either the main-copy or
+            // readback caller can use an out-of-range count.
+            Ok(count) if count > output.len() => {
+                return Err(io::ErrorKind::InvalidData.into());
+            }
             Ok(count) => return Ok(count),
             Err(error) if error.kind() == io::ErrorKind::Interrupted => {
                 validate_staged_copy_snapshot(file, expected_length, baseline)?;
