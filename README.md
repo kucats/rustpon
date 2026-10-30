@@ -62,7 +62,10 @@ values only.
 - Only `Content-Disposition: form-data` with a nonempty final `name` and
   optional `filename` is supported. Header and parameter names ignore ASCII
   case; quoted parameter escapes are decoded only for \" and \\,
-  while other backslashes remain literal. Like PHP 8.4 HTTP SAPI, repeated `name` or
+  while other backslashes remain literal. Unquoted `name` and `filename`
+  values retain PHP-compatible non-token bytes such as `=`, `:`, backslash
+  and UTF-8, stopping at horizontal whitespace or `;`. Like PHP 8.4 HTTP SAPI,
+  repeated `name` or
   `filename` parameters use the last value. Well-formed unknown parameters
   (including `filename*`) are ignored rather than interpreted; empty semicolon
   separators are accepted. Raw names, filenames, binary values, duplicates,

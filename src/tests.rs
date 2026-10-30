@@ -373,6 +373,58 @@ fn strict_grammar_rejects_ambiguous_or_unsupported_headers() {
 }
 
 #[test]
+fn php_84_disposition_unquoted_values_match_http_sapi() {
+    let spool = Spool::new();
+    // PHP's multipart SAPI does not enforce RFC token grammar for unquoted
+    // name/filename values. These cases were measured against PHP 8.4.24.
+    type ParamCase<'a> = (&'a [u8], &'a [u8], Option<&'a [u8]>);
+    let cases: &[ParamCase<'_>] = &[
+        (b"Content-Disposition: form-data; name=a=b", b"a=b", None),
+        (b"Content-Disposition: form-data; name=a:b", b"a:b", None),
+        (b"Content-Disposition: form-data; name=a@b", b"a@b", None),
+        (b"Content-Disposition: form-data; name=a\\b", b"a\\b", None),
+        (
+            b"Content-Disposition: form-data; name=\xe6\x97\xa5\xe6\x9c\xac",
+            b"\xe6\x97\xa5\xe6\x9c\xac",
+            None,
+        ),
+        (
+            b"Content-Disposition: form-data; name=upload; filename=C:\\fakepath\\leaf.bin",
+            b"upload",
+            Some(b"C:\\fakepath\\leaf.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=upload; filename=part=a.bin",
+            b"upload",
+            Some(b"part=a.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=upload; filename=some@host.bin",
+            b"upload",
+            Some(b"some@host.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=upload; filename=\xe6\x97\xa5\xe6\x9c\xac.bin",
+            b"upload",
+            Some(b"\xe6\x97\xa5\xe6\x9c\xac.bin"),
+        ),
+        (
+            b"Content-Disposition: form-data; name=upload; filename=ab\"cd.bin",
+            b"upload",
+            Some(b"ab\"cd.bin"),
+        ),
+    ];
+    for &(header, expected_name, expected_filename) in cases {
+        let request = parse(&body(&[(header, b"\0\xffX")]), Limits::default(), &spool).unwrap();
+        let view = request.parts().next().unwrap();
+        assert_eq!(view.name, expected_name, "{header:?}");
+        assert_eq!(view.filename, expected_filename, "{header:?}");
+        drop(request);
+        spool.empty();
+    }
+}
+
+#[test]
 fn php_84_disposition_quoted_escape_decoding_matches_http_sapi() {
     let spool = Spool::new();
     // PHP 8.4 removes a backslash only before another slash or a quote.

@@ -190,6 +190,44 @@ CASES = [
     ("file-type-trailing-space", [(b"f", b"\x00\xffhi", b"x.txt", b"text/plain ")]),
     ("file-type-tabs", [(b"f", b"\x00\xffhi", b"x.txt", b"\ttext/plain\t")]),
 
+    # PHP 8.4 accepts opaque unquoted disposition values, including bytes
+    # outside RFC HTTP tokens. Preserve bytes and path metadata exactly.
+    ("disposition-unquoted-name-equals", [
+        (b"a=b", b"raw", None, b"application/octet-stream", b"form-data; name=a=b"),
+    ]),
+    ("disposition-unquoted-name-colon", [
+        (b"a:b", b"raw", None, b"application/octet-stream", b"form-data; name=a:b"),
+    ]),
+    ("disposition-unquoted-name-at", [
+        (b"a@b", b"raw", None, b"application/octet-stream", b"form-data; name=a@b"),
+    ]),
+    ("disposition-unquoted-name-backslash", [
+        (b"a\\b", b"raw", None, b"application/octet-stream", b"form-data; name=a\\b"),
+    ]),
+    ("disposition-unquoted-name-utf8", [
+        ("日本".encode(), b"raw", None, b"application/octet-stream",
+         b"form-data; name=" + "日本".encode()),
+    ]),
+    ("disposition-unquoted-filename-winpath", [
+        (b"upload", b"\x00\xffX", b"C:\\fakepath\\leaf.bin", b"application/octet-stream",
+         b"form-data; name=upload; filename=C:\\fakepath\\leaf.bin"),
+    ]),
+    ("disposition-unquoted-filename-equals", [
+        (b"upload", b"\x00\xffX", b"part=a.bin", b"application/octet-stream",
+         b"form-data; name=upload; filename=part=a.bin"),
+    ]),
+    ("disposition-unquoted-filename-at", [
+        (b"upload", b"\x00\xffX", b"some@host.bin", b"application/octet-stream",
+         b"form-data; name=upload; filename=some@host.bin"),
+    ]),
+    ("disposition-unquoted-filename-utf8", [
+        (b"upload", b"\x00\xffX", "日本.bin".encode(), b"application/octet-stream",
+         b"form-data; name=upload; filename=" + "日本.bin".encode()),
+    ]),
+    ("disposition-unquoted-filename-embedded-quote", [
+        (b"upload", b"\x00\xffX", b'ab"cd.bin', b"application/octet-stream",
+         b'form-data; name=upload; filename=ab"cd.bin'),
+    ]),
     # PHP 8.4 HTTP SAPI accepts duplicate disposition keys (last one wins)
     # and ignores syntactically valid extension parameters, including filename*.
     ("disposition-duplicate-name", [

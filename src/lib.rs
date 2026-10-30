@@ -1439,7 +1439,14 @@ fn parse_disposition(mut value: &[u8]) -> Result<Header<'_>, Error> {
             bytes = &value[..index];
             value = trim(&value[index + 1..]);
         } else {
-            let end = value.iter().position(|b| !token(*b)).unwrap_or(value.len());
+            // PHP 8.4's multipart parser accepts more than HTTP token bytes
+            // in unquoted values (e.g. '=', ':', '@', backslash and UTF-8).
+            // Stop at horizontal whitespace or ';', keeping raw bytes.
+            // Header controls are still rejected by parse_header.
+            let end = value
+                .iter()
+                .position(|b| matches!(*b, b' ' | b'\t' | b';'))
+                .unwrap_or(value.len());
             if end == 0 {
                 return Err(Error::Malformed);
             }
