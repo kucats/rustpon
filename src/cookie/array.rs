@@ -1,8 +1,8 @@
-//! Experimental bounded PHP 8.4 Cookie registration with one array level.
+//! Experimental bounded PHP 8.4 Cookie registration with up to two array levels.
 //!
 //! Scalar roots are first-wins, while an array path replaces an earlier
-//! scalar root and repeated array indices are last-wins. Deeper bracket
-//! paths are deliberately rejected; this is not a Zend/SAPI registration API.
+//! scalar root and repeated array indices are last-wins. Three or more bracket
+//! levels fail closed; this is not a Zend/SAPI registration API.
 
 use super::{Error, Limits, decode_cookie_value};
 use std::io::{self, Write};
@@ -16,7 +16,7 @@ enum Key {
 #[derive(Debug, PartialEq, Eq)]
 struct Element {
     key: Key,
-    value: Vec<u8>,
+    value: Value,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -26,29 +26,34 @@ struct Array {
 }
 
 impl Array {
-    fn insert(&mut self, key: Key, value: Vec<u8>) -> Result<(), Error> {
-        // Match 64-bit PHP array-index advancement even when an existing
-        // explicit index is replaced by a later Cookie header segment.
-        if let Key::Integer(number) = &key
+    fn advance_next_index(&mut self, key: &Key) {
+        // Preserve PHP 8.4's numeric append cursor even for repeated keys.
+        if let Key::Integer(number) = key
             && self.next_index.is_none_or(|next| *number >= next)
         {
             self.next_index = Some(number.saturating_add(1));
         }
+    }
+
+    fn insert(&mut self, key: Key, value: Vec<u8>) -> Result<(), Error> {
+        self.advance_next_index(&key);
         if let Some(existing) = self.elements.iter_mut().find(|entry| entry.key == key) {
-            existing.value = value;
+            existing.value = Value::Scalar(value);
         } else {
             self.elements
                 .try_reserve(1)
                 .map_err(|_| Error::Allocation)?;
-            self.elements.push(Element { key, value });
+            self.elements.push(Element {
+                key,
+                value: Value::Scalar(value),
+            });
         }
         Ok(())
     }
 
-    fn append(&mut self, value: Vec<u8>) -> Result<(), Error> {
+    fn append_index(&self) -> Result<i64, Error> {
         let index = self.next_index.unwrap_or(0);
-        // PHP may silently ignore an append after i64::MAX. Reject rather
-        // than overwrite an existing element or produce a false projection.
+        // An exhausted append must not overwrite a pre-existing i64::MAX.
         if self
             .elements
             .iter()
@@ -56,7 +61,43 @@ impl Array {
         {
             return Err(Error::AppendExhausted);
         }
+        Ok(index)
+    }
+
+    fn append(&mut self, value: Vec<u8>) -> Result<(), Error> {
+        let index = self.append_index()?;
         self.insert(Key::Integer(index), value)
+    }
+
+    fn nested_mut(&mut self, key: Key) -> Result<&mut Array, Error> {
+        self.advance_next_index(&key);
+        let position = if let Some(position) = self.elements.iter().position(|entry| entry.key == key)
+        {
+            position
+        } else {
+            self.elements
+                .try_reserve(1)
+                .map_err(|_| Error::Allocation)?;
+            self.elements.push(Element {
+                key,
+                value: Value::Array(Array::default()),
+            });
+            self.elements.len() - 1
+        };
+        // PHP promotes a scalar child to an empty array when a later
+        // bracket path descends into it.
+        if matches!(self.elements[position].value, Value::Scalar(_)) {
+            self.elements[position].value = Value::Array(Array::default());
+        }
+        let Value::Array(array) = &mut self.elements[position].value else {
+            unreachable!();
+        };
+        Ok(array)
+    }
+
+    fn append_nested(&mut self) -> Result<&mut Array, Error> {
+        let index = self.append_index()?;
+        self.nested_mut(Key::Integer(index))
     }
 }
 
@@ -73,7 +114,7 @@ struct Entry {
 }
 
 /// Owns a bounded ordered projection of one validated Cookie header.
-/// This slice models scalar roots and one bracket level only.
+/// This slice models scalar roots and up to two bracket levels.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CookieTree {
     entries: Vec<Entry>,
@@ -130,9 +171,10 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 }
 
 /// Convert an already-extracted single Cookie header into a PHP-style tree.
-/// Accepted array forms: root[key], root[], and root[one-whitespace-byte].
-/// A trailing suffix after the first completed ']' is ignored unless it
-/// opens another bracket. Nested paths are rejected without partial output.
+/// Accepted array forms: root[key], root[], root[key][child], root[][child],
+/// and root[key][]. One ASCII whitespace byte also acts as an append key.
+/// A trailing suffix after the final ']' is ignored; malformed or deeper
+/// bracket paths are rejected without partial output.
 /// Header, pair, field and retained-byte limits remain independent.
 pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTree, Error> {
     parse_one_level_header_inner(header, limits, None)
@@ -146,6 +188,12 @@ pub fn parse_one_level_header_with_php_max_input_vars(
     max_input_vars: usize,
 ) -> Result<CookieTree, Error> {
     parse_one_level_header_inner(header, limits, Some(max_input_vars))
+}
+
+fn is_append_index(index: &[u8]) -> bool {
+    index.is_empty()
+        || (index.len() == 1
+            && matches!(index[0], b' ' | b'\t' | b'\x0b' | b'\x0c' | b'\r' | b'\n'))
 }
 
 fn parse_one_level_header_inner(
@@ -206,9 +254,25 @@ fn parse_one_level_header_inner(
                     .map(|offset| (open, open + 1 + offset))
             });
         if let Some((open, close)) = bracket {
-            if raw_name[close + 1..].contains(&b'[') {
-                return Err(Error::UnsupportedArrayName);
-            }
+            let suffix = &raw_name[close + 1..];
+            // PHP interprets an immediately following bracket as a second
+            // array dimension. An arbitrary suffix is ignored only if it
+            // cannot introduce another bracket path.
+            let second_index = if let Some(rest) = suffix.strip_prefix(b"[") {
+                let end = rest
+                    .iter()
+                    .position(|&byte| byte == b']')
+                    .ok_or(Error::UnsupportedArrayName)?;
+                if rest[end + 1..].contains(&b'[') {
+                    return Err(Error::UnsupportedArrayName);
+                }
+                Some(&rest[..end])
+            } else {
+                if suffix.contains(&b'[') {
+                    return Err(Error::UnsupportedArrayName);
+                }
+                None
+            };
             if raw_value.len() > limits.value_bytes {
                 return Err(Error::ValueBytes);
             }
@@ -225,8 +289,7 @@ fn parse_one_level_header_inner(
             )?;
             let root = root_key(&raw_name[..open], false)?;
             let index_bytes = &raw_name[open + 1..close];
-            let append = index_bytes.is_empty()
-                || (index_bytes.len() == 1 && index_bytes[0].is_ascii_whitespace());
+            let append = is_append_index(index_bytes);
             let child_key = if append {
                 None
             } else {
@@ -250,9 +313,21 @@ fn parse_one_level_header_inner(
             let Value::Array(array) = &mut entries[root_position].value else {
                 unreachable!();
             };
-            match child_key {
-                Some(index) => array.insert(index, value)?,
-                None => array.append(value)?,
+            if let Some(second) = second_index {
+                let nested = match child_key {
+                    Some(index) => array.nested_mut(index)?,
+                    None => array.append_nested()?,
+                };
+                if is_append_index(second) {
+                    nested.append(value)?;
+                } else {
+                    nested.insert(key(second)?, value)?;
+                }
+            } else {
+                match child_key {
+                    Some(index) => array.insert(index, value)?,
+                    None => array.append(value)?,
+                }
             }
         } else {
             let root = root_key(raw_name, true)?;
@@ -299,6 +374,26 @@ fn write_key(writer: &mut impl Write, key: &Key) -> io::Result<()> {
     }
 }
 
+fn write_value(writer: &mut impl Write, value: &Value) -> io::Result<()> {
+    match value {
+        Value::Scalar(bytes) => write_bytes(writer, bytes),
+        Value::Array(array) => {
+            writer.write_all(b"[\"a\",[")?;
+            for (index, child) in array.elements.iter().enumerate() {
+                if index != 0 {
+                    writer.write_all(b",")?;
+                }
+                writer.write_all(b"[")?;
+                write_key(writer, &child.key)?;
+                writer.write_all(b",")?;
+                write_value(writer, &child.value)?;
+                writer.write_all(b"]")?;
+            }
+            writer.write_all(b"]]")
+        }
+    }
+}
+
 impl CookieTree {
     /// Ordered, typed, hex-binary-safe JSON matching the PHP SAPI oracle.
     /// Key types are preserved, including 64-bit integer array indices.
@@ -311,23 +406,7 @@ impl CookieTree {
             writer.write_all(b"[")?;
             write_key(writer, &entry.key)?;
             writer.write_all(b",")?;
-            match &entry.value {
-                Value::Scalar(bytes) => write_bytes(writer, bytes)?,
-                Value::Array(array) => {
-                    writer.write_all(b"[\"a\",[")?;
-                    for (index, child) in array.elements.iter().enumerate() {
-                        if index != 0 {
-                            writer.write_all(b",")?;
-                        }
-                        writer.write_all(b"[")?;
-                        write_key(writer, &child.key)?;
-                        writer.write_all(b",")?;
-                        write_bytes(writer, &child.value)?;
-                        writer.write_all(b"]")?;
-                    }
-                    writer.write_all(b"]]")?;
-                }
-            }
+            write_value(writer, &entry.value)?;
             writer.write_all(b"]")?;
         }
         writer.write_all(b"]]")
@@ -351,13 +430,13 @@ mod tests {
         };
         assert_eq!(array.elements.len(), 2);
         assert_eq!(array.elements[0].key, Key::Bytes(b"x".to_vec()));
-        assert_eq!(array.elements[0].value.as_slice(), b"two");
-        assert_eq!(array.elements[1].value.as_slice(), b"three");
+        assert_eq!(array.elements[0].value, Value::Scalar(b"two".to_vec()));
+        assert_eq!(array.elements[1].value, Value::Scalar(b"three".to_vec()));
         let reverse = parse(b"a[x]=one; a=ignored; a[x]=two");
         let Value::Array(array) = &reverse.entries[0].value else {
             panic!("array root expected");
         };
-        assert_eq!(array.elements[0].value.as_slice(), b"two");
+        assert_eq!(array.elements[0].value, Value::Scalar(b"two".to_vec()));
     }
 
     #[test]
@@ -369,7 +448,7 @@ mod tests {
         assert_eq!(array.elements[0].key, Key::Integer(-2));
         assert_eq!(array.elements[1].key, Key::Integer(-1));
         assert_eq!(array.elements[2].key, Key::Integer(0));
-        assert_eq!(array.elements[2].value.as_slice(), b"last");
+        assert_eq!(array.elements[2].value, Value::Scalar(b"last".to_vec()));
         assert_eq!(array.elements[3].key, Key::Bytes(b"01".to_vec()));
         assert_eq!(array.next_index, Some(1));
     }
@@ -388,7 +467,7 @@ mod tests {
     #[test]
     fn nested_paths_fail_closed_and_limits_cover_overwrites() {
         assert_eq!(
-            parse_one_level_header(b"a[x][y]=1", Limits::default()).unwrap_err(),
+            parse_one_level_header(b"a[x][y][z]=1", Limits::default()).unwrap_err(),
             Error::UnsupportedArrayName
         );
         assert_eq!(
@@ -418,6 +497,62 @@ mod tests {
     }
 
     #[test]
+    fn php_cookie_two_level_arrays_preserve_collisions_and_append_order() {
+        let tree = parse(
+            b"a[x]=old; a[x][y]=one; a[x][y]=two; a[x][z]=three; a[][v]=four",
+        );
+        let Value::Array(root) = &tree.entries[0].value else {
+            panic!("expected array root");
+        };
+        let Value::Array(nested) = &root.elements[0].value else {
+            panic!("expected promoted nested array");
+        };
+        assert_eq!(nested.elements.len(), 2);
+        assert_eq!(nested.elements[0].value, Value::Scalar(b"two".to_vec()));
+        assert_eq!(nested.elements[1].value, Value::Scalar(b"three".to_vec()));
+        assert_eq!(root.elements[1].key, Key::Integer(0));
+        let Value::Array(appended) = &root.elements[1].value else {
+            panic!("expected appended nested array");
+        };
+        assert_eq!(appended.elements[0].key, Key::Bytes(b"v".to_vec()));
+        assert_eq!(appended.elements[0].value, Value::Scalar(b"four".to_vec()));
+
+        let mut json = Vec::new();
+        tree.write_json(&mut json).unwrap();
+        assert!(String::from_utf8(json).unwrap().contains(
+            r#"[["s","78"],["a",[[["s","79"],["s","74776f"]]"#
+        ));
+    }
+
+    #[test]
+    fn php_cookie_two_level_limits_and_malformed_paths_fail_closed() {
+        for invalid in [
+            b"a[x][y][z]=one".as_slice(),
+            b"a[x][y][=two",
+            b"a[x]noise[y]=three",
+        ] {
+            assert_eq!(
+                parse_one_level_header(invalid, Limits::default()).unwrap_err(),
+                Error::UnsupportedArrayName
+            );
+        }
+        let limited = Limits {
+            retained_bytes: 12,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_one_level_header(b"a[x][y]=one; a[x][y]=two", limited).unwrap_err(),
+            Error::RetainedBytes
+        );
+        let tree = parse(b"a[\x0b]=first; a[]=second");
+        let Value::Array(array) = &tree.entries[0].value else {
+            panic!("expected array");
+        };
+        assert_eq!(array.elements[0].key, Key::Integer(0));
+        assert_eq!(array.elements[1].key, Key::Integer(1));
+    }
+
+    #[test]
     fn php_cookie_variable_quota_counts_repeated_array_indices() {
         let tree = parse_one_level_header_with_php_max_input_vars(
             b"a[x]=first; a[x]=second; a[y]=third; nested[k][z]=ignored",
@@ -430,7 +565,7 @@ mod tests {
         };
         assert_eq!(array.elements.len(), 1);
         assert_eq!(array.elements[0].key, Key::Bytes(b"x".to_vec()));
-        assert_eq!(array.elements[0].value, b"second");
+        assert_eq!(array.elements[0].value, Value::Scalar(b"second".to_vec()));
         assert!(
             parse_one_level_header_with_php_max_input_vars(
                 b"[ignored]=x; a[x]=one; b=two",

@@ -59,6 +59,19 @@ ARRAY_CASES = [
     ("plus-sign-index", b"a[+1]=x; a[]=y"),
     ("negative-zero-key", b"a[-0]=x; a[]=y"),
     ("multiple-root-arrays", b"a[x]=1; b[2]=2; c=3; b[]=4"),
+    ("two-level-siblings", b"a[x][y]=one; a[x][z]=two"),
+    ("two-level-overwrite", b"a[x][y]=one; a[x][y]=two"),
+    ("two-level-scalar-promotion", b"a[x]=old; a[x][y]=new"),
+    ("two-level-array-demotion", b"a[x][y]=old; a[x]=new"),
+    ("two-level-append", b"a[][x]=one; a[][x]=two"),
+    ("two-level-shared-index", b"a[0][x]=one; a[0][y]=two"),
+    ("two-level-append-child", b"a[x][]=one; a[x][]=two"),
+    ("two-level-nested-append", b"a[][]=one; a[][]=two"),
+    ("two-level-mixed", b"a[0][x]=one; a[0]=two; a[0][y]=three"),
+    ("two-level-trailing-text", b"a[x][y]tail=one"),
+    ("two-level-numeric", b"a[1][2]=x; a[1][]=y"),
+    ("two-level-binary", b"a[x][y]=%00%FF+"),
+    ("one-level-vertical-tab-append", b"a[\\x0b]=first; a[]=second"),
 ]
 
 LIMIT_CASES = [
