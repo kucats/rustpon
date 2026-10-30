@@ -10,6 +10,8 @@ from pathlib import Path
 from differential_multipart import BOUNDARY, body_for, php_post
 from differential_upload_size import start_server
 
+BINARY_PAYLOAD = bytes(range(256)) * 32 + b"\x00\xffTAIL!"
+
 CASES = [
     ("field-only", [(b"note", b"hello", None)]),
     ("file-only", [(b"f", b"abc", b"a.bin")]),
@@ -20,6 +22,8 @@ CASES = [
     ("large-file", [(b"f", b"X" * (8192 * 2 + 17), b"large.bin")]),
     ("large-mixed", [(b"f", b"Y" * (8192 + 3), b"large.bin"),
                      (b"note", b"after", None)]),
+    ("binary-block-tail", [(b"f", BINARY_PAYLOAD, b"binary.bin"),
+                            (b"note", b"after", None)]),
 ]
 
 
@@ -61,6 +65,12 @@ def main():
                 )
                 try:
                     php = php_post(port, body)
+                    if label == "binary-block-tail" and (limit == 0 or len(body) <= limit):
+                        # The PHP 8.4 SAPI oracle owns the exact 8192+7
+                        # binary payload, including NUL and 0xff, even when
+                        # the Rust admission path reads a short final slice.
+                        if len(php["files"]) != 1 or php["files"][0][4] != BINARY_PAYLOAD.hex():
+                            raise AssertionError("PHP binary upload oracle mismatch")
                     for preflight in (False, True):
                         rust = run_rust(args.rust_bin, spool, body, limit, preflight)
                         for key in ("files_tree", "files_tree_typed"):
