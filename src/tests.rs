@@ -780,8 +780,7 @@ fn checked_ingress_short_write_stops_after_inode_permission_change() {
         fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
             let count = self.file.write(&bytes[..1])?;
             self.writes += 1;
-            self.guard
-                .set_permissions(fs::Permissions::from_mode(0o644))?;
+            self.guard.set_permissions(fs::Permissions::from_mode(0o644))?;
             Ok(count)
         }
         fn flush(&mut self) -> io::Result<()> {
