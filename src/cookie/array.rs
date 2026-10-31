@@ -237,7 +237,7 @@ fn parse_one_level_header_inner(
     let mut pairs = 0usize;
     let mut retained = 0usize;
 
-    for segment in header.split(|&byte| byte == b';') {
+    'segments: for segment in header.split(|&byte| byte == b';') {
         let segment = segment.trim_ascii_start();
         if segment.is_empty() {
             continue;
@@ -348,14 +348,25 @@ fn parse_one_level_header_inner(
             let mut current = array;
             for index in &indexes[..depth - 1] {
                 current = if is_append_index(index) {
-                    current.append_nested()?
+                    match current.append_nested() {
+                        Ok(child) => child,
+                        // PHP 8.4 ignores an overflowing [] assignment,
+                        // including an intermediate append, and continues
+                        // registering subsequent Cookie variables.
+                        Err(Error::AppendExhausted) => continue 'segments,
+                        Err(error) => return Err(error),
+                    }
                 } else {
                     current.nested_mut(key(index)?)?
                 };
             }
             let leaf = indexes[depth - 1];
             if is_append_index(leaf) {
-                current.append(value)?;
+                match current.append(value) {
+                    Ok(()) => {}
+                    Err(Error::AppendExhausted) => continue 'segments,
+                    Err(error) => return Err(error),
+                }
             } else {
                 current.insert(key(leaf)?, value)?;
             }
@@ -619,12 +630,35 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_append_is_an_error_instead_of_overwriting() {
-        assert_eq!(
-            parse_one_level_header(b"a[9223372036854775807]=x; a[]=y", Limits::default())
-                .unwrap_err(),
-            Error::AppendExhausted
+    fn exhausted_php_cookie_append_is_ignored_without_losing_following_values() {
+        let tree = parse(
+            b"a[9223372036854775807]=max; a[]=skipped; a[][x]=skipped; a[0]=zero; b=kept",
         );
+        assert_eq!(tree.entries.len(), 2);
+        let Value::Array(root) = &tree.entries[0].value else {
+            panic!("array root expected");
+        };
+        assert_eq!(root.elements.len(), 2);
+        assert_eq!(root.elements[0].key, Key::Integer(i64::MAX));
+        assert_eq!(root.elements[0].value, Value::Scalar(b"max".to_vec()));
+        assert_eq!(root.elements[1].key, Key::Integer(0));
+        assert_eq!(root.elements[1].value, Value::Scalar(b"zero".to_vec()));
+        assert_eq!(tree.entries[1].value, Value::Scalar(b"kept".to_vec()));
+
+        let nested = parse(
+            b"a[x][9223372036854775807]=max; a[x][]=skipped; a[x][][y]=skipped; b=ok",
+        );
+        assert_eq!(nested.entries.len(), 2);
+        let Value::Array(root) = &nested.entries[0].value else {
+            panic!("array root expected");
+        };
+        let Value::Array(child) = &root.elements[0].value else {
+            panic!("nested array expected");
+        };
+        assert_eq!(child.elements.len(), 1);
+        assert_eq!(child.elements[0].key, Key::Integer(i64::MAX));
+        assert_eq!(child.elements[0].value, Value::Scalar(b"max".to_vec()));
+        assert_eq!(nested.entries[1].value, Value::Scalar(b"ok".to_vec()));
     }
 
     #[test]
