@@ -1,11 +1,13 @@
-//! Experimental bounded PHP 8.4 Cookie registration with up to four array levels.
+//! Experimental bounded PHP 8.4 Cookie registration with 64 array levels.
 //!
-//! Scalar roots are first-wins, while an array path replaces an earlier
-//! scalar root and repeated array indices are last-wins. Five or more bracket
-//! levels fail closed; this is not a Zend/SAPI registration API.
+//! The default PHP 8.4 max_input_nesting_level is 64. A deeper path removes
+//! its previously registered root without publishing a partial value.
+//! Malformed paths still fail closed; this is not a Zend/SAPI registration API.
 
 use super::{Error, Limits, decode_cookie_value};
 use std::io::{self, Write};
+
+const MAX_ARRAY_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Key {
@@ -114,7 +116,7 @@ struct Entry {
 }
 
 /// Owns a bounded ordered projection of one validated Cookie header.
-/// This slice models scalar roots and up to four bracket levels.
+/// This slice models scalar roots and PHP's default 64 bracket levels.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CookieTree {
     entries: Vec<Entry>,
@@ -171,13 +173,12 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 }
 
 /// Convert an already-extracted single Cookie header into a PHP-style tree.
-/// Accepted array forms include root[key], root[][child], root[key][],
-/// root[key][child][leaf], root[key][child][leaf][fourth], and append indices
-/// at any supported level.
+/// Bracket paths and append keys are supported through the PHP 8.4 default
+/// max_input_nesting_level of 64, independently of input-variable quotas.
+/// Deeper paths remove their normalized root, matching PHP HTTP SAPI.
 /// One ASCII whitespace byte also acts as an append key.
-/// A trailing suffix after the final ']' is ignored; malformed or deeper
-/// bracket paths are rejected without partial output.
-/// Header, pair, field and retained-byte limits remain independent.
+/// A trailing suffix after the final ']' is ignored; malformed paths fail
+/// closed without partial output. Hard header/pair/name/value limits remain.
 pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTree, Error> {
     parse_one_level_header_inner(header, limits, None)
 }
@@ -256,51 +257,37 @@ fn parse_one_level_header_inner(
                     .map(|offset| (open, open + 1 + offset))
             });
         if let Some((open, close)) = bracket {
-            let suffix = &raw_name[close + 1..];
-            // Only consecutive brackets add dimensions. A fifth level or
-            // bracket after arbitrary trailing text fails closed.
-            let (second_index, third_index, fourth_index) =
-                if let Some(rest) = suffix.strip_prefix(b"[") {
-                    let end = rest
-                        .iter()
-                        .position(|&byte| byte == b']')
-                        .ok_or(Error::UnsupportedArrayName)?;
-                    let trailing = &rest[end + 1..];
-                    let (third, fourth) = if let Some(tail) = trailing.strip_prefix(b"[") {
-                        let third_end = tail
-                            .iter()
-                            .position(|&byte| byte == b']')
-                            .ok_or(Error::UnsupportedArrayName)?;
-                        let after_third = &tail[third_end + 1..];
-                        let fourth = if let Some(last) = after_third.strip_prefix(b"[") {
-                            let fourth_end = last
-                                .iter()
-                                .position(|&byte| byte == b']')
-                                .ok_or(Error::UnsupportedArrayName)?;
-                            if last[fourth_end + 1..].contains(&b'[') {
-                                return Err(Error::UnsupportedArrayName);
-                            }
-                            Some(&last[..fourth_end])
-                        } else {
-                            if after_third.contains(&b'[') {
-                                return Err(Error::UnsupportedArrayName);
-                            }
-                            None
-                        };
-                        (Some(&tail[..third_end]), fourth)
-                    } else {
-                        if trailing.contains(&b'[') {
-                            return Err(Error::UnsupportedArrayName);
-                        }
-                        (None, None)
-                    };
-                    (Some(&rest[..end]), third, fourth)
-                } else {
-                    if suffix.contains(&b'[') {
-                        return Err(Error::UnsupportedArrayName);
-                    }
-                    (None, None, None)
-                };
+            // Fixed stack storage avoids a separate allocation for bracket
+            // paths while bounding parser work at PHP's default nesting limit.
+            let mut indexes: [&[u8]; MAX_ARRAY_DEPTH] = [&[]; MAX_ARRAY_DEPTH];
+            indexes[0] = &raw_name[open + 1..close];
+            let mut depth = 1;
+            let mut trailing = &raw_name[close + 1..];
+            let mut too_deep = false;
+            while let Some(rest) = trailing.strip_prefix(b"[") {
+                let end = rest
+                    .iter()
+                    .position(|&byte| byte == b']')
+                    .ok_or(Error::UnsupportedArrayName)?;
+                if depth == MAX_ARRAY_DEPTH {
+                    too_deep = true;
+                    break;
+                }
+                indexes[depth] = &rest[..end];
+                depth += 1;
+                trailing = &rest[end + 1..];
+            }
+            if !too_deep && trailing.contains(&b'[') {
+                return Err(Error::UnsupportedArrayName);
+            }
+            if too_deep {
+                // php_register_variable_ex removes an existing normalized
+                // root on max_input_nesting_level overflow, then continues.
+                // The ignored wire pair still counts toward max_input_vars.
+                let root = root_key(&raw_name[..open], false)?;
+                entries.retain(|entry| entry.key != root);
+                continue;
+            }
             if raw_value.len() > limits.value_bytes {
                 return Err(Error::ValueBytes);
             }
@@ -316,13 +303,6 @@ fn parse_one_level_header_inner(
                 limits,
             )?;
             let root = root_key(&raw_name[..open], false)?;
-            let index_bytes = &raw_name[open + 1..close];
-            let append = is_append_index(index_bytes);
-            let child_key = if append {
-                None
-            } else {
-                Some(key(index_bytes)?)
-            };
             let value = decode_cookie_value(raw_value)?;
             let root_position =
                 if let Some(position) = entries.iter().position(|entry| entry.key == root) {
@@ -341,43 +321,19 @@ fn parse_one_level_header_inner(
             let Value::Array(array) = &mut entries[root_position].value else {
                 unreachable!();
             };
-            if let Some(second) = second_index {
-                let nested = match child_key {
-                    Some(index) => array.nested_mut(index)?,
-                    None => array.append_nested()?,
-                };
-                if let Some(third) = third_index {
-                    let leaf_parent = if is_append_index(second) {
-                        nested.append_nested()?
-                    } else {
-                        nested.nested_mut(key(second)?)?
-                    };
-                    if let Some(fourth) = fourth_index {
-                        let fourth_parent = if is_append_index(third) {
-                            leaf_parent.append_nested()?
-                        } else {
-                            leaf_parent.nested_mut(key(third)?)?
-                        };
-                        if is_append_index(fourth) {
-                            fourth_parent.append(value)?;
-                        } else {
-                            fourth_parent.insert(key(fourth)?, value)?;
-                        }
-                    } else if is_append_index(third) {
-                        leaf_parent.append(value)?;
-                    } else {
-                        leaf_parent.insert(key(third)?, value)?;
-                    }
-                } else if is_append_index(second) {
-                    nested.append(value)?;
+            let mut current = array;
+            for index in &indexes[..depth - 1] {
+                current = if is_append_index(index) {
+                    current.append_nested()?
                 } else {
-                    nested.insert(key(second)?, value)?;
-                }
+                    current.nested_mut(key(index)?)?
+                };
+            }
+            let leaf = indexes[depth - 1];
+            if is_append_index(leaf) {
+                current.append(value)?;
             } else {
-                match child_key {
-                    Some(index) => array.insert(index, value)?,
-                    None => array.append(value)?,
-                }
+                current.insert(key(leaf)?, value)?;
             }
         } else {
             let root = root_key(raw_name, true)?;
@@ -517,7 +473,7 @@ mod tests {
     #[test]
     fn nested_paths_fail_closed_and_limits_cover_overwrites() {
         assert_eq!(
-            parse_one_level_header(b"a[x][y][z][w][v]=1", Limits::default()).unwrap_err(),
+            parse_one_level_header(b"a[x][y][z][w][v=1", Limits::default()).unwrap_err(),
             Error::UnsupportedArrayName
         );
         assert_eq!(
@@ -577,7 +533,7 @@ mod tests {
     #[test]
     fn php_cookie_two_level_limits_and_malformed_paths_fail_closed() {
         for invalid in [
-            b"a[x][y][z][w][v]=one".as_slice(),
+            b"a[x][y][z][w][v=one".as_slice(),
             b"a[x][y][=two",
             b"a[x]noise[y]=three",
         ] {
@@ -677,7 +633,7 @@ mod tests {
     #[test]
     fn php_cookie_three_level_depth_and_quota_fail_closed() {
         for invalid in [
-            b"a[x][y][z][w][v]=one".as_slice(),
+            b"a[x][y][z][w][v=one".as_slice(),
             b"a[x][y][=one",
             b"a[x][y]noise[z]=one",
             b"a[x][y][z]noise[w]=one",
@@ -749,7 +705,7 @@ mod tests {
     #[test]
     fn php_cookie_four_level_depth_and_input_limits_fail_closed() {
         for invalid in [
-            b"a[x][y][z][w][v]=one".as_slice(),
+            b"a[x][y][z][w][v=one".as_slice(),
             b"a[x][y][z][=one",
             b"a[x][y][z]noise[w]=one",
             b"a[x][y][z][w]noise[v]=one",
@@ -778,5 +734,62 @@ mod tests {
         let json = String::from_utf8(json).unwrap();
         assert!(json.contains(r#"["s","6669727374"]"#));
         assert!(!json.contains(r#"["s","7365636f6e64"]"#));
+    }
+
+    #[test]
+    fn php_cookie_default_64_level_boundary_matches_nested_scalar() {
+        let header = format!("a{}=ok", "[x]".repeat(MAX_ARRAY_DEPTH));
+        let tree = parse(header.as_bytes());
+        assert_eq!(tree.entries.len(), 1);
+        let mut value = &tree.entries[0].value;
+        for _ in 0..MAX_ARRAY_DEPTH {
+            let Value::Array(array) = value else {
+                panic!("expected nested array through 64 levels");
+            };
+            assert_eq!(array.elements.len(), 1);
+            value = &array.elements[0].value;
+        }
+        assert_eq!(value, &Value::Scalar(b"ok".to_vec()));
+    }
+
+    #[test]
+    fn php_cookie_overdepth_discards_prior_root_and_later_registration_recovers() {
+        let header = format!(
+            "a=old; b=keep; a{}=oversize; a[y]=reborn",
+            "[x]".repeat(MAX_ARRAY_DEPTH + 1)
+        );
+        let tree = parse(header.as_bytes());
+        assert_eq!(tree.entries.len(), 2);
+        assert_eq!(tree.entries[0].key, Key::Bytes(b"b".to_vec()));
+        assert_eq!(tree.entries[1].key, Key::Bytes(b"a".to_vec()));
+        let Value::Array(reborn) = &tree.entries[1].value else {
+            panic!("expected a freshly registered array after overflow");
+        };
+        assert_eq!(reborn.elements[0].key, Key::Bytes(b"y".to_vec()));
+        assert_eq!(reborn.elements[0].value, Value::Scalar(b"reborn".to_vec()));
+
+        // Even a discarded over-depth pair consumes a PHP input-variable slot.
+        let header = format!(
+            "a=old; a{}=ignored; b=excluded",
+            "[x]".repeat(MAX_ARRAY_DEPTH + 1)
+        );
+        let limited =
+            parse_one_level_header_with_php_max_input_vars(header.as_bytes(), Limits::default(), 1)
+                .unwrap();
+        assert_eq!(limited.entries[0].value, Value::Scalar(b"old".to_vec()));
+        let limited =
+            parse_one_level_header_with_php_max_input_vars(header.as_bytes(), Limits::default(), 2)
+                .unwrap();
+        assert!(limited.entries.is_empty());
+
+        // The name-byte hard cap is checked before the PHP compatibility policy.
+        let restricted = Limits {
+            name_bytes: 32,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_one_level_header(header.as_bytes(), restricted).unwrap_err(),
+            Error::NameBytes
+        );
     }
 }

@@ -1911,30 +1911,33 @@ and prints the tagged `cookie_pairs` array only on complete success.
 Linux CI compares scalar cases with a real PHP 8.4 HTTP SAPI, including
 duplicate names, percent escapes, whitespace and a multi-block value.
 
-### Bounded four-level Cookie array registration (opt-in)
+### PHP 8.4 default-depth Cookie array registration (opt-in)
 
-The separate cookie::array::parse_one_level_header API (name retained for
-compatibility) and cookie --php-arrays harness now project PHP 8.4 HTTP
-Cookie paths root[index], root[], root[index][child], root[][child],
-root[index][], root[index][child][leaf], root[][child][leaf],
-root[index][][leaf], and root[index][child][leaf][fourth].
-Append indices are supported at each of the four bracket levels.
-One ASCII whitespace byte, including vertical tab,
-acts as an append index. Typed 64-bit keys and ordered binary-safe values
-survive nested JSON projection. Scalar roots are first-wins, while array
-paths promote previous scalar roots or children to arrays, replace repeated
-indices, and ignore later scalar-root duplicates.
-The CLI emits cookie_tree in tagged JSON; cookie_pairs remains unchanged.
+The separate `cookie::array::parse_one_level_header` API (name retained
+for compatibility) and `cookie --php-arrays` harness register bracket paths
+through PHP 8.4's **default** `max_input_nesting_level=64`. A fixed-size
+stack array stores the parsed indices; append markers, nested scalar
+promotion, integer keys, replacement and binary-safe tagged JSON are
+preserved at every supported level. Scalar root names remain first-wins.
+The independent hard name, pair, header, value and retained-byte quotas
+continue to apply. The implementation does not accept an override of
+PHP's INI nesting limit.
 
-Five or more bracket levels, malformed brackets, and paths containing
-another opening bracket after unrelated trailing text fail closed with
-UnsupportedArrayName. An exhausted append fails with AppendExhausted.
-Conservative retained-byte accounting charges overwritten nested fields.
-Hard header/pair/name/value limits remain independent; this slice does not
-attempt full arbitrary-depth PHP array registration.
-Linux CI compares nested array cases against a real PHP 8.4 HTTP SAPI,
-while Rust tests run on Linux and macOS. This API only projects metadata:
-no Zend integration, native $_COOKIE population, or FPM worker changes.
+For an over-depth path (65 or more complete bracket levels), PHP 8.4 HTTP
+SAPI removes the previously registered normalized root, discards that
+variable, and may register a later valid occurrence of the same name.
+The Rust projection now matches this behavior; the ignored wire name
+still counts against `max_input_vars`. Malformed bracket paths, including
+unfinished nested brackets and an opening bracket after arbitrary trailing
+text, still fail closed with `UnsupportedArrayName`. Exhausted append
+indices fail closed with `AppendExhausted` rather than wrapping.
+
+Linux CI compares 5-, 6-, 16-, 32-, 64- and 65-level cases with the real
+PHP 8.4 HTTP SAPI, including over-depth root removal and subsequent
+re-registration; Rust tests cover the boundary, quotas and malformed
+inputs on Linux/macOS. This remains standalone request metadata projection,
+not native Zend/$_COOKIE integration, an FPM implementation, or a claim
+of full PHP INI compatibility.
 
 
 ## PHP 8.4 HTTP Cookie max_input_vars admission

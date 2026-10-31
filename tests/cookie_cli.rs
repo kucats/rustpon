@@ -72,11 +72,11 @@ fn cookie_cli_one_level_array_is_binary_safe() {
 }
 
 #[test]
-fn cookie_cli_five_level_array_fails_without_json() {
+fn cookie_cli_five_level_array_promotes_scalar_root() {
     let (ok, stdout, stderr) = run_array(b"a=first; a[x][y][z][w][v]=second");
-    assert!(!ok);
-    assert!(stdout.is_empty());
-    assert!(stderr.contains("UnsupportedArrayName"), "{stderr}");
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","7365636f6e64"]"#));
+    assert!(!stdout.contains(r#"["s","6669727374"]"#));
 }
 
 #[test]
@@ -151,9 +151,23 @@ fn cookie_cli_four_level_arrays_preserve_binary_last_wins_and_append() {
 }
 
 #[test]
-fn cookie_cli_four_level_rejects_malformed_fifth_suffix_without_partial_json() {
-    let (ok, stdout, stderr) = run_array(b"a[x][y][z][w]=ok; a[x][y][z][w][v]=bad");
+fn cookie_cli_rejects_unclosed_fifth_bracket_without_partial_json() {
+    let (ok, stdout, stderr) = run_array(b"a[x][y][z][w]=ok; a[x][y][z][w][v=bad");
     assert!(!ok);
     assert!(stdout.is_empty());
     assert!(stderr.contains("UnsupportedArrayName"), "{stderr}");
+}
+
+#[test]
+fn cookie_cli_64_level_boundary_and_65_level_root_reset() {
+    let accepted = format!("a{}=at_limit", "[x]".repeat(64));
+    let (ok, stdout, stderr) = run_array(accepted.as_bytes());
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","61745f6c696d6974"]"#));
+
+    let overflow = format!("a[x]=old; a{}=ignored; b=ok", "[x]".repeat(65));
+    let (ok, stdout, stderr) = run_array(overflow.as_bytes());
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","62"],["s","6f6b"]"#));
+    assert!(!stdout.contains(r#"["s","61"]"#));
 }
