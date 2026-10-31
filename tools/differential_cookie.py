@@ -85,6 +85,18 @@ ARRAY_CASES = [
     ("three-level-binary", b"a[x][y][z]=%00%FF+"),
     ("three-level-scalar-root", b"a=one; a[x][y][z]=two; a=three"),
     ("three-level-middle-scalar", b"a[x][y]=old; a[x][y][z]=new"),
+    ("four-level-siblings", b"a[x][y][z][w]=one; a[x][y][z][v]=two"),
+    ("four-level-overwrite", b"a[x][y][z][w]=old; a[x][y][z][w]=new"),
+    ("four-level-promotion", b"a[x][y][z]=old; a[x][y][z][w]=new"),
+    ("four-level-demotion", b"a[x][y][z][w]=old; a[x][y][z]=new"),
+    ("four-level-append-root", b"a[][x][y][z]=one; a[][x][y][z]=two"),
+    ("four-level-append-second", b"a[x][][z][w]=one; a[x][][z][w]=two"),
+    ("four-level-append-third", b"a[x][y][][w]=one; a[x][y][][w]=two"),
+    ("four-level-append-leaf", b"a[x][y][z][]=one; a[x][y][z][]=two"),
+    ("four-level-nested-append", b"a[][][][]=one; a[][][][]=two"),
+    ("four-level-numeric", b"a[1][2][3][4]=x; a[1][2][3][]=y"),
+    ("four-level-trailing-text", b"a[x][y][z][w]tail=one"),
+    ("four-level-binary", b"a[0][0][0][0]=%00%FF+"),
 ]
 
 LIMIT_CASES = [
@@ -96,6 +108,7 @@ LIMIT_CASES = [
     ("array-append", b"a[]=first; a[]=second; a[]=third"),
     ("array-promotion", b"a=one; a[x]=two; b=three"),
     ("array-duplicate-index", b"a[x]=one; a[x]=two; b=three"),
+    ("four-level-quota-and-overwrite", b"a[x][y][z][w]=first; a[x][y][z][w]=second; b=third"),
 ]
 
 
@@ -208,7 +221,7 @@ def main():
         raise SystemExit(f"{failures} PHP 8.4 HTTP Cookie cases failed")
     print(
         f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
-        f"({len(CASES)} scalar, {len(ARRAY_CASES)} up-to-three-level array, "
+        f"({len(CASES)} scalar, {len(ARRAY_CASES)} up-to-four-level array, "
         f"{4 * (5 + len(LIMIT_CASES))} quota cases)"
     )
 
