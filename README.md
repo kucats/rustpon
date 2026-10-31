@@ -1919,6 +1919,10 @@ through PHP 8.4's **default** `max_input_nesting_level=64`. A fixed-size
 stack array stores the parsed indices; append markers, nested scalar
 promotion, integer keys, replacement and binary-safe tagged JSON are
 preserved at every supported level. Scalar root names remain first-wins.
+When an explicit integer key reaches `i64::MAX`, subsequent `[]` appends
+at that array level (including intermediate nested appends) are ignored,
+matching PHP 8.4 HTTP SAPI. Other Cookie variables continue to register;
+skipped appends still consume the wire-pair and `max_input_vars` quotas.
 The independent hard name, pair, header, value and retained-byte quotas
 continue to apply. The explicit
 `cookie::array::parse_one_level_header_with_php_ini_limits` API and
