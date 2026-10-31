@@ -61,6 +61,18 @@ ARRAY_CASES = [
     ("binary-percent-value", b"a[x]=%00%FF+; b[y]=ok"),
     ("unterminated-scalar-bracket", b"a[foo=one; a_foo=two; b[x]=three"),
     ("trailing-after-bracket", b"a[foo]tail=1; a[bar]=2"),
+    # PHP discards arbitrary suffixes after a complete array bracket path.
+    # A later '[' without a matching ']' also terminates registration at
+    # the last complete bracket, rather than rejecting the entire request.
+    ("unfinished-second-bracket", b"a[x][=one"),
+    ("unfinished-third-bracket", b"a[x][y][=two"),
+    ("unfinished-fifth-bracket", b"a[x][y][z][w][v=four"),
+    ("junk-then-bracket", b"a[x]noise[y]=one"),
+    ("junk-after-second-level", b"a[x][y]noise[z]=two"),
+    ("junk-after-third-level", b"a[x][y][z]noise[w]=three"),
+    ("suffix-replaced-by-normal", b"a[x]tail[y]=first; a[x]=second; b=ok"),
+    ("unfinished-nested-overwrites", b"a[x][y]=old; a[x][=new"),
+    ("opening-bracket-in-key", b"a[x][y[z]=bracket"),
     ("plus-sign-index", b"a[+1]=x; a[]=y"),
     ("negative-zero-key", b"a[-0]=x; a[]=y"),
     ("multiple-root-arrays", b"a[x]=1; b[2]=2; c=3; b[]=4"),
@@ -125,6 +137,7 @@ NESTING_CASES = [
     ("129-level-reset-recovery", b"a=old; a" + b"[x]" * 129 + b"=skip; a[y]=after"),
     ("129-level-quota-independent", b"a[x]=old; a" + b"[x]" * 129 + b"=skip; b=keep"),
     ("scalar-promoted-or-reset", b"a=old; a[x]=candidate; b=ok"),
+    ("unfinished-suffix-uses-complete-depth", b"a[x][=leaf; b=ok"),
 ]
 
 LIMIT_CASES = [
@@ -136,6 +149,7 @@ LIMIT_CASES = [
     ("array-append", b"a[]=first; a[]=second; a[]=third"),
     ("array-promotion", b"a=one; a[x]=two; b=three"),
     ("array-duplicate-index", b"a[x]=one; a[x]=two; b=three"),
+    ("unfinished-bracket-counts-quota", b"a[x][=first; a[x]tail[y]=second; b=third"),
     ("i64-max-append-consumes-quota", b"a[9223372036854775807]=max; a[]=ignored; b=quota_limited"),
     ("four-level-quota-and-overwrite", b"a[x][y][z][w]=first; a[x][y][z][w]=second; b=third"),
     ("overdepth-consumes-quota", b"a=old; a" + b"[x]" * 65 + b"=ignored; b=tail"),
