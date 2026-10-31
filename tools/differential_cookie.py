@@ -12,6 +12,7 @@ from differential_upload_size import start_server
 CASES = [
     ("basic", b"a=1; b=2"),
     ("first-wins", b"a=1; a=2; b=3"),
+    ("duplicate-value-hard-boundary", b"a=one; a=" + b"Z" * 8192),
     ("normalized-collision", b"a.b=1; a_b=2"),
     ("reverse-collision", b"a_b=1; a.b=2"),
     ("leading-and-trailing-whitespace", b" a = 1 ;  c =d "),
@@ -46,6 +47,7 @@ ARRAY_CASES = [
     ("blank-components-hard-budget-boundary", b";" * 127 + b"a[x]=1"),
     ("superseded-nested-slot", b"a[x][y]=first; a[x]=scalar; a[x][z]=second; b[]=ok"),
     ("duplicate-child-last-wins", b"a[x]=1; a[x]=2; a[y]=3"),
+    ("array-value-hard-boundary", b"a[x]=one; b[x]=" + b"Z" * 8192),
     ("scalar-promoted-to-array", b"a=first; a=second; a[x]=3"),
     ("array-ignores-later-scalar", b"a[x]=1; a=ignored; a[y]=2"),
     ("append-twice", b"a[]=x; a[]=y"),

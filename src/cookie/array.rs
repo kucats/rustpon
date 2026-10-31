@@ -279,6 +279,15 @@ fn parse_one_level_header_inner(
             Some(position) => (&segment[..position], &segment[position + 1..]),
             None => (segment, b"".as_slice()),
         };
+        // Raw name/value caps are independent admission limits. Check every
+        // nonblank wire pair before PHP drops duplicates, empty roots, or
+        // registrations past max_input_vars.
+        if raw_name.len() > limits.name_bytes {
+            return Err(Error::NameBytes);
+        }
+        if raw_value.len() > limits.value_bytes {
+            return Err(Error::ValueBytes);
+        }
         // The PHP variable quota stops registration, not independent hard
         // accounting for the total number of wire Cookie pairs.
         let mut skipped_by_php_quota = false;
@@ -293,9 +302,6 @@ fn parse_one_level_header_inner(
         }
         if skipped_by_php_quota || raw_name.is_empty() {
             continue;
-        }
-        if raw_name.len() > limits.name_bytes {
-            return Err(Error::NameBytes);
         }
         if raw_name.first() == Some(&b'[') {
             continue;
@@ -345,9 +351,6 @@ fn parse_one_level_header_inner(
                 let root = root_key(&raw_name[..open], false)?;
                 entries.retain(|entry| entry.key != root);
                 continue;
-            }
-            if raw_value.len() > limits.value_bytes {
-                return Err(Error::ValueBytes);
             }
             // Conservative cumulative accounting also charges overwritten
             // elements. The actual live keys/values are no larger than this
@@ -411,9 +414,6 @@ fn parse_one_level_header_inner(
             // normalization. A later scalar cannot replace an array root.
             if entries.iter().any(|entry| entry.key == root) {
                 continue;
-            }
-            if raw_value.len() > limits.value_bytes {
-                return Err(Error::ValueBytes);
             }
             charge(
                 &mut retained,
@@ -860,7 +860,7 @@ mod tests {
     fn php_cookie_array_variable_quota_cannot_bypass_hard_pair_budget() {
         let limits = Limits {
             pairs: 2,
-            name_bytes: 4,
+            name_bytes: 64,
             ..Limits::default()
         };
         let accepted = parse_one_level_header_with_php_max_input_vars(
@@ -871,8 +871,8 @@ mod tests {
         .unwrap();
         assert_eq!(accepted.entries.len(), 1);
 
-        // Quota-skipped names are not decoded or projected, yet they
-        // remain chargeable against the hard count of wire segments.
+        // Quota-skipped names are not decoded or projected, yet their
+        // raw lengths and segment counts remain subject to hard limits.
         assert_eq!(
             parse_one_level_header_with_php_max_input_vars(
                 b"a[x]=1; very_long_skipped_name[y]=2; b=3",
@@ -891,6 +891,34 @@ mod tests {
             parse_one_level_header_with_php_max_input_vars(b"a[x]=1; b=2; c=3", limits, 0)
                 .unwrap_err(),
             Error::Pairs
+        );
+    }
+
+    #[test]
+    fn hard_raw_cookie_array_limits_cover_overwrites_and_skipped_pairs() {
+        let limits = Limits {
+            name_bytes: 4,
+            value_bytes: 3,
+            ..Limits::default()
+        };
+        let accepted =
+            parse_one_level_header_with_php_max_input_vars(b"a[x]=one; a[x]=two; b=ok", limits, 1)
+                .unwrap();
+        assert_eq!(accepted.entries.len(), 1);
+        for (header, error) in [
+            (b"a[x]=one; a[x]=four".as_slice(), Error::ValueBytes),
+            (b"a[x]=one; b[y]=four".as_slice(), Error::ValueBytes),
+            (b"a[x]=one; =four".as_slice(), Error::ValueBytes),
+            (b"a[x]=one; longname=x".as_slice(), Error::NameBytes),
+        ] {
+            assert_eq!(
+                parse_one_level_header_with_php_max_input_vars(header, limits, 1).unwrap_err(),
+                error
+            );
+        }
+        assert_eq!(
+            parse_one_level_header(b"a[x]=one; a[x]=four", limits).unwrap_err(),
+            Error::ValueBytes
         );
     }
 

@@ -310,6 +310,29 @@ fn cookie_cli_configured_128_level_depth_and_129_guard() {
 }
 
 #[test]
+fn cookie_cli_hard_raw_value_and_name_quotas_survive_php_var_admission() {
+    for arrays in [false, true] {
+        let first = if arrays { "a[x]=one; a[x]=" } else { "a=one; a=" };
+        for (length, success) in [(8192, true), (8193, false)] {
+            let header = format!("{first}{}", "Z".repeat(length));
+            let (ok, stdout, stderr) = run_limited(header.as_bytes(), arrays, "1");
+            assert_eq!(ok, success, "{stderr}");
+            if success {
+                assert!(!stdout.is_empty());
+            } else {
+                assert!(stdout.is_empty(), "no partial Cookie JSON on hard-limit error");
+                assert!(stderr.contains("ValueBytes"), "{stderr}");
+            }
+        }
+        let name = format!("a=one; {}=x", "n".repeat(1025));
+        let (ok, stdout, stderr) = run_limited(name.as_bytes(), arrays, "1");
+        assert!(!ok);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("NameBytes"), "{stderr}");
+    }
+}
+
+#[test]
 fn cookie_cli_rejects_disallowed_field_controls_before_php_quota() {
     for control in [0x00, 0x01, 0x1f, 0x7f, b'\r', b'\n'] {
         for arrays in [false, true] {

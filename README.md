@@ -1926,6 +1926,10 @@ silently producing incorrect `$_COOKIE` arrays. This standalone slice does
 not register variables with Zend/SAPI, implement scalar/array collisions, or
 replace PHP's cookie request lifecycle. Header, pair, name, value and retained
 byte quotas are independent; they are not full process RSS guarantees.
+Raw name and value limits apply to every nonblank wire pair, including later
+first-wins duplicates, ignored names, and pairs dropped by max_input_vars.
+PHP 8.4 can accept requests beyond those Rust-only per-pair limits; the
+prototype deliberately rejects them instead of silently bypassing admission.
 
 The `cookie` CLI reads at most 64 KiB plus one overflow byte from stdin
 and prints the tagged `cookie_pairs` array only on complete success.
@@ -1998,7 +2002,10 @@ Without this flag, existing parsing behavior is preserved.
 PHP `max_input_vars=0` admits no Cookie variables. Each nonempty wire name
 consumes a slot, including duplicates and names PHP ignores because the root
 starts with `[`; empty names (`=value`) and separator-only segments do not.
-Once the quota is reached, later variables are not registered or decoded.
+Once the quota is reached, later variables are not registered or decoded,
+but their raw name and value lengths are still checked against independent
+hard limits. Strict rejection of oversize ignored/duplicate pairs is a
+Rust-only admission policy, not a claim of byte-for-byte PHP error behavior.
 The independent hard `Limits::pairs` budget counts **all** semicolon-delimited
 wire components, including empty components (and a trailing empty component),
 even after PHP's variable quota is exhausted. PHP ignores blank components

@@ -189,6 +189,15 @@ fn parse_scalar_header_inner(
             Some(pos) => (&segment[..pos], &segment[pos + 1..]),
             None => (segment, b"".as_slice()),
         };
+        // Raw name/value caps are independent admission limits. Check every
+        // nonblank wire pair before PHP drops duplicates, empty roots, or
+        // registrations past max_input_vars.
+        if raw_name.len() > limits.name_bytes {
+            return Err(Error::NameBytes);
+        }
+        if raw_value.len() > limits.value_bytes {
+            return Err(Error::ValueBytes);
+        }
         // The PHP variable quota stops registration, not independent hard
         // accounting for the total number of wire Cookie pairs.
         let mut skipped_by_php_quota = false;
@@ -204,9 +213,6 @@ fn parse_scalar_header_inner(
         if skipped_by_php_quota || raw_name.is_empty() {
             continue;
         }
-        if raw_name.len() > limits.name_bytes {
-            return Err(Error::NameBytes);
-        }
         // php_register_variable_ex skips names with an empty root, even if
         // the opening bracket never closes. Count the wire pair but do not
         // allocate or publish a cookie for it.
@@ -221,9 +227,6 @@ fn parse_scalar_header_inner(
             && raw_name[open + 1..].contains(&b']')
         {
             return Err(Error::UnsupportedArrayName);
-        }
-        if raw_value.len() > limits.value_bytes {
-            return Err(Error::ValueBytes);
         }
         let mut name = Vec::new();
         name.try_reserve_exact(raw_name.len())
@@ -468,14 +471,15 @@ mod tests {
             name_bytes: 1,
             ..limits
         };
-        // PHP quota stops registration before decoding oversized later names.
-        assert!(
+        // PHP skips registration, but hard raw-name admission still applies.
+        assert_eq!(
             parse_scalar_header_with_php_max_input_vars(
                 b"a=1; very_long_after_the_php_quota=2",
                 small,
                 1,
             )
-            .is_ok()
+            .unwrap_err(),
+            Error::NameBytes
         );
     }
 
@@ -483,7 +487,7 @@ mod tests {
     fn php_cookie_variable_quota_cannot_bypass_hard_pair_budget() {
         let limits = Limits {
             pairs: 2,
-            name_bytes: 1,
+            name_bytes: 64,
             ..Limits::default()
         };
         let accepted = parse_scalar_header_with_php_max_input_vars(
@@ -494,8 +498,8 @@ mod tests {
         .unwrap();
         assert_eq!(accepted.entries().len(), 1);
 
-        // The skipped name bypasses PHP registration and name validation,
-        // but its pair still consumes the parser's independent hard budget.
+        // The skipped name bypasses PHP registration, not the hard
+        // per-name limit or the independent hard pair budget.
         assert_eq!(
             parse_scalar_header_with_php_max_input_vars(
                 b"a=1; very_long_skipped_name=2; b=3",
@@ -513,6 +517,37 @@ mod tests {
         assert_eq!(
             parse_scalar_header_with_php_max_input_vars(b"a=1; b=2; c=3", limits, 0).unwrap_err(),
             Error::Pairs
+        );
+    }
+
+    #[test]
+    fn hard_raw_cookie_limits_apply_to_duplicates_and_quota_skips() {
+        let limits = Limits {
+            name_bytes: 4,
+            value_bytes: 3,
+            ..Limits::default()
+        };
+        let accepted =
+            parse_scalar_header_with_php_max_input_vars(b"a=one; a=two; b=two", limits, 1)
+                .unwrap();
+        assert_eq!(accepted.entries().len(), 1);
+        assert_eq!(accepted.entries()[0].value.as_slice(), b"one");
+
+        for (header, error) in [
+            (b"a=one; a=four".as_slice(), Error::ValueBytes),
+            (b"a=one; b=four".as_slice(), Error::ValueBytes),
+            (b"a=one; =four".as_slice(), Error::ValueBytes),
+            (b"a=one; longname=x".as_slice(), Error::NameBytes),
+        ] {
+            assert_eq!(
+                parse_scalar_header_with_php_max_input_vars(header, limits, 1).unwrap_err(),
+                error
+            );
+        }
+        // First-wins cannot bypass raw limits without PHP quota either.
+        assert_eq!(
+            parse_scalar_header(b"a=one; a=four", limits).unwrap_err(),
+            Error::ValueBytes
         );
     }
 
