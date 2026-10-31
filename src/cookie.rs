@@ -384,8 +384,7 @@ mod tests {
             parse_scalar_header_with_php_max_input_vars(b";;; a=1", limits, 0).unwrap_err(),
             Error::Pairs
         );
-        let accepted =
-            parse_scalar_header_with_php_max_input_vars(b"; a=one", limits, 1).unwrap();
+        let accepted = parse_scalar_header_with_php_max_input_vars(b"; a=one", limits, 1).unwrap();
         assert_eq!(accepted.entries().len(), 1);
         assert_eq!(accepted.entries()[0].name.as_slice(), b"a");
         assert_eq!(accepted.entries()[0].value.as_slice(), b"one");

@@ -797,8 +797,7 @@ mod tests {
             Error::Pairs
         );
         assert_eq!(
-            parse_one_level_header_with_php_max_input_vars(b";;; a[x]=one", limits, 0)
-                .unwrap_err(),
+            parse_one_level_header_with_php_max_input_vars(b";;; a[x]=one", limits, 0).unwrap_err(),
             Error::Pairs
         );
         let accepted =
