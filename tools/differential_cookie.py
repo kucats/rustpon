@@ -153,6 +153,7 @@ LIMIT_CASES = [
     ("array-append", b"a[]=first; a[]=second; a[]=third"),
     ("array-promotion", b"a=one; a[x]=two; b=three"),
     ("array-duplicate-index", b"a[x]=one; a[x]=two; b=three"),
+    ("binary-duplicate-under-quota", b"a[x]=%00%FF; a[x]=second; a[y]=%2B; b=tail"),
     ("unfinished-bracket-counts-quota", b"a[x][=first; a[x]tail[y]=second; b=third"),
     ("i64-max-append-consumes-quota", b"a[9223372036854775807]=max; a[]=ignored; b=quota_limited"),
     ("four-level-quota-and-overwrite", b"a[x][y][z][w]=first; a[x][y][z][w]=second; b=third"),

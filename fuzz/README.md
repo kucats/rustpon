@@ -108,3 +108,27 @@ cargo +nightly fuzz run --sanitizer address lifecycle -- -max_len=8194 -max_tota
 
 The Linux sanitizer CI job runs 256 additional coverage-guided mutations
 using two synthetic initial seeds. These seeds contain no private data.
+
+## Cookie scalar/array policy fuzzing
+
+`cookie` covers PHP 8.4-style Cookie header parsing, normalized first-wins
+scalar keys, nested array keys, raw percent-escaped values, append-index
+collisions and intentionally malformed HTTP header bytes. It varies
+`max_input_vars` (0, 1, 2, 3, 128) and `max_input_nesting_level`
+(0, 1, 2, 64, 128), checking deterministic fail-closed results and
+binary-safe JSON serialization. It also verifies that the unlimited policy
+agrees with a quota of 128 when the independent hard wire-pair cap is 128,
+and that no admitted PHP variables makes nesting policy irrelevant.
+Fuzz inputs are capped at 8 KiB plus one selector byte. A checked-in
+synthetic seed exercises binary values and duplicate nested names.
+
+```sh
+cargo +nightly fuzz run --sanitizer address cookie -- -max_len=8193 -max_total_time=120
+```
+
+Linux CI executes 256 instrumented Cookie mutations using the existing
+nightly/ASan toolchain; `cargo test --manifest-path fuzz/Cargo.toml --lib`
+also runs deterministic quota, 129-level depth and malformed-header seeds.
+The separate PHP 8.4 HTTP SAPI differential suite now covers a binary
+duplicate under all four tested `max_input_vars` settings. This is neither
+proof of full PHP Cookie compatibility nor a native SAPI integration.

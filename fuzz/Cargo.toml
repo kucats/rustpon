@@ -41,3 +41,10 @@ path = "fuzz_targets/urlencoded.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "cookie"
+path = "fuzz_targets/cookie.rs"
+test = false
+doc = false
+bench = false

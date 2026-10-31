@@ -1,4 +1,5 @@
 //! Bounded libFuzzer invariants and CI seed tests for request parsers.
+use rustpon::cookie;
 use rustpon::urlencoded::FormParser;
 use rustpon::{Error, Limits, Parser, Request, Stats, admission, files, urlencoded};
 use std::fmt::Debug;
@@ -139,6 +140,95 @@ pub fn exercise_urlencoded(data: &[u8]) {
     }
     let reader = urlencoded::parse_reader(&mut Cursor::new(data), limits()).map(snapshot);
     equivalent(&expected, &reader);
+}
+
+/// Fuzz the standalone Cookie scalar/array registration paths, including
+/// PHP 8.4 input-variable and nesting INI quotas. Every invariant compares
+/// the same complete raw header with independent API settings; malformed HTTP
+/// field values are expected to fail closed, never to panic or publish JSON.
+pub fn exercise_cookie(data: &[u8]) {
+    if data.is_empty() || data.len() > MAX_INPUT + 1 {
+        return;
+    }
+    // The leading byte steers policy combinations, leaving the rest as an
+    // uninterpreted binary HTTP Cookie field value.
+    let header = &data[1..];
+    let limits = cookie::Limits {
+        header_bytes: MAX_INPUT,
+        pairs: 128,
+        nodes: 512,
+        name_bytes: 1024,
+        value_bytes: 4096,
+        retained_bytes: MAX_INPUT,
+    };
+
+    // At most 128 nonempty pairs can pass the independent wire quota.
+    // A PHP variable quota of 128 must therefore be equivalent to no quota,
+    // even with duplicate keys, malformed bracket paths and node limits.
+    let scalar_default = cookie::parse_scalar_header(header, limits);
+    assert_eq!(
+        scalar_default,
+        cookie::parse_scalar_header_with_php_max_input_vars(header, limits, 128)
+    );
+    let tree_default = cookie::array::parse_one_level_header(header, limits);
+    assert_eq!(
+        tree_default,
+        cookie::array::parse_one_level_header_with_php_ini_limits(
+            header, limits, Some(128), 64
+        )
+    );
+
+    let variable_quota = match data[0] % 5 {
+        0 => 0,
+        1 => 1,
+        2 => 2,
+        3 => 3,
+        _ => 128,
+    };
+    let nesting = [0, 1, 2, 64, 128][(data[0] as usize / 5) % 5];
+    let scalar = cookie::parse_scalar_header_with_php_max_input_vars(
+        header,
+        limits,
+        variable_quota,
+    );
+    assert_eq!(
+        scalar,
+        cookie::parse_scalar_header_with_php_max_input_vars(header, limits, variable_quota)
+    );
+    if let Ok(parsed) = scalar {
+        let mut json = Vec::new();
+        parsed.write_json(&mut json).expect("scalar JSON to Vec");
+        assert!(json.starts_with(b"[") && json.ends_with(b"]"));
+    }
+
+    let tree = cookie::array::parse_one_level_header_with_php_ini_limits(
+        header,
+        limits,
+        Some(variable_quota),
+        nesting,
+    );
+    assert_eq!(
+        tree,
+        cookie::array::parse_one_level_header_with_php_ini_limits(
+            header, limits, Some(variable_quota), nesting
+        )
+    );
+    if let Ok(parsed) = tree {
+        let mut json = Vec::new();
+        parsed.write_json(&mut json).expect("array JSON to Vec");
+        assert!(json.starts_with(b"[\"a\",[") && json.ends_with(b"]]"));
+    }
+
+    // With no admitted PHP variables, the nesting setting must have no
+    // observable effect. The independent raw header/pair caps still apply.
+    assert_eq!(
+        cookie::array::parse_one_level_header_with_php_ini_limits(
+            header, limits, Some(0), 0
+        ),
+        cookie::array::parse_one_level_header_with_php_ini_limits(
+            header, limits, Some(0), 128
+        )
+    );
 }
 
 struct Spool(PathBuf);
@@ -451,6 +541,32 @@ pub fn exercise_lifecycle(data: &[u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookie_ini_quota_and_nesting_seed_smoke() {
+        let deeply_nested = {
+            let mut bytes = b"a=old; a".to_vec();
+            for _ in 0..129 {
+                bytes.extend_from_slice(b"[x]");
+            }
+            bytes.extend_from_slice(b"=skip; b=after");
+            bytes
+        };
+        for header in [
+            b"a[x]=%00%ff; a[x]=second; a[y]=%2b; b=tail".as_slice(),
+            b"a[9223372036854775807]=max; a[]=skip; b=ok",
+            b"a[x][y]=first; a[x][=second; a[x][z]=third",
+            b"bad=\r\nmalformed",
+            b"a=1; a=2; b=3",
+            deeply_nested.as_slice(),
+        ] {
+            for selector in 0..25 {
+                let mut input = vec![selector];
+                input.extend_from_slice(header);
+                exercise_cookie(&input);
+            }
+        }
+    }
 
     #[test]
     fn urlencoded_seed_smoke() {

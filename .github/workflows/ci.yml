@@ -146,7 +146,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@nightly
       - name: Install pinned cargo-fuzz (isolated research tooling)
         run: cargo install cargo-fuzz --version 0.13.2 --locked
-      - name: Instrumented libFuzzer campaign (4 targets)
+      - name: Instrumented libFuzzer campaign (5 targets)
         shell: bash
         run: |
           set -euo pipefail
@@ -154,6 +154,7 @@ jobs:
           cargo +nightly fuzz run --sanitizer address multipart -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
           cargo +nightly fuzz run --sanitizer address admission -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
           cargo +nightly fuzz run --sanitizer address lifecycle -- -runs=256 -max_len=8194 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address cookie -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
       - name: Preserve minimized candidates for crash triage
         if: failure()
         uses: actions/upload-artifact@v4
