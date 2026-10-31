@@ -103,6 +103,13 @@ CASES = [
     ("file-ingress-inode-guard-oracle", [
         (b"upload", bytes((i * 71 + 23) % 256 for i in range(8192 * 2 + 17)), b"ingress-guard.bin")
     ]),
+    # Pre-unlink nlink==1 admission hardening must preserve normal PHP
+    # $_FILES registration and byte-exact uploads across the 8 KiB boundary.
+    # The hostile second-hardlink path is exercised in the Rust unit tests.
+    ("file-preunlink-single-link-oracle", [
+        (b"field", b"ok", None),
+        (b"upload", bytes((i * 71 + 29) % 256 for i in range(8192 + 5)), b"guard.bin"),
+    ]),
     # Distinct data at every copy boundary: catch skipped/repeated source blocks.
     # Post-write readback companion: byte-varying data crosses three full
     # blocks and a short final block in both the Rust and PHP 8.4 paths.

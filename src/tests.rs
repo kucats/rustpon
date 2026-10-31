@@ -2645,9 +2645,11 @@ fn post_create_hardlink_is_rejected_before_any_upload_data() {
     let original = fs::symlink_metadata(&spool.0).unwrap();
     let exposed = spool.0.join("exposed");
     let mut path = spool.0.clone();
+    let mut created_path = None;
 
     // An attacker with directory access links the just-created inode under
-    // another name. Unlinking the generated name alone is insufficient.
+    // another name. Reject BEFORE unlinking our own name: this avoids
+    // mutating the namespace once link-count tampering is observed.
     let result = anonymous_upload_with_hook(&mut path, original.dev(), original.ino(), || {
         let created = fs::read_dir(&spool.0)
             .unwrap()
@@ -2661,9 +2663,17 @@ fn post_create_hardlink_is_rejected_before_any_upload_data() {
             })
             .unwrap();
         fs::hard_link(&created, &exposed).unwrap();
+        created_path = Some(created);
     });
     assert_eq!(result.unwrap_err(), Error::InvalidSpoolDirectory);
-    assert_eq!(fs::metadata(&exposed).unwrap().len(), 0);
+    assert_eq!(path, spool.0);
+    let created = created_path.unwrap();
+    // Both hard links remain: unlink has not yet been attempted.
+    let metadata = fs::symlink_metadata(&created).unwrap();
+    assert_eq!(metadata.nlink(), 2);
+    assert_eq!(metadata.len(), 0);
+    assert_eq!(fs::metadata(&exposed).unwrap().ino(), metadata.ino());
+    fs::remove_file(created).unwrap();
     fs::remove_file(exposed).unwrap();
     spool.empty();
 }

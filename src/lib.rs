@@ -1619,6 +1619,12 @@ fn anonymous_upload_with_hooks(
                         if entry.is_file()
                             && entry.dev() == opened.dev()
                             && entry.ino() == opened.ino()
+                            // A second hard link is already an escape from
+                            // the single-name staging lifecycle. Detect it
+                            // before unlinking our generated pathname, not
+                            // only after the unlink leaves another name.
+                            && entry.nlink() == 1
+                            && opened.nlink() == 1
                             && private_staging_inode(&opened, directory_owner)
                 );
                 if !valid_directory || !valid_entry {
