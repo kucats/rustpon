@@ -123,6 +123,16 @@ then verifies that the opened inode has zero remaining hard links before writing
 request bytes. The opened inode must also remain a regular file with no
 group/other or setuid/setgid/sticky permission bits, and its owner must match
 the spool directory's owner both before and after unlink.
+During multipart upload ingress, each staged-file write block uses a cloned
+descriptor to check the original inode's identity, UID/GID, exact permission
+mode, regular-file type and zero hard-link count before writing, after each
+successful partial write, and before retrying an interrupted write. A detected
+inode or permission change aborts the request even in PHP-compatible
+recoverable-write-error mode, rather than publishing upload error 7. A normal
+16,401-byte binary upload is compared byte-for-byte with PHP 8.4 HTTP SAPI.
+The repeated metadata checks add filesystem operations and only narrow the
+race window; they cannot make writes atomic, prevent every in-place rewrite,
+or substitute for audited descriptor-relative open/unlink operations.
 Before copying a completed upload, `Upload::copy_to` rechecks that its
 file descriptor still refers to a regular, unlinked (`nlink=0`), private
 inode without special permission bits whose on-disk length matches the
