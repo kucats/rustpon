@@ -183,6 +183,26 @@ fn private_staging_mode(metadata: &fs::Metadata) -> bool {
     metadata.permissions().mode() & 0o7077 == 0
 }
 
+// Guard the unlinked staging descriptor throughout ingress. An attacker or
+// cooperating local process with access to a duplicated descriptor can still
+// change its metadata after initial creation. Recheck the original inode,
+// ownership, private mode and anonymity before and after writes. This is a
+// point-in-time guard, not an atomic descriptor-relative upload guarantee.
+fn validate_staged_ingress_source(
+    file: &File,
+    original: Option<StagingIdentity>,
+) -> io::Result<()> {
+    let metadata = file.metadata()?;
+    if !metadata.is_file()
+        || metadata.nlink() != 0
+        || !private_staging_mode(&metadata)
+        || original != Some(StagingIdentity::from_metadata(&metadata))
+    {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    Ok(())
+}
+
 // The source is checked before copying and after each emitted block.
 // A failed check requires the caller to discard destination bytes.
 fn validate_staged_copy_source(file: &File, expected_length: u64) -> io::Result<fs::Metadata> {
@@ -1201,21 +1221,39 @@ impl Parser {
             }
             Payload::File(upload) => {
                 if !upload.discarded {
+                    // A cloned FD permits independent metadata checks even
+                    // while the original descriptor is mutably borrowed for
+                    // writing. It shares the inode, not a pathname.
+                    let identity = upload.initial_identity;
+                    let guard = upload
+                        .file
+                        .as_ref()
+                        .expect("live staged upload")
+                        .try_clone()?;
+                    validate_staged_ingress_source(&guard, identity)
+                        .map_err(|_| Error::InvalidSpoolDirectory)?;
                     #[cfg(test)]
                     let write_result = if self.fail_write {
                         Err(io::Error::from(io::ErrorKind::StorageFull))
                     } else {
-                        write_chunk(
+                        write_chunk_checked(
                             upload.file.as_mut().expect("live staged upload"),
                             &self.output[..self.output_len],
+                            || validate_staged_ingress_source(&guard, identity),
                         )
                     };
                     #[cfg(not(test))]
-                    let write_result = write_chunk(
+                    let write_result = write_chunk_checked(
                         upload.file.as_mut().expect("live staged upload"),
                         &self.output[..self.output_len],
+                        || validate_staged_ingress_source(&guard, identity),
                     );
                     if let Err(error) = write_result {
+                        // Metadata tampering is a hard boundary violation;
+                        // do not downgrade it to recoverable PHP upload error 7.
+                        if error.kind() == io::ErrorKind::InvalidData {
+                            return Err(Error::InvalidSpoolDirectory);
+                        }
                         if !self.php_recover_write_errors {
                             return Err(error.into());
                         }
