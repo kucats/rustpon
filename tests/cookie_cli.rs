@@ -148,6 +148,31 @@ fn cookie_cli_enforces_hard_pair_budget_after_php_variable_quota() {
 }
 
 #[test]
+fn cookie_cli_node_budget_exact_boundary_and_no_partial_json() {
+    let header = b"a[x][y]=first; a[x]=scalar; a[x][z]=second; b[]=ok";
+    for (limit, should_succeed) in [("5", false), ("6", true)] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_cookie"))
+            .args(["--php-arrays", "--max-cookie-nodes", limit])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(header).unwrap();
+        let result = child.wait_with_output().unwrap();
+        assert_eq!(result.status.success(), should_succeed);
+        if should_succeed {
+            let output = String::from_utf8(result.stdout).unwrap();
+            assert!(output.contains(r#"["s","7365636f6e64"]"#));
+            assert!(output.contains(r#"["s","6f6b"]"#));
+        } else {
+            assert!(result.stdout.is_empty(), "must not publish partial JSON");
+            assert!(String::from_utf8(result.stderr).unwrap().contains("Nodes"));
+        }
+    }
+}
+
+#[test]
 fn cookie_cli_three_level_arrays_preserve_last_wins_and_binary_data() {
     let (ok, stdout, stderr) = run_array(b"a[x][y][z]=%00%FF; a[x][y][z]=last; a[x][y][]=tail");
     assert!(ok, "{stderr}");

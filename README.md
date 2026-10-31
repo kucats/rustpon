@@ -1924,7 +1924,15 @@ at that array level (including intermediate nested appends) are ignored,
 matching PHP 8.4 HTTP SAPI. Other Cookie variables continue to register;
 skipped appends still consume the wire-pair and `max_input_vars` quotas.
 The independent hard name, pair, header, value and retained-byte quotas
-continue to apply. The explicit
+continue to apply. The Cookie array adapter also caps cumulative structural
+slot allocations via `cookie::Limits::nodes` (default 4,096). Each newly
+inserted root or nested element consumes one slot; later replacement/removal
+does not refund it. Updating an existing key does not allocate another slot.
+Exhaustion returns `cookie::Error::Nodes` and the CLI emits no partial JSON.
+`cookie --php-arrays --max-cookie-nodes N` allows boundary and failure
+injection tests. This is a Rust-specific allocation-amplification guard,
+not PHP `max_input_vars`, `memory_limit`, or a guarantee about process RSS.
+The explicit
 `cookie::array::parse_one_level_header_with_php_ini_limits` API and
 `cookie --php-arrays --php-max-input-nesting-level N` CLI flag also model
 PHP 8.4's configurable INI nesting limit (0–128), including zero disabling

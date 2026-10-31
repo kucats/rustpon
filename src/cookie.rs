@@ -14,6 +14,7 @@ use std::io::{self, Write};
 pub enum Error {
     HeaderBytes,
     Pairs,
+    Nodes,
     NameBytes,
     ValueBytes,
     RetainedBytes,
@@ -28,6 +29,9 @@ pub enum Error {
 pub struct Limits {
     pub header_bytes: usize,
     pub pairs: usize,
+    /// Maximum cumulative array/root slots allocated by Cookie array projection.
+    /// Slots replaced or removed later are still charged; not a PHP INI limit.
+    pub nodes: usize,
     pub name_bytes: usize,
     pub value_bytes: usize,
     pub retained_bytes: usize,
@@ -38,6 +42,7 @@ impl Default for Limits {
         Self {
             header_bytes: 64 * 1024,
             pairs: 128,
+            nodes: 4096,
             name_bytes: 1024,
             value_bytes: 8192,
             retained_bytes: 64 * 1024,

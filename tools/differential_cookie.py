@@ -40,6 +40,7 @@ CASES = [
 
 ARRAY_CASES = [
     ("two-children", b"a[x]=1; a[y]=2"),
+    ("superseded-nested-slot", b"a[x][y]=first; a[x]=scalar; a[x][z]=second; b[]=ok"),
     ("duplicate-child-last-wins", b"a[x]=1; a[x]=2; a[y]=3"),
     ("scalar-promoted-to-array", b"a=first; a=second; a[x]=3"),
     ("array-ignores-later-scalar", b"a[x]=1; a=ignored; a[y]=2"),

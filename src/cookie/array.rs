@@ -40,11 +40,18 @@ impl Array {
         }
     }
 
-    fn insert(&mut self, key: Key, value: Vec<u8>) -> Result<(), Error> {
+    fn insert(
+        &mut self,
+        key: Key,
+        value: Vec<u8>,
+        nodes: &mut usize,
+        max_nodes: usize,
+    ) -> Result<(), Error> {
         self.advance_next_index(&key);
         if let Some(existing) = self.elements.iter_mut().find(|entry| entry.key == key) {
             existing.value = Value::Scalar(value);
         } else {
+            charge_node(nodes, max_nodes)?;
             self.elements
                 .try_reserve(1)
                 .map_err(|_| Error::Allocation)?;
@@ -69,17 +76,28 @@ impl Array {
         Ok(index)
     }
 
-    fn append(&mut self, value: Vec<u8>) -> Result<(), Error> {
+    fn append(
+        &mut self,
+        value: Vec<u8>,
+        nodes: &mut usize,
+        max_nodes: usize,
+    ) -> Result<(), Error> {
         let index = self.append_index()?;
-        self.insert(Key::Integer(index), value)
+        self.insert(Key::Integer(index), value, nodes, max_nodes)
     }
 
-    fn nested_mut(&mut self, key: Key) -> Result<&mut Array, Error> {
+    fn nested_mut(
+        &mut self,
+        key: Key,
+        nodes: &mut usize,
+        max_nodes: usize,
+    ) -> Result<&mut Array, Error> {
         self.advance_next_index(&key);
         let position =
             if let Some(position) = self.elements.iter().position(|entry| entry.key == key) {
                 position
             } else {
+                charge_node(nodes, max_nodes)?;
                 self.elements
                     .try_reserve(1)
                     .map_err(|_| Error::Allocation)?;
@@ -100,9 +118,13 @@ impl Array {
         Ok(array)
     }
 
-    fn append_nested(&mut self) -> Result<&mut Array, Error> {
+    fn append_nested(
+        &mut self,
+        nodes: &mut usize,
+        max_nodes: usize,
+    ) -> Result<&mut Array, Error> {
         let index = self.append_index()?;
-        self.nested_mut(Key::Integer(index))
+        self.nested_mut(Key::Integer(index), nodes, max_nodes)
     }
 }
 
@@ -165,6 +187,14 @@ fn root_key(raw: &[u8], flatten_open_brackets: bool) -> Result<Key, Error> {
     } else {
         Ok(Key::Bytes(normalized))
     }
+}
+
+fn charge_node(nodes: &mut usize, max_nodes: usize) -> Result<(), Error> {
+    *nodes = nodes
+        .checked_add(1)
+        .filter(|count| *count <= max_nodes)
+        .ok_or(Error::Nodes)?;
+    Ok(())
 }
 
 fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Error> {
@@ -237,6 +267,9 @@ fn parse_one_level_header_inner(
     let mut entries: Vec<Entry> = Vec::new();
     let mut pairs = 0usize;
     let mut retained = 0usize;
+    // Count every structural slot ever inserted, including superseded ones.
+    // This bounds allocation amplification independently of raw byte quotas.
+    let mut nodes = 0usize;
 
     'segments: for segment in header.split(|&byte| byte == b';') {
         let segment = segment.trim_ascii_start();
@@ -338,6 +371,7 @@ fn parse_one_level_header_inner(
                 if let Some(position) = entries.iter().position(|entry| entry.key == root) {
                     position
                 } else {
+                    charge_node(&mut nodes, limits.nodes)?;
                     entries.try_reserve(1).map_err(|_| Error::Allocation)?;
                     entries.push(Entry {
                         key: root,
@@ -354,7 +388,7 @@ fn parse_one_level_header_inner(
             let mut current = array;
             for index in &indexes[..depth - 1] {
                 current = if is_append_index(index) {
-                    match current.append_nested() {
+                    match current.append_nested(&mut nodes, limits.nodes) {
                         Ok(child) => child,
                         // PHP 8.4 ignores an overflowing [] assignment,
                         // including an intermediate append, and continues
@@ -363,18 +397,18 @@ fn parse_one_level_header_inner(
                         Err(error) => return Err(error),
                     }
                 } else {
-                    current.nested_mut(key(index)?)?
+                    current.nested_mut(key(index)?, &mut nodes, limits.nodes)?
                 };
             }
             let leaf = indexes[depth - 1];
             if is_append_index(leaf) {
-                match current.append(value) {
+                match current.append(value, &mut nodes, limits.nodes) {
                     Ok(()) => {}
                     Err(Error::AppendExhausted) => continue 'segments,
                     Err(error) => return Err(error),
                 }
             } else {
-                current.insert(key(leaf)?, value)?;
+                current.insert(key(leaf)?, value, &mut nodes, limits.nodes)?;
             }
         } else {
             let root = root_key(raw_name, true)?;
@@ -395,6 +429,7 @@ fn parse_one_level_header_inner(
                 limits,
             )?;
             let value = decode_cookie_value(raw_value)?;
+            charge_node(&mut nodes, limits.nodes)?;
             entries.try_reserve(1).map_err(|_| Error::Allocation)?;
             entries.push(Entry {
                 key: root,
@@ -652,6 +687,70 @@ mod tests {
         };
         assert_eq!(array.elements[0].key, Key::Integer(0));
         assert_eq!(array.elements[1].key, Key::Integer(1));
+    }
+
+    #[test]
+    fn php_cookie_array_nodes_budget_is_cumulative_and_all_or_error() {
+        // PHP 8.4 HTTP SAPI produces a[x][z]=second and b[0]=ok.
+        // a[x][y] was removed when a[x] became a scalar, but its
+        // structural slot still counts against the request's hard budget.
+        let header = b"a[x][y]=first; a[x]=scalar; a[x][z]=second; b[]=ok";
+        let enough = Limits {
+            nodes: 6,
+            ..Limits::default()
+        };
+        let tree = parse_one_level_header(header, enough).unwrap();
+        assert_eq!(tree.entries.len(), 2);
+        let Value::Array(a) = &tree.entries[0].value else {
+            panic!("expected array a");
+        };
+        let Value::Array(x) = &a.elements[0].value else {
+            panic!("expected promoted a[x] array");
+        };
+        assert_eq!(x.elements.len(), 1);
+        assert_eq!(x.elements[0].key, Key::Bytes(b"z".to_vec()));
+        assert_eq!(x.elements[0].value, Value::Scalar(b"second".to_vec()));
+        let Value::Array(b) = &tree.entries[1].value else {
+            panic!("expected array b");
+        };
+        assert_eq!(b.elements[0].key, Key::Integer(0));
+        assert_eq!(b.elements[0].value, Value::Scalar(b"ok".to_vec()));
+
+        assert_eq!(
+            parse_one_level_header(
+                header,
+                Limits {
+                    nodes: 5,
+                    ..Limits::default()
+                },
+            )
+            .unwrap_err(),
+            Error::Nodes
+        );
+        // Repeated keys do not allocate another structural slot. PHP's
+        // variable quota can skip a later pair without charging nodes.
+        let repeated = parse_one_level_header_with_php_max_input_vars(
+            b"a[x]=first; a[x]=second; b=skipped",
+            Limits {
+                nodes: 2,
+                ..Limits::default()
+            },
+            2,
+        )
+        .unwrap();
+        assert_eq!(repeated.entries.len(), 1);
+        assert!(
+            parse_one_level_header(
+                b"",
+                Limits {
+                    nodes: 0,
+                    ..Limits::default()
+                },
+            )
+            .unwrap()
+            .entries
+            .is_empty()
+        );
     }
 
     #[test]
