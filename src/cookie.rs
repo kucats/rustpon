@@ -102,10 +102,9 @@ fn hex(byte: u8) -> Option<u8> {
 // those legacy cases while rejecting other controls and DEL, including
 // after max_input_vars is exhausted. Upstream HTTP framing is authoritative.
 fn valid_header_value(header: &[u8]) -> bool {
-    header.iter().all(|&byte| {
-        matches!(byte, b'\t' | b'\x0b' | b'\x0c')
-            || (byte >= b' ' && byte != 0x7f)
-    })
+    header
+        .iter()
+        .all(|&byte| matches!(byte, b'\t' | b'\x0b' | b'\x0c') || (byte >= b' ' && byte != 0x7f))
 }
 
 /// PHP Cookie registration raw-URL-decodes values but does not map '+' to
