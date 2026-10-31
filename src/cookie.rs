@@ -431,17 +431,12 @@ mod tests {
             Error::Pairs
         );
         assert_eq!(
-            parse_scalar_header_with_php_max_input_vars(
-                b"a=1; =ignored; b=3",
-                limits,
-                1,
-            )
-            .unwrap_err(),
+            parse_scalar_header_with_php_max_input_vars(b"a=1; =ignored; b=3", limits, 1,)
+                .unwrap_err(),
             Error::Pairs
         );
         assert_eq!(
-            parse_scalar_header_with_php_max_input_vars(b"a=1; b=2; c=3", limits, 0)
-                .unwrap_err(),
+            parse_scalar_header_with_php_max_input_vars(b"a=1; b=2; c=3", limits, 0).unwrap_err(),
             Error::Pairs
         );
     }

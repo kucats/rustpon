@@ -717,12 +717,8 @@ mod tests {
             Error::Pairs
         );
         assert_eq!(
-            parse_one_level_header_with_php_max_input_vars(
-                b"a[x]=1; =ignored; b=3",
-                limits,
-                1,
-            )
-            .unwrap_err(),
+            parse_one_level_header_with_php_max_input_vars(b"a[x]=1; =ignored; b=3", limits, 1,)
+                .unwrap_err(),
             Error::Pairs
         );
         assert_eq!(
