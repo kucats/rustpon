@@ -473,7 +473,6 @@ mod tests {
             (b"a[x]noise[y]=one", 1, b"one"),
             (b"a[x][y]noise[z]=two", 2, b"two"),
             (b"a[x][y][z]noise[w]=three", 3, b"three"),
-            (b"a[x][y[z]=bracket", 2, b"bracket"),
         ] {
             let tree = parse(header);
             assert_eq!(tree.entries.len(), 1);
@@ -489,6 +488,21 @@ mod tests {
             }
             assert_eq!(value, &Value::Scalar(expected.to_vec()));
         }
+
+        // An unmatched inner '[' before the closing bracket remains part
+        // of the array key, rather than opening another level.
+        let bracket = parse(b"a[x][y[z]=bracket");
+        let Value::Array(root) = &bracket.entries[0].value else {
+            panic!("expected array root");
+        };
+        let Value::Array(child) = &root.elements[0].value else {
+            panic!("expected nested array");
+        };
+        assert_eq!(child.elements[0].key, Key::Bytes(b"y[z".to_vec()));
+        assert_eq!(
+            child.elements[0].value,
+            Value::Scalar(b"bracket".to_vec())
+        );
 
         // A later valid assignment replaces the earlier leaf. An ignored
         // suffix does not consume an additional array depth.
