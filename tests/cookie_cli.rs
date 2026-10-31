@@ -151,11 +151,22 @@ fn cookie_cli_four_level_arrays_preserve_binary_last_wins_and_append() {
 }
 
 #[test]
-fn cookie_cli_rejects_unclosed_fifth_bracket_without_partial_json() {
+fn cookie_cli_trailing_unclosed_fifth_bracket_replaces_complete_leaf() {
     let (ok, stdout, stderr) = run_array(b"a[x][y][z][w]=ok; a[x][y][z][w][v=bad");
-    assert!(!ok);
-    assert!(stdout.is_empty());
-    assert!(stderr.contains("UnsupportedArrayName"), "{stderr}");
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","626164"]"#));
+    assert!(!stdout.contains(r#"["s","6f6b"]"#));
+}
+
+#[test]
+fn cookie_cli_noncontiguous_brackets_use_only_the_complete_path() {
+    let (ok, stdout, stderr) =
+        run_array(b"a[x]noise[y]=first; a[x]=second; a[x][=third; b=ok");
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","7468697264"]"#));
+    assert!(!stdout.contains(r#"["s","6669727374"]"#));
+    assert!(!stdout.contains(r#"["s","7365636f6e64"]"#));
+    assert!(stdout.contains(r#"["s","62"],["s","6f6b"]"#));
 }
 
 #[test]
