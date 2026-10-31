@@ -528,8 +528,7 @@ mod tests {
             ..Limits::default()
         };
         let accepted =
-            parse_scalar_header_with_php_max_input_vars(b"a=one; a=two; b=two", limits, 1)
-                .unwrap();
+            parse_scalar_header_with_php_max_input_vars(b"a=one; a=two; b=two", limits, 1).unwrap();
         assert_eq!(accepted.entries().len(), 1);
         assert_eq!(accepted.entries()[0].value.as_slice(), b"one");
 
