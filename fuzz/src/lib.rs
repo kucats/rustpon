@@ -173,9 +173,7 @@ pub fn exercise_cookie(data: &[u8]) {
     let tree_default = cookie::array::parse_one_level_header(header, limits);
     assert_eq!(
         tree_default,
-        cookie::array::parse_one_level_header_with_php_ini_limits(
-            header, limits, Some(128), 64
-        )
+        cookie::array::parse_one_level_header_with_php_ini_limits(header, limits, Some(128), 64)
     );
 
     let variable_quota = match data[0] % 5 {
@@ -186,11 +184,8 @@ pub fn exercise_cookie(data: &[u8]) {
         _ => 128,
     };
     let nesting = [0, 1, 2, 64, 128][(data[0] as usize / 5) % 5];
-    let scalar = cookie::parse_scalar_header_with_php_max_input_vars(
-        header,
-        limits,
-        variable_quota,
-    );
+    let scalar =
+        cookie::parse_scalar_header_with_php_max_input_vars(header, limits, variable_quota);
     assert_eq!(
         scalar,
         cookie::parse_scalar_header_with_php_max_input_vars(header, limits, variable_quota)
@@ -210,7 +205,10 @@ pub fn exercise_cookie(data: &[u8]) {
     assert_eq!(
         tree,
         cookie::array::parse_one_level_header_with_php_ini_limits(
-            header, limits, Some(variable_quota), nesting
+            header,
+            limits,
+            Some(variable_quota),
+            nesting
         )
     );
     if let Ok(parsed) = tree {
@@ -222,12 +220,8 @@ pub fn exercise_cookie(data: &[u8]) {
     // With no admitted PHP variables, the nesting setting must have no
     // observable effect. The independent raw header/pair caps still apply.
     assert_eq!(
-        cookie::array::parse_one_level_header_with_php_ini_limits(
-            header, limits, Some(0), 0
-        ),
-        cookie::array::parse_one_level_header_with_php_ini_limits(
-            header, limits, Some(0), 128
-        )
+        cookie::array::parse_one_level_header_with_php_ini_limits(header, limits, Some(0), 0),
+        cookie::array::parse_one_level_header_with_php_ini_limits(header, limits, Some(0), 128)
     );
 }
 
