@@ -832,23 +832,13 @@ mod tests {
     #[test]
     fn php_cookie_configured_nesting_boundary_and_quota_are_independent() {
         let header = b"a[x]=one; a[x][y]=two; b=tail";
-        let level_one = parse_one_level_header_with_php_ini_limits(
-            header,
-            Limits::default(),
-            None,
-            1,
-        )
-        .unwrap();
+        let level_one =
+            parse_one_level_header_with_php_ini_limits(header, Limits::default(), None, 1).unwrap();
         assert_eq!(level_one.entries.len(), 1);
         assert_eq!(level_one.entries[0].key, Key::Bytes(b"b".to_vec()));
 
-        let level_two = parse_one_level_header_with_php_ini_limits(
-            header,
-            Limits::default(),
-            None,
-            2,
-        )
-        .unwrap();
+        let level_two =
+            parse_one_level_header_with_php_ini_limits(header, Limits::default(), None, 2).unwrap();
         assert_eq!(level_two.entries.len(), 2);
         let Value::Array(a) = &level_two.entries[0].value else {
             panic!("expected nested root at the configured boundary");
@@ -858,13 +848,9 @@ mod tests {
         };
         assert_eq!(x.elements[0].value, Value::Scalar(b"two".to_vec()));
 
-        let quota = parse_one_level_header_with_php_ini_limits(
-            header,
-            Limits::default(),
-            Some(2),
-            1,
-        )
-        .unwrap();
+        let quota =
+            parse_one_level_header_with_php_ini_limits(header, Limits::default(), Some(2), 1)
+                .unwrap();
         assert!(quota.entries.is_empty());
 
         let depth_64 = format!("a{}=accepted", "[x]".repeat(64));
@@ -877,15 +863,9 @@ mod tests {
         .unwrap();
         assert_eq!(accepted.entries.len(), 1);
         assert_eq!(
-            parse_one_level_header_with_php_ini_limits(
-                b"a=ok",
-                Limits::default(),
-                None,
-                65,
-            )
-            .unwrap_err(),
+            parse_one_level_header_with_php_ini_limits(b"a=ok", Limits::default(), None, 65,)
+                .unwrap_err(),
             Error::NestingLevel
         );
     }
-
 }

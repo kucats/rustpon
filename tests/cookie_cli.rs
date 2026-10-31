@@ -197,7 +197,10 @@ fn run_nesting(header: &[u8], level: &str, max_vars: Option<&str>) -> (bool, Str
 fn cookie_cli_configurable_nesting_zero_and_overflow_reset() {
     let (ok, stdout, stderr) = run_nesting(b"a=old; a[x]=discarded; b=ok", "0", None);
     assert!(ok, "{stderr}");
-    assert_eq!(stdout, "{\"cookie_tree\":[\"a\",[[[\"s\",\"62\"],[\"s\",\"6f6b\"]]]]}\n");
+    assert_eq!(
+        stdout,
+        "{\"cookie_tree\":[\"a\",[[[\"s\",\"62\"],[\"s\",\"6f6b\"]]]]}\n"
+    );
 
     let (ok, stdout, stderr) =
         run_nesting(b"a[x]=old; a[x][y]=discarded; b=too_late", "1", Some("2"));
