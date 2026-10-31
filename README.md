@@ -1937,15 +1937,21 @@ At the default depth, an over-depth path (65 or more complete bracket
 levels) causes PHP 8.4 HTTP SAPI to remove the previously registered normalized root, discards that
 variable, and may register a later valid occurrence of the same name.
 The Rust projection now matches this behavior; the ignored wire name
-still counts against `max_input_vars`. Malformed bracket paths, including
-unfinished nested brackets and an opening bracket after arbitrary trailing
-text, still fail closed with `UnsupportedArrayName`. Exhausted append
-indices fail closed with `AppendExhausted` rather than wrapping.
+still counts against `max_input_vars`. PHP 8.4 HTTP SAPI ignores
+noncontiguous suffixes after the last complete bracket: `a[x]junk[y]`
+registers `a[x]`, and `a[x][` also registers `a[x]`. A later valid
+assignment can overwrite that leaf; the wire pair still consumes
+`max_input_vars`. The same behavior is implemented in the Rust array
+projection and covered by HTTP SAPI differential tests. A bracket inside a
+completed index remains part of that key (for example, `a[x][y[z]` has
+second-level key `y[z`). An exhausted `[]` append is ignored without
+wrapping or rejecting unrelated subsequent Cookie variables.
 
 Linux CI compares the default 64-level boundary and configured 127-/128-level
 registration against PHP 8.4 HTTP SAPI, with 129-level overflow, root removal,
 re-registration and independent input-variable quotas. Rust tests cover the
-configured boundary and malformed inputs on Linux/macOS. The explicit 128-level
+configured boundary, truncated suffixes, and resource limits on Linux/macOS.
+The explicit 128-level
 maximum bounds the stack-index table and is distinct from PHP's default 64;
 no compatibility is claimed for PHP INI settings greater than 128. This remains standalone request metadata projection,
 not native Zend/$_COOKIE integration, an FPM implementation, or a claim
