@@ -924,13 +924,8 @@ mod tests {
         .unwrap();
         assert!(quota.entries.is_empty());
         assert_eq!(
-            parse_one_level_header_with_php_ini_limits(
-                b"a=ok",
-                Limits::default(),
-                None,
-                129,
-            )
-            .unwrap_err(),
+            parse_one_level_header_with_php_ini_limits(b"a=ok", Limits::default(), None, 129,)
+                .unwrap_err(),
             Error::NestingLevel
         );
     }
