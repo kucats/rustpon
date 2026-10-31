@@ -1992,8 +1992,13 @@ PHP `max_input_vars=0` admits no Cookie variables. Each nonempty wire name
 consumes a slot, including duplicates and names PHP ignores because the root
 starts with `[`; empty names (`=value`) and separator-only segments do not.
 Once the quota is reached, later variables are not registered or decoded.
-Every remaining nonempty wire segment still counts against the independent
-hard `Limits::pairs` budget, including variables skipped by PHP's quota.
+The independent hard `Limits::pairs` budget counts **all** semicolon-delimited
+wire components, including empty components (and a trailing empty component),
+even after PHP's variable quota is exhausted. PHP ignores blank components
+for `max_input_vars`, but their scanning still costs parser work. An entirely
+empty header consumes no hard pair slots. The default hard ceiling is 128.
+This deliberately stricter resource limit can reject separator floods that
+PHP 8.4 itself accepts; valid requests within the budget preserve PHP's tree.
 An over-budget header fails without publishing partial JSON; PHP's
 `max_input_vars` must not bypass the server's resource limit.
 The entire header still undergoes hard byte-size and CR/LF/NUL validation.

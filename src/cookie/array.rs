@@ -263,6 +263,16 @@ fn parse_one_level_header_inner(
     let mut nodes = 0usize;
 
     'segments: for segment in header.split(|&byte| byte == b';') {
+        // A blank component does not register with PHP, but scanning it
+        // still consumes parser work. Charge every wire component (including
+        // empty components and a trailing separator) to the independent
+        // hard pair budget. An entirely absent header has no components.
+        if !header.is_empty() {
+            pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
+            if pairs > limits.pairs {
+                return Err(Error::Pairs);
+            }
+        }
         let segment = segment.trim_ascii_start();
         if segment.is_empty() {
             continue;
@@ -282,10 +292,6 @@ fn parse_one_level_header_inner(
             } else {
                 *remaining -= 1;
             }
-        }
-        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
-        if pairs > limits.pairs {
-            return Err(Error::Pairs);
         }
         if skipped_by_php_quota || raw_name.is_empty() {
             continue;
@@ -773,6 +779,42 @@ mod tests {
                 b"a[x]=one; b=two",
                 Limits::default(),
                 0,
+            )
+            .unwrap()
+            .entries
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn blank_cookie_array_components_consume_hard_work_budget() {
+        let limits = Limits {
+            pairs: 2,
+            ..Limits::default()
+        };
+        assert_eq!(
+            parse_one_level_header(b";;; a[x]=one", limits).unwrap_err(),
+            Error::Pairs
+        );
+        assert_eq!(
+            parse_one_level_header_with_php_max_input_vars(b";;; a[x]=one", limits, 0)
+                .unwrap_err(),
+            Error::Pairs
+        );
+        let accepted =
+            parse_one_level_header_with_php_max_input_vars(b"; a[x]=one", limits, 1).unwrap();
+        assert_eq!(accepted.entries.len(), 1);
+        let Value::Array(array) = &accepted.entries[0].value else {
+            panic!("expected registered array");
+        };
+        assert_eq!(array.elements[0].value, Value::Scalar(b"one".to_vec()));
+        assert!(
+            parse_one_level_header(
+                b"",
+                Limits {
+                    pairs: 0,
+                    ..Limits::default()
+                }
             )
             .unwrap()
             .entries

@@ -163,6 +163,16 @@ fn parse_scalar_header_inner(
     let mut pairs = 0usize;
     let mut retained = 0usize;
     for segment in header.split(|&byte| byte == b';') {
+        // A blank component does not register with PHP, but scanning it
+        // still consumes parser work. Charge every wire component (including
+        // empty components and a trailing separator) to the independent
+        // hard pair budget. An entirely absent header has no components.
+        if !header.is_empty() {
+            pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
+            if pairs > limits.pairs {
+                return Err(Error::Pairs);
+            }
+        }
         let segment = segment.trim_ascii_start();
         if segment.is_empty() {
             continue;
@@ -183,10 +193,6 @@ fn parse_scalar_header_inner(
             } else {
                 *remaining -= 1;
             }
-        }
-        pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
-        if pairs > limits.pairs {
-            return Err(Error::Pairs);
         }
         if skipped_by_php_quota || raw_name.is_empty() {
             continue;
@@ -359,6 +365,41 @@ mod tests {
         assert_eq!(
             parse_scalar_header(b"a=1;;b=2;c=3", quota).unwrap_err(),
             Error::Pairs
+        );
+    }
+
+    #[test]
+    fn blank_cookie_components_consume_hard_work_budget_without_php_registration() {
+        let limits = Limits {
+            pairs: 2,
+            ..Limits::default()
+        };
+        // PHP 8.4 ignores blank Cookie components, including a leading ';'.
+        // A finite parser work quota must still reject separator floods.
+        assert_eq!(
+            parse_scalar_header(b";;; a=1", limits).unwrap_err(),
+            Error::Pairs
+        );
+        assert_eq!(
+            parse_scalar_header_with_php_max_input_vars(b";;; a=1", limits, 0).unwrap_err(),
+            Error::Pairs
+        );
+        let accepted =
+            parse_scalar_header_with_php_max_input_vars(b"; a=one", limits, 1).unwrap();
+        assert_eq!(accepted.entries().len(), 1);
+        assert_eq!(accepted.entries()[0].name.as_slice(), b"a");
+        assert_eq!(accepted.entries()[0].value.as_slice(), b"one");
+        assert!(
+            parse_scalar_header(
+                b"",
+                Limits {
+                    pairs: 0,
+                    ..Limits::default()
+                }
+            )
+            .unwrap()
+            .entries()
+            .is_empty()
         );
     }
 

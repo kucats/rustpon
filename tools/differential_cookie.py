@@ -18,6 +18,7 @@ CASES = [
     ("value-percent-and-plus", b"a=hello+world; p=%41%2B%00"),
     ("quoted-value", b'x="quoted value"; y=ok'),
     ("empty-components", b";foo=1;;bar=2;"),
+    ("blank-components-hard-budget-boundary", b";" * 127 + b"a=1"),
     ("literal-percent-name", b"a%2Eb=foo; a.b=bar"),
     ("binary-escape", b"a=%FF%00; b=tail"),
     ("equals-in-value", b"a=b=c; c=3"),
@@ -40,6 +41,7 @@ CASES = [
 
 ARRAY_CASES = [
     ("two-children", b"a[x]=1; a[y]=2"),
+    ("blank-components-hard-budget-boundary", b";" * 127 + b"a[x]=1"),
     ("superseded-nested-slot", b"a[x][y]=first; a[x]=scalar; a[x][z]=second; b[]=ok"),
     ("duplicate-child-last-wins", b"a[x]=1; a[x]=2; a[y]=3"),
     ("scalar-promoted-to-array", b"a=first; a=second; a[x]=3"),

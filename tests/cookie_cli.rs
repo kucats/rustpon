@@ -28,6 +28,25 @@ fn cookie_cli_emits_binary_safe_first_wins_projection() {
 }
 
 #[test]
+fn cookie_cli_rejects_separator_floods_without_partial_output_in_both_modes() {
+    // 128 separators yield 129 wire segments, over the hard 128 budget.
+    // PHP itself ignores the blank segments; the independent hard quota
+    // prevents their repeated scanning from bypassing resource accounting.
+    let mut header = vec![b';'; 128];
+    header.extend_from_slice(b"a=ok");
+    for array_mode in [false, true] {
+        let (ok, stdout, stderr) = if array_mode {
+            run_array(&header)
+        } else {
+            run(&header)
+        };
+        assert!(!ok);
+        assert!(stdout.is_empty());
+        assert!(stderr.contains("Pairs"), "{stderr}");
+    }
+}
+
+#[test]
 fn cookie_cli_rejects_nested_names_without_partial_json() {
     let (ok, stdout, stderr) = run(b"a=1; nested[x]=2");
     assert!(!ok);
