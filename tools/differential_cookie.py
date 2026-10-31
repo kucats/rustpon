@@ -169,6 +169,25 @@ LIMIT_CASES = [
     ("overdepth-consumes-quota", b"a=old; a" + b"[x]" * 65 + b"=ignored; b=tail"),
 ]
 
+# These inputs are valid PHP 8.4 Cookie headers and fit tighter,
+# caller-supplied Rust-only admission limits. A PHP comparison must use
+# accepted inputs: deliberate hard-limit rejections are exercised by the
+# separate Rust CLI boundary tests.
+HARD_BUDGET_SCALAR_CASES = [
+    ("pairs-exact", b"a=1; b=2", ("--max-cookie-pairs", "2")),
+    ("name-exact", b"name=1", ("--max-cookie-name-bytes", "4")),
+    ("value-exact", b"a=%FF", ("--max-cookie-value-bytes", "3")),
+    ("retained-exact", b"a=1", ("--max-cookie-retained-bytes", "2")),
+    ("header-exact", b"a=1", ("--max-cookie-header-bytes", "3")),
+]
+HARD_BUDGET_ARRAY_CASES = [
+    ("pairs-exact", b"a[x]=1; b[y]=2", ("--max-cookie-pairs", "2")),
+    ("name-exact", b"a[x]=1", ("--max-cookie-name-bytes", "4")),
+    ("value-exact", b"a[x]=%FF", ("--max-cookie-value-bytes", "3")),
+    ("retained-exact", b"a[x]=1", ("--max-cookie-retained-bytes", "5")),
+    ("header-exact", b"a[x]=1", ("--max-cookie-header-bytes", "6")),
+]
+
 
 def php_cookie(port, header, key="cookie_pairs"):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
@@ -186,13 +205,14 @@ def php_cookie(port, header, key="cookie_pairs"):
 
 
 def rust_cookie(binary, header, arrays=False, max_input_vars=None,
-                max_input_nesting_level=None):
+                max_input_nesting_level=None, extra_args=()):
     command = [str(binary)] + (["--php-arrays"] if arrays else [])
     if max_input_vars is not None:
         command.extend(["--php-max-input-vars", str(max_input_vars)])
     if max_input_nesting_level is not None:
         command.extend(["--php-max-input-nesting-level",
                         str(max_input_nesting_level)])
+    command.extend(extra_args)
     result = subprocess.run(
         command,
         input=header, capture_output=True, timeout=15, check=False,
@@ -228,6 +248,16 @@ def main():
             except (AssertionError, RuntimeError, ValueError, KeyError) as error:
                 failures += 1
                 print(f"FAIL Cookie {label}: {error}", file=sys.stderr)
+        for label, header, hard_args in HARD_BUDGET_SCALAR_CASES:
+            try:
+                expected = php_cookie(port, header)
+                actual = rust_cookie(args.rust_bin, header, extra_args=hard_args)
+                if expected != actual:
+                    raise AssertionError(f"PHP={expected!r}, Rust={actual!r}")
+                passed += 1
+            except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+                failures += 1
+                print(f"FAIL Cookie hard budget scalar {label}: {error}", file=sys.stderr)
     finally:
         server.terminate()
         server.wait(timeout=10)
@@ -244,6 +274,18 @@ def main():
             except (AssertionError, RuntimeError, ValueError, KeyError) as error:
                 failures += 1
                 print(f"FAIL Cookie array {label}: {error}", file=sys.stderr)
+        for label, header, hard_args in HARD_BUDGET_ARRAY_CASES:
+            try:
+                expected = php_cookie(port, header, key="cookie_tree")
+                actual = rust_cookie(
+                    args.rust_bin, header, arrays=True, extra_args=hard_args,
+                )
+                if expected != actual:
+                    raise AssertionError(f"PHP={expected!r}, Rust={actual!r}")
+                passed += 1
+            except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+                failures += 1
+                print(f"FAIL Cookie hard budget array {label}: {error}", file=sys.stderr)
     finally:
         server.terminate()
         server.wait(timeout=10)
@@ -332,6 +374,7 @@ def main():
     print(
         f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
         f"({len(CASES)} scalar, {len(ARRAY_CASES)} up-to-64-level array, "
+        f"{len(HARD_BUDGET_SCALAR_CASES) + len(HARD_BUDGET_ARRAY_CASES)} tight-hard-budget, "
         f"{4 * (6 + len(LIMIT_CASES))} quota cases, "
         f"{7 * len(NESTING_CASES) + 1} configured nesting cases)"
     )
