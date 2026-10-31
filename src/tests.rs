@@ -763,6 +763,47 @@ fn anonymous_upload_ingress_checks_inode_identity_and_privacy_before_more_bytes(
 }
 
 #[test]
+fn checked_ingress_short_write_stops_after_inode_permission_change() {
+    let spool = Spool::new();
+    let directory = fs::symlink_metadata(&spool.0).unwrap();
+    let mut path = spool.0.clone();
+    let mut file = anonymous_upload(&mut path, directory.dev(), directory.ino()).unwrap();
+    let identity = Some(StagingIdentity::from_metadata(&file.metadata().unwrap()));
+    let guard = file.try_clone().unwrap();
+
+    struct TamperingWriter<'a> {
+        file: &'a mut File,
+        guard: &'a File,
+        writes: usize,
+    }
+    impl Write for TamperingWriter<'_> {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            let count = self.file.write(&bytes[..1])?;
+            self.writes += 1;
+            self.guard
+                .set_permissions(fs::Permissions::from_mode(0o644))?;
+            Ok(count)
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut writer = TamperingWriter {
+        file: &mut file,
+        guard: &guard,
+        writes: 0,
+    };
+    let failure = write_chunk_checked(&mut writer, b"abcdef", || {
+        validate_staged_ingress_source(&guard, identity)
+    })
+    .unwrap_err();
+    assert_eq!(failure.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(writer.writes, 1, "no second byte after a partial write");
+    assert_eq!(file.metadata().unwrap().len(), 1);
+    spool.empty();
+}
+
+#[test]
 fn anonymous_upload_ingress_keeps_binary_content_across_multiple_writes() {
     let spool = Spool::new();
     let payload: Vec<u8> = (0..(BLOCK * 2 + 17))
