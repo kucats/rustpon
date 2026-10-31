@@ -1,0 +1,134 @@
+# Coverage-guided parser fuzzing (research only)
+
+The isolated fuzz workspace adds `libfuzzer-sys = 0.4.13`, pinned to an
+exact version. The upstream rust-fuzz/libfuzzer project uses MIT/Apache-2.0
+for its Rust code and NCSA for bundled LLVM libFuzzer code. This dependency
+is not linked into the production parser or FFI crate.
+
+With nightly Rust and cargo-fuzz installed, run from the repository root:
+
+```sh
+cargo +nightly fuzz run urlencoded -- -max_len=8192 -max_total_time=120
+cargo +nightly fuzz run multipart -- -max_len=8193 -max_total_time=120
+```
+
+For multipart the first byte chooses one of four legal MIME boundaries;
+ASCII `0` selects `b` and ASCII `1` selects `AaB03x`. The remaining
+bytes are the multipart body. For URL-encoded input all bytes are body bytes.
+
+Each target checks that whole-body, five chunk sizes and the blocking-Read
+adapter agree on accept/reject. Accepted requests must have identical ordered
+metadata, raw field bytes, statistics and copied upload bytes. Rejected inputs
+may have different first quota errors due to preflight order. A fresh private
+0700 directory is used for each multipart input and checked for persistent
+staging files after every parse. Inputs and resource budgets are bounded.
+
+Linux CI checks fuzz formatting, compiles both targets and executes fixed
+seed tests. This does **not** mean long-running fuzz campaigns or sanitizers
+have completed. Existing PHP 8.4 CLI/SAPI differential tests remain the
+compatibility oracle. A PHP-FPM production rollout remains prohibited without
+further lifecycle testing and independent security review.
+
+## Bounded Linux CI mutation campaign
+
+Linux CI additionally **executes** both libFuzzer binaries with the checked-in
+seed corpora, fixed seed `20261026`, at most 256 executions per target and
+a 20-second time budget per target. This is a short mutation smoke campaign,
+not a long-running sanitizer or exhaustive coverage campaign. The binaries
+are built in the isolated fuzz workspace; no fuzzing dependency is introduced
+into the production parser or FFI.
+
+For every successfully parsed nonempty upload, the multipart harness injects
+destination `StorageFull` errors after 0, 1, half and all-but-one bytes.
+It checks the exact partial destination prefix, then copies the original
+staged upload again from offset zero and verifies the complete byte sequence.
+The spool is checked for leaked staged files after every parse. These checks
+exercise the caller-visible nontransactional copy contract; callers still
+must discard any partially written destination.
+
+## Admission boundary fuzz target
+
+`admission` fuzzes the **consuming** server-policy handoff, not just the
+wire decoder. It compares independently projected typed FILES metadata,
+checks byte-for-byte accepted upload copies, and asserts rejected/overwritten
+wire indices cannot be copied. For every parsable body it replays the request
+under a one-byte-too-small server body limit, a one-byte-too-small file limit
+(when applicable), and a zero-byte FILES metadata budget. Each denial must
+release staged descriptors and leave the private spool empty. Inputs remain
+bounded to 8192 body bytes and no external dependency is added.
+
+```sh
+cargo +nightly fuzz run admission -- -max_len=8193 -max_total_time=120
+```
+
+CI also executes a fixed-seed 256-run mutation smoke campaign for this target.
+The existing PHP 8.4 SAPI oracle includes advisory MAX_FILE_SIZE collisions,
+zero-byte uploads and binary replacements. Short smoke runs do not establish
+long-term coverage or native PHP-FPM safety.
+
+## Instrumented sanitizer-coverage CI (Linux)
+
+The `fuzz-sanitized` GitHub Actions job uses **nightly Rust** and the
+version-pinned `cargo-fuzz 0.13.2` CLI. Unlike directly running a
+`cargo build`-produced libFuzzer binary, `cargo fuzz run` enables
+libFuzzer's **SanitizerCoverage** feedback and **AddressSanitizer** for
+the fuzz harness and Rust parser dependency. The job executes all three
+targets (`urlencoded`, `multipart`, `admission`) with deterministic
+seed `20261026`, 256 executions and a 30-second safety limit each.
+The separate Linux/macOS stable-toolchain checks continue to run.
+
+A failing fuzz run stops CI and uploads any `fuzz/artifacts/` crash
+inputs as a GitHub Actions artifact (14-day retention). These inputs
+are **untrusted**: reproduce in an isolated environment, minimize using
+`cargo +nightly fuzz tmin <target> <crash-file>`, then add a synthetic,
+bounded, deterministic regression to the checked-in corpus or unit tests.
+Never add private request bodies or credentials to the corpus.
+
+For a local instrumented reproduction, install the pinned CLI with
+`cargo install cargo-fuzz --version 0.13.2 --locked`, install nightly,
+and run `cargo +nightly fuzz run --sanitizer address admission -- -runs=256`.
+The campaign is deliberately short: a successful run does not prove
+complete coverage, leak freedom, or PHP-FPM safety. The regular PHP 8.4
+CLI/SAPI differential tests remain independent of sanitizer findings.
+
+## Request cancellation and worker reuse fuzz target
+
+The `lifecycle` target fuzzes both URL-encoded and multipart request
+cancellation at five byte offsets: before input, after the first byte,
+midstream, just before EOF and after the complete body. It checks that
+cancelled parsers reject subsequent feeds, failed parsers retain their
+original error, and fresh requests parse identically after each abort.
+Multipart runs also check that the private spool has no named staging
+files after cancellation. This covers a simulated request lifecycle,
+not actual PHP-FPM worker shutdown or all operating-system FD leaks.
+
+```sh
+cargo +nightly fuzz run --sanitizer address lifecycle -- -max_len=8194 -max_total_time=120
+```
+
+The Linux sanitizer CI job runs 256 additional coverage-guided mutations
+using two synthetic initial seeds. These seeds contain no private data.
+
+## Cookie scalar/array policy fuzzing
+
+`cookie` covers PHP 8.4-style Cookie header parsing, normalized first-wins
+scalar keys, nested array keys, raw percent-escaped values, append-index
+collisions and intentionally malformed HTTP header bytes. It varies
+`max_input_vars` (0, 1, 2, 3, 128) and `max_input_nesting_level`
+(0, 1, 2, 64, 128), checking deterministic fail-closed results and
+binary-safe JSON serialization. It also verifies that the unlimited policy
+agrees with a quota of 128 when the independent hard wire-pair cap is 128,
+and that no admitted PHP variables makes nesting policy irrelevant.
+Fuzz inputs are capped at 8 KiB plus one selector byte. A checked-in
+synthetic seed exercises binary values and duplicate nested names.
+
+```sh
+cargo +nightly fuzz run --sanitizer address cookie -- -max_len=8193 -max_total_time=120
+```
+
+Linux CI executes 256 instrumented Cookie mutations using the existing
+nightly/ASan toolchain; `cargo test --manifest-path fuzz/Cargo.toml --lib`
+also runs deterministic quota, 129-level depth and malformed-header seeds.
+The separate PHP 8.4 HTTP SAPI differential suite now covers a binary
+duplicate under all four tested `max_input_vars` settings. This is neither
+proof of full PHP Cookie compatibility nor a native SAPI integration.

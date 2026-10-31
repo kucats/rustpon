@@ -1,0 +1,165 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Run tests
+        run: cargo test --offline --locked --all-targets
+      - name: Run Clippy
+        run: cargo clippy --offline --locked --all-targets -- -D warnings
+      - name: Fuzz workspace formatting (Linux)
+        if: runner.os == 'Linux'
+        run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+      - name: Compile and smoke-test fuzz targets (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo check --manifest-path fuzz/Cargo.toml --bins
+          cargo test --manifest-path fuzz/Cargo.toml --lib
+      - name: FFI formatting
+        run: cargo fmt --manifest-path ffi/Cargo.toml -- --check
+      - name: FFI Rust tests
+        run: cargo test --manifest-path ffi/Cargo.toml --offline --all-targets
+      - name: FFI Clippy
+        run: cargo clippy --manifest-path ffi/Cargo.toml --offline --all-targets -- -D warnings
+      - name: FFI C caller smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --manifest-path ffi/Cargo.toml --offline
+          cc -std=c11 -Wall -Wextra -Werror -Iffi/include ffi/tests/abi_smoke.c -Lffi/target/debug -lrustpon_ffi -Wl,-rpath,"$PWD/ffi/target/debug" -o ffi/target/abi-smoke
+          ffi/target/abi-smoke
+          cc -std=c11 -Wall -Wextra -Werror -Iffi/include ffi/tests/scope_smoke.c -Lffi/target/debug -lrustpon_ffi -Wl,-rpath,"$PWD/ffi/target/debug" -o ffi/target/scope-smoke
+          ffi/target/scope-smoke
+      - name: Set up PHP 8.4 reference (Linux)
+        if: runner.os == 'Linux'
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          coverage: none
+          tools: none
+      - name: Build and smoke-test PHP 8.4 RINIT/RSHUTDOWN extension (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          phpize -v
+          php-config --version
+          cd ffi/php_probe
+          phpize
+          ./configure --enable-rustpon-probe
+          make -j2
+          cd ../..
+          python3 tools/php_probe_lifecycle.py --module ffi/php_probe/modules/rustpon_probe.so --library ffi/target/debug/librustpon_ffi.so
+      - name: Compare bounded PHP integer evaluator with PHP CLI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin php_eval
+          python3 tools/differential_php_eval.py --rust-bin target/debug/php_eval
+      - name: Compare with PHP 8.4 parse_str (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          php -v
+          php -l tools/php_projection.php
+          cargo build --offline --locked --bin urlencoded
+          python3 tools/differential_urlencoded.py --rust-bin target/debug/urlencoded
+      - name: Compare URL-encoded Content-Length admission with PHP 8.4 HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_urlencoded_content_length.py --rust-bin target/debug/urlencoded
+      - name: Compare PHP 8.4 GET query strings with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_query_string.py --rust-bin target/debug/urlencoded
+      - name: Compare PHP 8.4 scalar and array Cookie headers with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin cookie
+          python3 tools/differential_cookie.py --rust-bin target/debug/cookie
+      - name: Compare real FFI ABI with PHP 8.4 parse_str (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_ffi.py --library ffi/target/debug/librustpon_ffi.so
+      - name: Verify PHP 8.4 upload error constants (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          php -r 'if (PHP_MAJOR_VERSION !== 8 || PHP_MINOR_VERSION !== 4 || UPLOAD_ERR_CANT_WRITE !== 7 || UPLOAD_ERR_NO_TMP_DIR !== 6) { exit(1); }'
+      - name: Compare PHP 8.4 max_file_uploads with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_file_limit.py --rust-bin target/debug/multipart
+      - name: Compare PHP 8.4 upload_max_filesize with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_upload_size.py --rust-bin target/debug/multipart
+      - name: Compare PHP 8.4 partial uploads with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_partial_upload.py --rust-bin target/debug/multipart
+      - name: Verify PHP 8.4 missing upload temp directory with HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_no_tmp_dir.py
+      - name: Compare PHP 8.4 post_max_size with real HTTP SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_post_max_size.py --rust-bin target/debug/multipart
+      - name: Compare multipart FFI with real PHP 8.4 SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          python3 tools/differential_multipart_ffi.py --library ffi/target/debug/librustpon_ffi.so
+      - name: Compare with PHP 8.4 multipart SAPI (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          php -l tools/multipart_projection.php
+          cargo build --offline --locked --bin multipart
+          python3 tools/differential_multipart.py --rust-bin target/debug/multipart
+
+  fuzz-sanitized:
+    name: Coverage-guided libFuzzer + ASan (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # cargo-fuzz supplies sanitizer-coverage instrumentation and enables
+      # AddressSanitizer for the fuzz target AND its Rust dependencies.
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install pinned cargo-fuzz (isolated research tooling)
+        run: cargo install cargo-fuzz --version 0.13.2 --locked
+      - name: Instrumented libFuzzer campaign (5 targets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +nightly fuzz run --sanitizer address urlencoded -- -runs=256 -max_len=8192 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address multipart -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address admission -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address lifecycle -- -runs=256 -max_len=8194 -max_total_time=30 -seed=20261026
+          cargo +nightly fuzz run --sanitizer address cookie -- -runs=256 -max_len=8193 -max_total_time=30 -seed=20261026
+      - name: Preserve minimized candidates for crash triage
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustpon-fuzz-artifacts-${{ github.sha }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14

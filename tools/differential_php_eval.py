@@ -1,0 +1,2085 @@
+#!/usr/bin/env python3
+"""Deterministic PHP CLI oracle for the deliberately narrow php_eval prototype.
+
+Only supported integer/boolean/null expressions, exact division and signed remainder are compared. Rejections are asserted
+separately; this is not evidence of general PHP language compatibility.
+"""
+import argparse
+import random
+import subprocess
+import sys
+from pathlib import Path
+
+
+FIXED = [
+    "0", "00", "01", "07", "010", "0_7", "00_7", "0o10", "0O10",
+    "0x2a", "0X2A", "0b1010", "0B1010", "1_000", "0xF_F",
+    "0b1_0", "0o7_7", "0x7fff_ffff_ffff_ffff",
+    "0o777777777777777777777",
+    "1", "42", "-1", "+3", "1+2*3", "(1+2)*3",
+    "8-3-2", "2*-3+4", "-(-5)", "1- -2",
+    "9223372036854775807", "0-9223372036854775807",
+    "((3))", "2 * (3 + (4 - 5))", "3+-2",
+]
+
+
+# PHP 8.4 defines eight integer upload status constants. Compare both
+# their exact values and their type, including the intentional gap at 5.
+UPLOAD_ERROR_CONSTANT_PROGRAMS = [
+    "echo UPLOAD_ERR_OK;",
+    "echo UPLOAD_ERR_INI_SIZE;",
+    "echo UPLOAD_ERR_FORM_SIZE;",
+    "echo UPLOAD_ERR_PARTIAL;",
+    "echo UPLOAD_ERR_NO_FILE;",
+    "echo UPLOAD_ERR_NO_TMP_DIR;",
+    "echo UPLOAD_ERR_CANT_WRITE;",
+    "echo UPLOAD_ERR_EXTENSION;",
+] + [
+    f"echo is_int({name});"
+    for name in [
+        "UPLOAD_ERR_OK", "UPLOAD_ERR_INI_SIZE", "UPLOAD_ERR_FORM_SIZE",
+        "UPLOAD_ERR_PARTIAL", "UPLOAD_ERR_NO_FILE", "UPLOAD_ERR_NO_TMP_DIR",
+        "UPLOAD_ERR_CANT_WRITE", "UPLOAD_ERR_EXTENSION",
+    ]
+] + [
+    "echo UPLOAD_ERR_NO_FILE===4;",
+    "echo UPLOAD_ERR_NO_FILE+UPLOAD_ERR_CANT_WRITE;",
+    "echo UPLOAD_ERR_NO_FILE<UPLOAD_ERR_NO_TMP_DIR;",
+    "echo UPLOAD_ERR_OK===false;",
+    "$err=UPLOAD_ERR_PARTIAL; echo $err===3;",
+]
+
+
+# Exact PHP 8.4 error-level integers; E_ALL intentionally excludes E_STRICT.
+ERROR_LEVEL_CONSTANT_PROGRAMS = [
+    f"echo {name};" for name in ["E_ERROR", "E_WARNING", "E_PARSE", "E_NOTICE", "E_CORE_ERROR", "E_CORE_WARNING", "E_COMPILE_ERROR", "E_COMPILE_WARNING", "E_USER_ERROR", "E_USER_WARNING", "E_USER_NOTICE", "E_STRICT", "E_RECOVERABLE_ERROR", "E_DEPRECATED", "E_USER_DEPRECATED", "E_ALL"]
+] + [
+    f"echo is_int({name});" for name in ["E_ERROR", "E_WARNING", "E_PARSE", "E_NOTICE", "E_CORE_ERROR", "E_CORE_WARNING", "E_COMPILE_ERROR", "E_COMPILE_WARNING", "E_USER_ERROR", "E_USER_WARNING", "E_USER_NOTICE", "E_STRICT", "E_RECOVERABLE_ERROR", "E_DEPRECATED", "E_USER_DEPRECATED", "E_ALL"]
+] + [
+    "echo E_ALL & E_STRICT;",
+    "echo E_ALL & E_USER_DEPRECATED;",
+    "echo E_WARNING | E_NOTICE;",
+    "echo E_ALL ^ E_STRICT;",
+    "$mask=E_ERROR|E_WARNING; echo $mask;",
+    "echo E_ERROR===true;",
+    "echo E_ERROR===1;",
+]
+
+
+INTEGER_CONSTANT_PROGRAMS = [
+    "echo PHP_INT_MAX;", "echo PHP_INT_MIN;", "echo PHP_INT_SIZE;",
+    "echo PHP_INT_MAX+0;", "echo PHP_INT_MIN+1;",
+    "echo PHP_INT_MIN/2;", "echo PHP_INT_MIN%-1;",
+    "echo PHP_INT_MAX>>63;", "echo PHP_INT_MIN>>63;",
+    "echo ~PHP_INT_MIN;", "echo PHP_INT_MIN<=>PHP_INT_MAX;",
+    "echo PHP_INT_SIZE*8;", "echo (PHP_INT_MIN+PHP_INT_MAX);",
+    "echo PHP_INT_MAX===9223372036854775807;",
+    "echo PHP_INT_MIN===(-9223372036854775807-1);",
+    "echo PHP_INT_MIN<(0-9223372036854775807);",
+    "echo is_int(PHP_INT_MIN);",
+    "$x=PHP_INT_MAX; $x>>=63; echo $x;",
+    "$x=PHP_INT_MIN; $x%=3; echo $x;",
+    "$x=PHP_INT_MIN; echo $x+1;",
+    "$x=PHP_INT_SIZE; $x*=8; echo $x;",
+]
+
+
+# For this bounded int/bool/null VM, PHP 8.4 predicates for other
+# runtime value kinds must return false without coercing their arguments.
+ABSENT_KIND_PREDICATES = [
+    "is_float", "is_double", "is_string", "is_array", "is_object",
+    "is_resource", "is_iterable", "is_countable",
+]
+# PHP 8.4 coerces the supported int/bool/null values to finite numbers.
+# No float, NAN, INF or numeric string is representable by this evaluator.
+FLOAT_CLASSIFICATION_PROGRAMS = [
+    f"echo {function}({argument});"
+    for function in ["is_finite", "IS_FINITE", "is_infinite", "Is_InFiNiTe", "is_nan", "IS_NAN"]
+    for argument in ["0", "-7", "true", "false", "null", "PHP_INT_MIN", "PHP_INT_MAX", "intval(true)", "(1<2)"]
+] + [
+    "$x=null; echo is_finite($x),is_nan($x),is_infinite($x);",
+    "$x=true; echo is_finite($x),is_nan($x),is_infinite($x);",
+    "echo is_bool(is_finite(0)),is_bool(is_nan(0));",
+]
+
+
+# PHP 8.4's @ operator suppresses undefined-variable warnings in its
+# operand. This bounded VM models that recovery as null, while fatal errors,
+# unsupported syntax, and unsuppressed variable reads remain strict failures.
+ERROR_CONTROL_PROGRAMS = [
+    "echo @1;",
+    "echo @(1+2);",
+    "echo @-3;",
+    "echo @!false;",
+    "echo @@PHP_INT_MAX;",
+    "echo @abs(-7);",
+    "echo @(print 2);",
+    "echo @(int)true;",
+    "echo @~1;",
+    "echo @$missing;",
+    "echo @($missing+1);",
+    "echo @($missing+$other);",
+    "echo @($missing===null);",
+    "echo @($missing==false);",
+    "echo @($missing<1);",
+    "echo @($missing) + 1;",
+    "echo @var_dump($missing);",
+    "echo @($missing+1),2;",
+    "echo @@($missing+1);",
+    "echo @($missing)===null;",
+    "echo @($missing+1),@($other+2);",
+    "$x=2; echo @($x++),$x;",
+]
+
+
+# PHP 8.4 permits a trailing comma in scalar function calls, including
+# multi-argument builtins. empty() is a language construct and rejects it.
+BUILTIN_TRAILING_COMMA_PROGRAMS = [
+    "echo intdiv(9,3,);", "echo intdiv(-9,3, /* c */);",
+    "echo abs(-7,);", "echo abs(null,);",
+    "echo min(3,2,);", "echo min(true,1,);",
+    "echo min(1,1,);", "echo min(3,2,1,);",
+    "echo max(false,0,);", "echo max(1,2,3,);",
+    "echo is_int(1,);", "echo IS_BOOL(false,);",
+    "echo is_null(null,);", "echo is_scalar(true,);",
+    "echo is_numeric(1,);", "echo is_finite(null,);",
+    "echo is_infinite(1,);", "echo is_nan(0,);",
+    "echo is_float(1,);", "echo boolval(1,);",
+    "echo boolval(null,);", "echo intval(true,);",
+    "echo intval(10,);", "echo intval(10,2,);",
+    "echo intval(false,-1,);", "echo is_int(intval(1,),);",
+]
+
+
+CALLABLE_SCALAR_PROGRAMS = [
+    "echo is_callable(0);",
+    "echo IS_CALLABLE(-7);",
+    "echo Is_CaLlAbLe(true,true);",
+    "echo is_callable(false,0);",
+    "echo is_callable(null,false,);",
+    "echo is_callable(1,);",
+    "echo is_callable(1,true,);",
+    "echo is_callable(is_int(1),is_bool(false));",
+    "$x=42; echo is_callable($x),is_bool(is_callable($x,true));",
+]
+
+
+# PHP 8.4 pow() returns an integer for supported scalar operands when
+# the nonnegative exponent's result fits signed 64-bit. Float results are
+# intentionally rejected by the bounded evaluator.
+POW_SCALAR_PROGRAMS = [
+    "echo pow(2,3);", "echo pow(-2,3);", "echo pow(-2,2);",
+    "echo pow(0,0);", "echo pow(2,0);", "echo pow(2,62);",
+    "echo pow(true,3);", "echo pow(false,3);",
+    "echo pow(null,0);", "echo pow(null,true);",
+    "echo pow(PHP_INT_MIN,1);", "echo pow(PHP_INT_MAX,0);",
+    "echo pow(0,PHP_INT_MAX);", "echo pow(1,PHP_INT_MAX);",
+    "echo pow(-1,PHP_INT_MAX);", "echo pow(-1,PHP_INT_MAX-1);",
+    "echo 1**PHP_INT_MAX;",
+    "$x=-1; $x**=PHP_INT_MAX; echo $x;",
+    "echo PoW(3,2);", "echo pow(2,3,);",
+    "echo pow(2,3 /* comment */,);",
+    "echo is_int(pow(2,3));", "echo pow(pow(2,3),2);",
+    "$x=2; echo pow($x++,3),$x;",
+    "echo pow(2,3)+1;", "echo pow(2,3) ?>",
+    "echo pow(var_dump(1),0);",
+    "echo pow(2,3),pow(3,2);",
+]
+
+
+# PHP 8.4 strlen() stringifies the scalar value before counting bytes.
+# The bounded VM currently represents only int/bool/null (no strings).
+STRLEN_SCALAR_PROGRAMS = [
+    "echo strlen(0);",
+    "echo strlen(-123);",
+    "echo strlen(PHP_INT_MIN);",
+    "echo strlen(PHP_INT_MAX);",
+    "echo strlen(true);",
+    "echo strlen(false);",
+    "echo strlen(null);",
+    "echo strlen((bool)0);",
+    "echo strlen(1,);",
+    "echo StRlEn(-9);",
+    "$x=-123; echo strlen($x++),$x;",
+    "echo is_int(strlen(null)),strlen(intval(false));",
+    "echo strlen(var_dump(1));",
+    "echo strlen(strlen(-10));",
+    "echo strlen(1) ?>",
+]
+
+
+ABSENT_KIND_PROGRAMS = [
+    f"echo {function}({argument});"
+    for function in ABSENT_KIND_PREDICATES + ["Is_FlOaT"]
+    for argument in ["0", "-7", "true", "false", "null", "(1<2)", "PHP_INT_MIN", "intval(true)"]
+]
+
+
+# PHP 8.4 accepts no-op semicolons and terminal top-level return.
+# Unreachable statements after return remain deliberately unsupported.
+EMPTY_RETURN_PROGRAMS = [
+    ";", ";;echo 1;;", "print 1;;", "echo 1;; print 2;",
+    "$x=1;;$x+=2;;echo $x;",
+    "echo 1; /*c*/ ; # hello\necho 2;",
+    "echo 1; return;", "echo 1; return 42;",
+    "echo 1; ReTuRn (2+3);", "echo 1; return null;",
+    "echo 1; return 2 ?>", "return 1;", "return;",
+    "return/*c*/ 1;", "echo 1; return; ?>\n",
+]
+
+# PHP 8.4 exit/die terminate CLI execution with an 8-bit status.
+# The evaluator intentionally rejects source following a terminal exit
+# until unreachable statements can be validated without execution.
+EXIT_ZERO_PROGRAMS = [
+    "exit;", "die;", "echo 1; exit();", "echo 1; exit(0);",
+    "echo 1; die(256);", "echo 1; exit(false);",
+    "echo 1; exit(null);", "echo 1; exit(PHP_INT_MIN);",
+    "echo 1; die ?>",
+]
+EXIT_NONZERO_PROGRAMS = [
+    "echo 1; EXIT(2);", "echo 1; die(257);",
+    "echo 1; exit(-1);", "echo 1; exit(true);",
+    "echo 1; exit(1+2);", "echo 1; exit(PHP_INT_MAX);",
+    "echo 1; die(1,);", "echo 1; exit(2) ?>",
+    "echo 1; exit(2); /*c*/",
+]
+
+
+# PHP closing tags can terminate echo/print without a semicolon, and PHP
+# consumes one immediately following CR, LF or CRLF.
+TERMINAL_CLOSE_TAG_PROGRAMS = [
+    "echo 1 ?>", "print 2 ?>", "echo 1,2 ?>",
+    "echo 1 /*c*/ ?>", "echo 1 ?>\n", "echo 1 ?>\r",
+    "echo 1 ?>\r\n", "echo 1; ?>",
+    "echo 1; print 2 ?>", "echo 1; // hi\n ?>",
+    "echo 1; return 2 ?>", "echo 1; exit(0) ?>",
+]
+
+
+# PHP 8.4 emits terminal inline HTML after consuming one newline at ?>.
+# The bounded VM accepts only UTF-8 suffixes without another PHP opener.
+INLINE_TEMPLATE_PROGRAMS = [
+    "echo 1 ?>raw", "echo 1 ?>\n\n", "echo 1 ?>\r\r",
+    "print 2 ?>\t", "echo 1; ?>  ",
+    "echo 7; $x=1 ?>raw", "echo 7; $x=1; $x++ ?>raw",
+    "echo 7; unset($x) ?>raw", "echo 1; return 1; ?> trailing",
+    "echo 1; exit(0) ?>trailing", "echo 1; // ?>trailing",
+    "echo 1 ?>\nhello", "echo 1 ?>\r\nhello",
+    "echo 1 ?>\n\r\n", "echo 1; var_dump(3) ?>hi",
+    "echo 1; print_r(false) ?>yes", "echo 1; $x=1; $x+=2 ?>ok",
+    "echo 1 ?>\r\n\r\n",
+]
+
+
+# With short_open_tag=0, only <?= and <?php followed by PHP opening-tag
+# whitespace (space, tab, CR, LF) or EOF resume PHP execution. All other
+# <? sequences, including XML declarations, remain literal inline HTML.
+INLINE_LITERAL_OPENERS = [
+    "echo 1 ?><?",
+    'echo 1 ?><?xml version="1.0"?>',
+    "echo 1 ?><?foo",
+    "echo 1 ?><?phpx echo 2;",
+    "echo 1 ?><?php?>",
+    "echo 1 ?><? echo 2 ?>",
+    "echo 1 ?><?PHPX",
+    "echo 1 ?><?php\\v echo 2;",
+    "echo 1 ?><?php\\f echo 2;",
+    "echo 1 ?>a<?xml?>b<?foo",
+    "echo 1 ?>\\r\\n<?xml",
+    "echo 1 ?><?xml\\n<?phpx",
+]
+
+
+
+# PHP 8.4 also uses ?> as the statement terminator for assignments,
+# compound assignments, standalone increment/decrement and unset().
+# The bounded VM emits terminal UTF-8 template bytes after the closing tag.
+TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS = [
+    "$x=1 ?>",
+    "echo 7; $x=1 ?>",
+    "echo 7; $x=1 ?>\r\n",
+    "echo 7; $x=1; $x+=2 ?>",
+    "echo 7; $x=1; $x*=3 ?>",
+    "echo 7; $x=1; $x++ ?>",
+    "echo 7; $x=1; ++$x ?>",
+    "echo 7; $x=1; $x-- ?>",
+    "echo 7; $x=1; --$x ?>",
+    "echo 7; $x=1; unset($x) ?>",
+    "echo 7; unset($missing,) ?>",
+    "echo 7; $x=true; $x=(int)$x ?>",
+    "echo 7; $x=1; $x>>=1 ?>",
+    "echo 7; $x=1; // comment\n$x=2 ?>",
+    "echo 7; $x=1; $x += 2 ?>\r",
+]
+
+
+# PHP 8.4 recognizes ASCII-case-insensitive <?php and <?= as a leading
+# implicit echo. These inputs must be sent as-is, without prepending <?php.
+OPEN_TAG_PROGRAMS = [
+    "<?PHP echo 7;", "<?pHp echo 7;", "<?PHP\necho 1;",
+    "<?PHP echo 1 ?>", "<?PHP", "<?= 1 ?>", "<?= 1;",
+    "<?= 1,2 ?>", "<?= 1; echo 2; ?>",
+    "<?= 1 /*c*/ + 2 ?>", "<?= __LINE__ ?>",
+    "<?= true,false,null,42 ?>", "<?= 1 ?>\r\n",
+    "<?= 1; return 0;", "<?= 1; exit(0);",
+]
+
+
+VAR_EXPORT_SCALAR_PROGRAMS = [
+    "var_export(0);", "var_export(-7);", "var_export(PHP_INT_MIN);",
+    "var_export(PHP_INT_MAX);", "var_export(true);", "var_export(false);",
+    "var_export(null);", "VaR_ExPoRt(1,);", "var_export(2,false,);",
+    "var_export(3,0);", "var_export(1); var_export(true);",
+    "echo is_null(var_export(12));", "echo 1,var_export(2),3;",
+    "var_export(var_export(false));", "var_export(1,var_dump(false));",
+    "var_export(1); var_dump(true);", "var_export(1) ?>",
+    "$x=1; var_export($x++); var_export($x);",
+    # PHP 8.4 exports the minimum signed integer as an arithmetic
+    # expression, not as a decimal literal that would parse as float.
+    "var_export(PHP_INT_MIN+1);",
+    "$x=PHP_INT_MIN; var_export($x);",
+    "var_export(0-9223372036854775807-1);",
+    "var_export(PHP_INT_MIN,false);",
+    "echo 1,var_export(PHP_INT_MIN),2;",
+    "var_export(PHP_INT_MIN); var_export(PHP_INT_MAX);",
+]
+
+
+
+# print_r() echoes scalar int/bool/null values, returns bool(true), and
+# evaluates the optional $return flag before emitting. return=true produces
+# a string, which this bounded evaluator deliberately rejects.
+PRINT_R_SCALAR_PROGRAMS = [
+    "print_r(0);", "print_r(-7);", "print_r(true);",
+    "print_r(false);", "print_r(null);", "print_r(PHP_INT_MIN);",
+    "print_r(PHP_INT_MAX);", "PrInT_R(1,);",
+    "print_r(2,false,);", "print_r(3,0);",
+    "print_r(1); print_r(true);",
+    "echo is_bool(print_r(12));", "echo 1,print_r(2),3;",
+    "print_r(print_r(false));", "print_r(1,var_dump(false));",
+    "print_r(1); var_dump(true);", "print_r(1) ?>",
+    "$x=1; print_r($x++); print_r($x);",
+    "echo is_int(print_r(5));", "echo print_r(print_r(7));",
+    "print_r(null,false);", "echo print_r(1,false);",
+]
+
+
+# PHP 8.4 print is also an expression. Check the operand's output
+# precedes the integer-1 result, including nested calls and mixed echo args.
+PRINT_EXPRESSION_PROGRAMS = [
+    "echo print 7;",
+    "echo PRINT 1+2;",
+    "echo (print 7)+2;",
+    "echo 1+print 2;",
+    "echo print print 3;",
+    "echo print 1,2;",
+    "echo print 1+2,print 4;",
+    "echo (print 0)+(print 1);",
+    "echo (print false) === 1;",
+    "echo print_r(2);",
+    "print print 3;",
+    "echo (print 1)===(print 2);",
+    "echo is_int(print 5);",
+    "echo print (print 3);",
+    "echo print 1 ?>",
+    "echo print 1; print 2;",
+]
+
+
+VAR_DUMP_PROGRAMS = [
+    "var_dump(0);",
+    "var_dump(1, -1, true, false, null);",
+    "VaR_DuMp(PHP_INT_MIN, PHP_INT_MAX,);",
+    "var_dump(1+2, is_null(null));",
+    "$x=1; var_dump($x++, ++$x, $x);",
+    "echo 1; var_dump(2); print 3;",
+    "var_dump(0,);",
+    "var_dump(1); var_dump(2);",
+    "var_dump(intdiv(9,3), abs(-7), (1<2));",
+    "var_dump(null) ?>",
+    "var_dump(1); // comment\nvar_dump(2);",
+    "var_dump(__LINE__);",
+    "var_dump((bool)0,(int)true);",
+    "var_dump(is_callable(null), is_finite(0));",
+    "var_dump(1); exit(0);",
+]
+
+
+# var_dump() also returns null as an expression, after emitting the dump
+# for each argument in left-to-right order. These bytes are compared with
+# a real PHP 8.4 CLI, including nested calls and side effects.
+VAR_DUMP_EXPRESSION_PROGRAMS = [
+    "echo var_dump(1);",
+    "echo is_null(var_dump(1,2));",
+    "var_dump(var_dump(true));",
+    "echo 1,var_dump(2),3;",
+    "echo var_dump(1)+2;",
+    "var_dump(var_dump(1),var_dump(2));",
+    "echo is_bool(var_dump(false,));",
+    "echo is_int(var_dump(7));",
+    "$x=1; echo var_dump($x++,++$x),$x;",
+    "echo VaR_DuMp(null);",
+    "echo var_dump(1,2,);",
+    "echo var_dump((int)true, (bool)0, null);",
+]
+
+
+# Multiple output statements may be interleaved with local assignments
+# and unsets; stdout is compared byte-for-byte with the PHP 8.4 CLI.
+MULTI_STATEMENT_PROGRAMS = [
+    "echo 1; echo 2;",
+    "EcHo true,false,null,42; PrInT 7;",
+    "$x=1; echo $x; $x+=2; print $x;",
+    "$x=1; echo $x; unset($x); echo isset($x);",
+    "$x=1; echo $x; $x=2;",
+    "$x=1;",
+    "echo 1; print 2; echo 3;",
+    "$x=null; echo is_null($x); ++$x; print $x;",
+    "$x=PHP_INT_MAX; echo $x; $x-=1; print $x;",
+    "echo __LINE__;\necho __LINE__;",
+]
+
+
+# PHP 8.4 comments are lexical whitespace, including inside expressions.
+# A closing PHP tag inside a line comment ends the comment (raw trailing
+# template output remains outside this bounded evaluator).
+COMMENT_PROGRAMS = [
+    "echo 1/*x*/+2;",
+    "echo/*x*/ 1;",
+    "echo 1; // comment\necho 2;",
+    "echo 1; # comment\necho 2;",
+    "echo 1; /* comment */ echo 2;",
+    "$x/*c*/=/*c*/3; echo $x;",
+    "echo (/*c*/1+2/*c*/);",
+    "echo 1,/*c*/2;",
+    "echo __LINE__; // hi\necho __LINE__;",
+    "echo 1; // comment\r\necho 2;",
+    "echo 1; // comment",
+    "echo 1; # comment",
+    "echo 1; /* comment */",
+    "echo 1;/**/echo 2;",
+]
+
+
+LINE_MAGIC_PROGRAMS = [
+    "echo __LINE__;", "echo __line__;", "echo __LiNe__+1;",
+    "echo (__LINE__*2);", "echo __LINE__,__LINE__;",
+    "\necho __LINE__;", "\recho __LINE__;", "\r\necho __LINE__;",
+    "\n\r\necho __LINE__;", "\n\necho __LINE__+__line__;",
+    "$x=__LINE__;\necho $x+__LINE__;",
+    "echo __LINE__,\r\n__line__,\n__LINE__;",
+    "echo is_int(__LINE__),(__LINE__===1);",
+    "print __LINE__;",
+]
+
+
+TERMINAL_PRINT_PROGRAMS = [
+    "print 0;", "print 42;", "print -1;", "PRINT (true);",
+    "PrInT false;", "print null;", "print (int)true;",
+    "print (bool)0;", "print 1+2*3;", "print 2**3;",
+    "print (1<2);", "print is_null(null);", "print abs(-7);",
+    "print intdiv(9,3);", "$x=4; print $x;",
+    "$x=true; $x++; print $x;", "$x=2; $x+=3; print $x;",
+    "$x=5; unset($x); print isset($x);",
+    "EcHo 1+2;", "ECHO (true);", "eChO is_bool(false);",
+    "PRINT 1<=>2;", "print 0-9223372036854775807-1;",
+    "print (bool)null;", "print (int)(1<2);",
+]
+
+
+ECHO_ARGUMENT_PROGRAMS = [
+    "echo 1,2,3;", "ECHO true,false,null,-7;",
+    "echo (1+2),3*4;", "echo (1),2;",
+    "echo null,false,0;", "echo is_int(1),is_bool(true),is_null(null);",
+    "$x=7; echo $x,($x<3),is_int($x);",
+    "$x=null; echo $x,is_null($x),boolval($x);",
+    "$x=3; $x+=4; echo $x,$x*2,($x===7);",
+    "echo 9223372036854775807,0-9223372036854775807-1;",
+    "echo (int)true,(bool)0,(int)null;",
+    "echo intdiv(9,3),abs(-7),min(1,2);",
+    "echo 1, 2, 3, 4, 5;",
+    "echo (1<<2),(8>>1),(1<=>2);",
+]
+
+
+LOGICAL_NOT_PROGRAMS = [
+    "echo !true;", "echo !false;", "echo !0;", "echo !1;",
+    "echo !-1;", "echo !!true;", "echo !!false;",
+    "echo !(1<2);", "echo !2**0;", "echo !2**2;",
+    "echo !false===true;", "echo !false+2;", "echo !1<2;",
+    "echo !true==false;", "echo !true!==false;",
+    "$flag=false; echo !$flag;", "$x=0; $x=!$x; echo $x;",
+]
+
+BITWISE_NOT_PROGRAMS = [
+    "echo ~0;", "echo ~1;", "echo ~-1;", "echo ~~0;",
+    "echo ~0x7fff_ffff_ffff_ffff;",
+    "echo ~(0-9223372036854775807-1);",
+    "echo ~2**3;", "echo ~2**3+1;", "echo ~(2**3+1);",
+    "echo -~2**3;", "echo ~-2;", "echo !~0;",
+    "echo ~1<=>-2;", "echo ~1===-2;",
+    "echo ~+3;", "echo +~3;", "echo ~-~0;",
+    "$x=5; echo ~$x;", "$x=5; echo ~($x+1);",
+    "$x=1; $x=~$x; echo $x;", "echo ~(1<=>2);",
+]
+
+
+BITWISE_BINARY_PROGRAMS = [
+    "echo 6&3;", "echo 6^3;", "echo 6|3;",
+    "echo 1&2|4^3;", "echo 1|2^3&4;", "echo 7^2|8&3;",
+    "echo 1^2^3;", "echo (1&3)===1;", "echo 1&3===1;",
+    "echo 1&3==1;", "echo 1^3==1;", "echo 1|3==1;",
+    "echo 1|2<3;", "echo true&false;", "echo true^false;",
+    "echo true|false;", "echo 1&true;", "echo 1^true;",
+    "echo 1|true;", "echo -1&0x7fff_ffff_ffff_ffff;",
+    "echo ~0^0x7fff_ffff_ffff_ffff;",
+    "$x=6; $x=$x&3; echo $x;",
+    "$x=6; $x=$x^3; echo $x;",
+    "$x=6; $x=$x|3; echo $x;",
+]
+
+
+ABS_PROGRAMS = [
+    "echo abs(0);", "echo abs(7);", "echo abs(-7);",
+    "echo abs(true);", "echo abs(false);", "echo ABS(-9);",
+    "echo abs(1-10);", "echo abs(-7)+2;",
+    "echo abs(intdiv(-9,2));", "echo intdiv(abs(-9),2);",
+    "echo abs(abs(-3));", "echo abs(0-9223372036854775807);",
+    "$x=-8; echo abs($x);", "$x=true; echo abs($x);",
+]
+
+
+
+MIN_MAX_PROGRAMS = [
+    "echo min(2,3);", "echo max(2,3);",
+    "echo MIN(3,1,2);", "echo MAX(1,3,2);",
+    "echo min(1+2,2*2);", "echo max(1,2,3,4);",
+    "echo min(true,1);", "echo min(1,true);",
+    "echo max(true,2);", "echo max(2,true);",
+    "echo min(false,0);", "echo min(0,false);",
+    "echo min(false,-1);", "echo max(false,-1);",
+    "echo min(true,2,-1);", "echo max(2,true,-1);",
+    "echo min(0-9223372036854775807-1,9223372036854775807);",
+    "echo max(0-9223372036854775807-1,9223372036854775807);",
+    "echo min(max(1,2),3);", "echo max(min(1,2),3);",
+    "echo is_bool(min(true,2));", "echo is_int(max(2,true));",
+    "echo min(1<2,2);", "echo max(0,1<2);",
+    "$x=2; $y=true; echo min($x,$y);",
+    "$x=2; $y=true; echo max($y,$x);",
+]
+
+
+TYPE_PREDICATE_PROGRAMS = [
+    "echo is_int(0);", "echo is_int(-1);", "echo is_int(true);",
+    "echo is_bool(false);", "echo is_bool(1);",
+    "echo IS_BOOL(1<2);", "echo IS_INT(true+0);",
+    "echo is_integer(7);", "echo is_long(false);",
+    "echo is_int(0-9223372036854775807-1);",
+    "echo is_bool(is_int(1));", "echo is_int(intdiv(7,3));",
+    "echo is_bool(abs(-3));",
+    "$x=true; echo is_bool($x);",
+    "$x=3; $x=$x<2; echo is_bool($x);",
+    "$x=false; $x=$x+1; echo is_int($x);",
+]
+
+
+EMPTY_EXPRESSION_PROGRAMS = [
+    "echo empty(0);", "echo empty(1);",
+    "echo EMPTY(false);", "echo empty(null);",
+    "echo empty(1-1);", "echo empty(1<2);",
+    "echo empty(1&2);", "echo empty(intdiv(8,4)-2);",
+    "echo empty(isset($missing));", "echo empty(empty($missing));",
+    "$x=1; echo empty($x-1);", "$x=0; echo empty($x+1);",
+    "$x=7; echo empty(($x));", "$x=0; echo empty(($x));",
+    "$x=null; echo empty($x+0);",
+    "echo is_bool(empty(0));", "echo empty(0)===true;",
+]
+
+
+VARIABLE_PROBE_PROGRAMS = [
+    "echo isset($missing);", "echo empty($missing);",
+    "echo ISSET($missing);", "echo EMPTY($missing);",
+    "$x=null; echo isset($x);", "$x=null; echo empty($x);",
+    "$x=false; echo isset($x);", "$x=false; echo empty($x);",
+    "$x=0; echo isset($x);", "$x=0; echo empty($x);",
+    "$x=-1; echo empty($x);", "$x=7; echo empty($x);",
+    "$x=7; $y=0; echo isset($x,$y,);",
+    "$x=7; $y=null; echo isset($x,$y);",
+    "$x=7; echo isset($x,$missing);",
+    "$x=7; echo !empty($x);",
+    "$x=null; echo is_bool(isset($x));",
+    "$x=0; echo empty($x)===true;",
+    "$x=7; echo isset($x)===true;",
+    # Parentheses around simple lvalues retain isset/empty's undefined-variable
+    # suppression. PHP 8.4 accepts these without warnings.
+    "echo isset(($missing));",
+    "echo isset((($missing)));",
+    "$x=7; echo isset(($x));",
+    "$x=null; echo isset((($x)));",
+    "$x=7; $y=0; echo isset(($x),($y));",
+    "$x=7; echo isset((($x)),(($missing)));",
+    "$x=7; echo isset((($x)),);",
+    "echo empty(($missing));",
+    "echo empty((($missing)));",
+    "echo empty(((( $missing ))));",
+    "echo empty(( $missing /* comment */ ));",
+    "$x=null; echo empty((($x)));",
+    "$x=false; echo empty((($x)));",
+    "$x=7; echo empty((($x)));",
+]
+
+
+INCREMENT_PROGRAMS = [
+    "$x=1; ++$x; echo $x;",
+    "$x=1; $x++; echo $x;",
+    "$x=1; -- $x; echo $x;",
+    "$x=1; $x --; echo $x;",
+    "$x=-3; $x++; ++$x; echo $x;",
+    "$x=0; $x--; echo $x;",
+    "$x=true; $x++; echo is_bool($x);",
+    "$x=false; --$x; echo is_bool($x);",
+    "$x=null; $x++; echo is_int($x);",
+    "$x=null; --$x; echo is_null($x);",
+    "$x=null; ++$x; echo $x;",
+    "$x=1; ++$x; $x+=3; echo $x;",
+    "$x=1; unset($x); $x=3; $x--; echo $x;",
+    "$x=9223372036854775807; --$x; echo $x;",
+    "$x=0-9223372036854775807-1; ++$x; echo $x;",
+]
+
+
+INCREMENT_EXPRESSION_PROGRAMS = [
+    "$x=2; echo ++$x;", "$x=2; echo $x++;",
+    "$x=2; echo ++$x, $x++, $x;",
+    "$x=2; echo $x++ + $x++;",
+    "$x=2; echo ++$x * 3;", "$x=2; echo $x++**2;",
+    "$x=2; echo ++$x**2;", "$x=2; echo 2**$x++;",
+    "$x=2; echo -$x++;", "$x=2; echo ++$x + 1;",
+    "$x=2; echo $x++ + 1;", "$x=2; echo ($x++) + (++$x);",
+    "$x=2; echo ($x++) + ($x--);",
+    "$x=2; echo is_int($x++);", "$x=2; echo ($x++)===2;",
+    "$x=2; echo abs(++$x);", "$x=2; echo $x+++2;",
+    "$x=2; echo $x---2;", "$x=2; print $x++;",
+    "$x=true; echo $x++,is_bool($x);",
+    "$x=null; echo $x++,is_int($x);",
+    "$x=null; echo ++$x,is_int($x);",
+    "$x=null; echo --$x,is_null($x);",
+]
+
+
+UNSET_PROGRAMS = [
+    "$x=1; unset($x); echo isset($x);",
+    "$x=1; unset($x); echo empty($x);",
+    "$x=1; $y=2; unset($x,$y,); echo isset($x,$y);",
+    "$x=1; unset($x); $x=3; echo $x;",
+    "$x=1; unset($missing); echo $x;",
+    "$x=1; UNSET($x); echo empty($x);",
+    "$x=1; $y=2; unset($x); echo isset($y);",
+    "unset($missing); echo isset($missing);",
+    "unset($x,); echo 1;",
+]
+
+
+NULL_PROGRAMS = [
+    "echo null;", "echo NULL;", "echo NuLl;",
+    "echo null===null;", "echo null===0;", "echo null==0;",
+    "echo null==false;", "echo null==-1;", "echo null!=1;",
+    "echo null<=>-1;", "echo -1<=>null;",
+    "echo null<=>0;", "echo null<=>1;",
+    "echo null+2;", "echo 2+null;", "echo null*7;",
+    "echo null|2;", "echo null&2;", "echo null^2;",
+    "echo !null;", "echo !!null;", "echo -null;",
+    "echo boolval(null);", "echo intval(null);",
+    "echo is_null(null);", "echo IS_NULL(false);",
+    "echo is_bool(null);", "echo is_int(null);",
+    "echo is_scalar(null);", "echo is_scalar(true);",
+    "echo is_scalar(0);", "echo is_numeric(null);",
+    "echo is_numeric(true);", "echo is_numeric(-3);",
+    "echo min(null,2);", "echo max(null,2);",
+    "echo min(null,0);", "echo max(null,0);",
+    "echo min(0,null);", "echo max(0,null);",
+    "echo is_null(min(null,1));",
+    "$x=null; echo is_null($x);",
+    "$x=null; $x=$x+1; echo is_int($x);",
+    "$x=NULL; echo boolval($x);",
+]
+
+CAST_PROGRAMS = [
+    "echo (int)true;", "echo (integer)false;",
+    "echo (bool)-3;", "echo (boolean)null;",
+    "echo ( BOOL ) 0;", "echo is_bool((bool)2);",
+    "echo is_int((int)true);", "echo (int)(1<2);",
+    "echo (int)2**3;", "echo (int)-2**2;",
+    "echo (bool)0**0;", "echo (bool)0**2;",
+    "echo (int)(bool)true;", "echo (bool)(int)-7;",
+    "$x=null; $x=(int)$x; echo is_int($x);",
+    "$x=0; $x=(bool)$x; echo is_bool($x);",
+    "echo (int)0-1;", "echo (bool)false===false;",
+    "echo (int)(0-9223372036854775807-1);",
+    "echo (bool) (1<2);", "echo (int) 2**3+1;",
+    "echo (int)~2;", "echo (int)false==0;",
+    "echo (int)boolval(3);", "echo (int)(1<<2);",
+    "echo (bool)(1&2);", "echo (int)true+3;",
+    "echo (boolean)(int)0;", "echo (int) (BOOL) 1;",
+    "echo (int) (int) true;", "echo (int) (1<2) + 1;",
+    "echo is_bool((bool)0**0);", "echo is_int((int)NULL);",
+    "echo (int)intdiv(-7,3);", "echo (bool)min(false,1);",
+    "echo (int)max(true,3);",
+]
+
+
+SCALAR_CONVERSION_PROGRAMS = [
+    "echo boolval(0);", "echo boolval(1);", "echo boolval(-1);",
+    "echo boolval(false);", "echo boolval(true);",
+    "echo BOOLVAL(1<2);", "echo boolval(0-9223372036854775807-1);",
+    "echo intval(0);", "echo intval(-9);",
+    "echo intval(true);", "echo intval(false);",
+    "echo INTVAL(9223372036854775807);",
+    "echo intval(0-9223372036854775807-1);",
+    "echo intval(2<1);", "echo intval(boolval(-3));",
+    "echo intval(7,2);", "echo intval(-42,16);",
+    "echo intval(123,0);", "echo intval(123,1);",
+    "echo intval(123,999);", "echo intval(123,-100);",
+    "echo intval(true,37);", "echo intval(false,-1);",
+    "echo intval(123,true);", "echo intval(123,false);",
+    "echo intval(9223372036854775807,-1);",
+    "echo intval(0-9223372036854775807-1,2);",
+    "echo intval(intdiv(-7,2),-42);",
+    "echo is_int(intval(true,37));",
+    "echo intval(7,intval(true));",
+    "$x=7; $base=-2; echo intval($x,$base);",
+    "echo boolval(intval(false));",
+    "echo is_int(intval(true));", "echo is_bool(boolval(5));",
+    "echo is_bool(intval(true));", "echo is_int(boolval(1));",
+    "echo boolval(1+2*3);", "echo intval(true)+2;",
+    "$x=false; $x=intval($x); echo is_int($x);",
+    "$x=-7; echo boolval($x);",
+]
+
+
+INTDIV_PROGRAMS = [
+    "echo intdiv(7,3);", "echo intdiv(-7,3);",
+    "echo intdiv(7,-3);", "echo intdiv(-7,-3);",
+    "echo intdiv(true,2);", "echo intdiv(false,2);",
+    "echo INTDIV(9,2);", "echo intdiv(9,2)*3;",
+    "echo intdiv(8,intdiv(4,2));",
+    "echo intdiv(5|2,2);",
+    "echo intdiv(0-9223372036854775807-1,1);",
+    "echo intdiv(9223372036854775807,1);",
+    "$x=9; echo intdiv($x,2);",
+    "$x=-9; $y=2; echo intdiv($x,$y);",
+]
+
+
+SHIFT_PROGRAMS = [
+    "echo 1<<2;", "echo 16>>2;", "echo 1<<3+1;",
+    "echo 1<<2<<1;", "echo 1<<2<3;", "echo 1<<2===4;",
+    "echo 1<<2&3;", "echo 1<<2<=>3;",
+    "echo true<<2;", "echo 2<<true;",
+    "echo 1<<63;", "echo 1<<64;", "echo 1<<65;",
+    "echo -1<<64;", "echo -1>>64;", "echo -8>>65;",
+    "echo 1>>64;", "echo (0-9223372036854775807-1)>>63;",
+    "echo (0-9223372036854775807-1)<<1;",
+    "echo 9223372036854775807>>63;",
+    "echo 1<<9223372036854775807;",
+    "$x=3; $x=$x<<2; echo $x;",
+    "$x=-8; echo $x>>2;",
+    "echo (2<<3)+1;", "echo 8>>(1+1);",
+]
+
+
+SPACESHIP_PROGRAMS = [
+    "echo 1<=>2;", "echo 2<=>2;", "echo 3<=>2;",
+    "echo true<=>2;", "echo false<=>-1;", "echo false<=>0;",
+    "echo true<=>false;", "echo 1+2<=>2*2;",
+    "echo (1<=>2)===-1;", "echo (2<=>1)+2;",
+    "echo !0<=>true;", "echo (1<=>2)<0;",
+    "echo (0-9223372036854775807-1)<=>0;",
+    "echo 9223372036854775807<=>(0-9223372036854775807-1);",
+    "$x=4; $y=5; echo $x<=>$y;",
+    "$x=1<=>2; echo $x+2;",
+]
+
+COMPOUND_ASSIGNMENT_PROGRAMS = [
+    "$x=12; $x/=3; echo $x;",
+    "$x=-12; $x/=3; echo $x;",
+    "$x=12; $x/=-3; echo $x;",
+    "$x=-12; $x/=-3; echo $x;",
+    "$x=12; $x/=3*2; echo $x;",
+    "$x=12; $x/=1+2; echo $x;",
+    "$x=true; $x/=1; echo is_int($x);",
+    "$x=false; $x/=2; echo is_int($x);",
+    "$x=null; $x/=2; echo is_int($x);",
+    "$x=6; $x/=true; echo $x;",
+    "$x=0; $x/=-7; echo $x;",
+    "$x=0-9223372036854775807-1; $x/=2; echo $x;",
+    "$x=9223372036854775807; $x/=1; echo $x;",
+    "$x=4; $x/=2; $x+=3; echo $x;",
+    "$x=1; $x/=1<2; echo $x;",
+    "$x=1; $x+=2; echo $x;",
+    "$x=10; $x-=3; echo $x;",
+    "$x=2; $x+=3*4; echo $x;",
+    "$x=2; $x-=1<2; echo $x;",
+    "$x=true; $x+=2; echo is_int($x);",
+    "$x=false; $x-=1; echo $x;",
+    "$x=null; $x-=3; echo $x;",
+    "$x=5; $x+=true; echo $x;",
+    "$x=0-9223372036854775807-1; $x+=1; echo $x;",
+    "$x=9223372036854775807; $x-=1; echo $x;",
+    "$x=1; $x+=2; $x-=3; echo is_int($x);",
+    "$x=3; $x*=4; echo $x;",
+    "$x=-7; $x*=-3; echo $x;",
+    "$x=2; $x*=3+4; echo $x;",
+    "$x=2; $x*=3*4; echo $x;",
+    "$x=true; $x*=3; echo $x;",
+    "$x=false; $x*=3; echo $x;",
+    "$x=null; $x*=3; echo is_int($x);",
+    "$x=5; $x*=false; echo $x;",
+    "$x=7; $x*=true; echo $x;",
+    "$x=1; $x*=3; $x+=2; echo $x;",
+    "$x=9223372036854775807; $x*=1; echo $x;",
+    "$x=0-9223372036854775807-1; $x*=1; echo $x;",
+    "$x=0-9223372036854775807-1; $x*=0; echo $x;",
+    "$x=7; $x%=3; echo $x;",
+    "$x=-7; $x%=3; echo $x;",
+    "$x=7; $x%=-3; echo $x;",
+    "$x=-7; $x%=-3; echo $x;",
+    "$x=7; $x%=3+4; echo $x;",
+    "$x=7; $x%=true; echo $x;",
+    "$x=true; $x%=3; echo is_int($x);",
+    "$x=false; $x%=3; echo $x;",
+    "$x=null; $x%=3; echo is_int($x);",
+    "$x=0-9223372036854775807-1; $x%=-1; echo $x;",
+    "$x=9223372036854775807; $x%=2; echo $x;",
+    "$x=7; $x%=1<2; echo $x;",
+    "$x=6; $x&=3; echo $x;",
+    "$x=6; $x^=3; echo $x;",
+    "$x=6; $x|=3; echo $x;",
+    "$x=true; $x&=3; echo is_int($x);",
+    "$x=false; $x|=4; echo $x;",
+    "$x=null; $x^=7; echo $x;",
+    "$x=1; $x|=2^3; echo $x;",
+    "$x=1; $x&=2|4; echo $x;",
+    "$x=-1; $x&=0x7fff_ffff_ffff_ffff; echo $x;",
+    "$x=0-9223372036854775807-1; $x^=-1; echo $x;",
+    "$x=0-9223372036854775807-1; $x|=1; echo $x;",
+    "$x=1; $x|=true; echo is_int($x);",
+    "$x=7; $x^=false; echo $x;",
+    "$x=0; $x&=null; echo is_int($x);",
+    "$x=3; $x&=7; $x^=2; $x|=8; echo $x;",
+    "$x=1; $x<<=3; echo $x;",
+    "$x=-8; $x>>=2; echo $x;",
+    "$x=1; $x<<=63; echo $x;",
+    "$x=-1; $x>>=64; echo $x;",
+    "$x=1; $x<<=64; echo $x;",
+    "$x=1; $x<<=65; echo $x;",
+    "$x=true; $x<<=2; echo is_int($x);",
+    "$x=null; $x>>=2; echo is_int($x);",
+    "$x=7; $x>>=1+1; echo $x;",
+    "$x=1; $x<<=2|4; echo $x;",
+    "$x=1; $x<<=2<<1; echo $x;",
+    "$x=-1; $x<<=63; echo $x;",
+    "$x=0-9223372036854775807-1; $x>>=63; echo $x;",
+    "$x=1; $x<<=true; echo $x;",
+    "$x=4; $x>>=false; echo $x;",
+    "$x=1; $x<<=2; $x>>=1; echo $x;",
+    "$x=2; $x**=3; echo $x;",
+    "$x=-2; $x**=3; echo $x;",
+    "$x=2; $x**=3**2; echo $x;",
+    "$x=3; $x**=2+1; echo $x;",
+    "$x=2; $x**=0; echo $x;",
+    "$x=0; $x**=0; echo $x;",
+    "$x=true; $x**=3; echo is_int($x);",
+    "$x=false; $x**=0; echo $x;",
+    "$x=null; $x**=0; echo $x;",
+    "$x=-1; $x**=63; echo $x;",
+    "$x=2; $x**=3; $x**=2; echo $x;",
+]
+
+
+EXPRESSION_STATEMENT_PROGRAMS = [
+    "1+2; echo 9;",
+    "(1+2)*3; echo 9;",
+    "true; false; null; echo 7;",
+    "abs(-3); echo 4;",
+    "intdiv(8,2); echo 4;",
+    "is_int(7); echo 1;",
+    "isset($missing); echo 1;",
+    "empty($missing); echo 1;",
+    "strlen(PHP_INT_MIN); echo 1;",
+    "(var_dump(7)+1); echo 2;",
+    "(print_r(7)+1); echo 2;",
+    "(var_export(7)+1); echo 2;",
+    "1+2 ?>",
+    "1+2 ?>\r\n",
+    "42;",
+]
+
+
+ASSIGNMENT_PROGRAMS = [
+    "$x=7; echo $x;",
+    "$x=7; $x=$x+2; echo $x*3;",
+    "$foo_1=3; $_bar=4; echo $foo_1*$_bar;",
+    "$A=5; $a=2; echo $A-$a;",
+    "$zero=0; echo -$zero;",
+    "$x=1; $x=2; $x=3; echo $x;",
+    "$x=5; $y=$x*2; echo $y-$x;",
+    "$first=10; $second=$first-7; echo ($first+$second)*2;",
+]
+
+
+def radix_literal(value, radix, separator=False):
+    if radix == 10:
+        digits, prefix = str(value), ""
+    elif radix == 8:
+        digits, prefix = format(value, "o"), "0o"
+    elif radix == 16:
+        digits, prefix = format(value, "x"), "0x"
+    elif radix == 2:
+        digits, prefix = format(value, "b"), "0b"
+    elif radix == 80:
+        digits, prefix = format(value, "o"), "0"
+    else:
+        raise ValueError(radix)
+    if separator and len(digits) > 1:
+        groups = []
+        while digits:
+            groups.append(digits[-3:])
+            digits = digits[:-3]
+        digits = "_".join(reversed(groups))
+    return prefix + digits
+
+
+def generated(rng, depth):
+    if depth == 0:
+        return str(rng.randrange(0, 10))
+    if rng.randrange(4) == 0:
+        return rng.choice(["+", "-"]) + "(" + generated(rng, depth - 1) + ")"
+    lhs = generated(rng, depth - 1)
+    rhs = generated(rng, depth - 1)
+    return "(" + lhs + " " + rng.choice(["+", "-", "*"]) + " " + rhs + ")"
+
+
+def execute(command, code):
+    return subprocess.run(command, input=code, capture_output=True, timeout=10, check=False)
+
+
+def main():
+    cli = argparse.ArgumentParser()
+    cli.add_argument("--rust-bin", type=Path, required=True)
+    cli.add_argument("--php-bin", default="php")
+    args = cli.parse_args()
+
+    rng = random.Random(0x52555354504F4E)
+    expressions = FIXED + [generated(rng, rng.randrange(1, 5)) for _ in range(128)]
+    variable_programs = list(ASSIGNMENT_PROGRAMS)
+    for _ in range(64):
+        start = rng.randrange(-50, 51)
+        delta = rng.randrange(0, 20)
+        subtract = rng.randrange(-10, 11)
+        variable_programs.append(
+            f"$x={start}; $y={delta}; $x=$x+$y; echo ($x - ({subtract}))*2;"
+        )
+    compound_assignments = list(COMPOUND_ASSIGNMENT_PROGRAMS)
+    for _ in range(128):
+        start = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-100000, 100001)
+        extra = rng.randrange(-50, 51)
+        operator = rng.choice(["+=", "-=", "*=", "%="])
+        if operator == "%=":
+            start = rng.randrange(-1000, 1001)
+            delta = rng.choice([n for n in range(-20, 21) if n])
+            extra = 0
+        if operator == "*=":
+            # Keep products in signed i64 while exercising signs and zero.
+            start = rng.randrange(-1000, 1001)
+            delta = rng.randrange(-1000, 1001)
+        compound_assignments.append(
+            f"$x={start}; $y={delta}; $x {operator} $y+({extra}); echo $x;"
+        )
+    # Exact integer division only: PHP / and /= promote non-integral
+    # quotients (and PHP_INT_MIN / -1) to floats, outside this VM.
+    for _ in range(96):
+        quotient = rng.randrange(-10000, 10001)
+        divisor = rng.choice([n for n in range(-50, 51) if n])
+        dividend = quotient * divisor
+        compound_assignments.append(
+            f"$x={dividend}; $y={divisor}; $x /= $y; echo $x;"
+        )
+    # Deterministic bitwise compound assignments, including signed operands,
+    # mixed operators and parenthesized RHS precedence.
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        rhs = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-1000, 1001)
+        operator = rng.choice(["&=", "^=", "|="])
+        compound_assignments.append(
+            f"$x={start}; $y={rhs}; $x {operator} ($y+({delta})); echo $x;"
+        )
+    # Compound shifts use the same fixed-width signed semantics as binary
+    # shifts, including counts >= 64 and negative left operands.
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        count = rng.randrange(0, 76)
+        extra = rng.randrange(0, 5)
+        operator = rng.choice(["<<=", ">>="])
+        compound_assignments.append(
+            f"$x={start}; $y={count}; $x {operator} ($y+({extra})); echo $x;"
+        )
+    # Exact signed-i64 exponentiation; negative exponents and float
+    # promotion are intentionally excluded from the compatibility set.
+    for _ in range(64):
+        start = rng.randrange(-6, 7)
+        exponent = rng.randrange(0, 7)
+        extra = rng.randrange(0, 3)
+        compound_assignments.append(
+            f"$x={start}; $y={exponent}; $x **= ($y+({extra})); echo $x;"
+        )
+    radix_programs = []
+    for _ in range(128):
+        value = rng.randrange(0, 1_000_000)
+        radix = rng.choice([2, 8, 10, 16, 80])
+        literal = radix_literal(value, radix, separator=bool(rng.randrange(2)))
+        radix_programs.append(f"echo ({literal}+3)*2;")
+    for _ in range(64):
+        value = rng.randrange(0, 1_000_000)
+        radix = rng.choice([2, 8, 10, 16, 80])
+        literal = radix_literal(value, radix, separator=bool(rng.randrange(2)))
+        radix_programs.append(f"$x={literal}; echo $x*2;")
+    arithmetic_programs = [
+        "echo 8/4;", "echo 0/2;", "echo 7%3;", "echo -7%3;",
+        "echo 7%-3;", "echo -7%-3;", "echo 8/2*3%5;",
+        "echo 3+8/4*5;", "$x=20; $y=3; echo $x%$y;",
+        "echo (0-9223372036854775807-1)%-1;",
+        "echo (0-9223372036854775807-1)/2;",
+    ]
+    for _ in range(128):
+        quotient = rng.randrange(-1000, 1001)
+        divisor = rng.choice([n for n in range(-20, 21) if n])
+        dividend = quotient * divisor
+        arithmetic_programs.append(f"echo ({dividend})/({divisor});")
+    for _ in range(128):
+        dividend = rng.randrange(-1000, 1001)
+        divisor = rng.choice([n for n in range(-20, 21) if n])
+        arithmetic_programs.append(f"$x={dividend}; $y={divisor}; echo $x%$y;")
+    comparisons = [
+        "echo 1<2;", "echo 1>2;", "echo 2<=2;", "echo 2>=3;",
+        "echo 1==1;", "echo 1===1;", "echo 1!==1;", "echo 1!=2;",
+        "echo 1<>2;", "echo 1+2*3==7;", "echo (2+3)*4>=19;",
+        "echo 0x7fff_ffff_ffff_ffff>0;",
+        "echo (0-9223372036854775807-1)<0;",
+        "$x=4; $y=5; echo $x+1==($y*1);",
+        "$x=4; $y=5; echo $x>$y;",
+    ]
+    comparison_ops = ["<", "<=", ">", ">=", "==", "!=", "===", "!==", "<>"]
+    for _ in range(192):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        op = rng.choice(comparison_ops)
+        comparisons.append(
+            f"$x={left}; $y={right}; echo ($x+1) {op} ($y*2);"
+        )
+    powers = [
+        "echo 2**3;", "echo 2**3**2;", "echo (2**3)**2;",
+        "echo -2**2;", "echo (-2)**2;", "echo (-2)**3;",
+        "echo 2**-(-2);", "echo 0**0;", "echo 0**7;",
+        "echo 2**0;", "echo 2**62;", "echo (-2)**63;", "echo -1**63;",
+        "echo 2**2*3;", "echo 2*3**2;", "echo 2**(1+2);",
+        "echo 1+2**3==9;", "$x=3; echo $x**3;",
+        "echo (0-9223372036854775807-1)**1;",
+    ]
+    for _ in range(192):
+        base = rng.randrange(-5, 6)
+        exponent = rng.randrange(0, 11)
+        delta = rng.randrange(-20, 21)
+        powers.append(f"$x={base}; echo ($x**{exponent})+({delta});")
+    booleans = [
+        "echo true;", "echo false;", "echo TRUE;", "echo FALSE;",
+        "echo true==1;", "echo true===1;", "echo true!==1;",
+        "echo false==0;", "echo false===0;", "echo true>2;",
+        "echo false<-1;", "echo (1<2);", "echo (1<2)===true;",
+        "echo (1<2)+1;", "echo (2>3)+1;", "echo (1<2)*3;",
+        "echo (1<2)**3;", "echo +true;", "echo -true;",
+        "$x=1<2; echo $x;", "$x=2<1; echo $x;",
+        "$x=true; $y=false; echo $x==1;",
+        "$x=2<1; $x=$x+5; echo $x;",
+        "$x=1<2; $x=3; echo $x;",
+    ]
+    for _ in range(192):
+        a = rng.randrange(-50, 51)
+        b = rng.randrange(-50, 51)
+        c = rng.randrange(-10, 11)
+        op = rng.choice(comparison_ops)
+        booleans.append(
+            f"$flag=({a} {op} {b}); echo ($flag+{c})===({c}+({a} {op} {b}));"
+        )
+    logical_not = list(LOGICAL_NOT_PROGRAMS)
+    for value in range(-10, 11):
+        logical_not.append(f"$x={value}; echo !($x<0);")
+        logical_not.append(f"$x={value}; echo !!$x;")
+    bitwise_not = list(BITWISE_NOT_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-500, 501)
+        offset = rng.randrange(-100, 101)
+        bitwise_not.append(f"$x={value}; echo ~($x+({offset}));")
+    bitwise_binary = list(BITWISE_BINARY_PROGRAMS)
+    for _ in range(128):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        op = rng.choice(["&", "^", "|"])
+        bitwise_binary.append(f"$x={left}; $y={right}; echo $x {op} $y;")
+    for _ in range(32):
+        left = rng.randrange(0, 256)
+        middle = rng.randrange(0, 256)
+        right = rng.randrange(0, 256)
+        bitwise_binary.append(f"echo {left} | {middle} ^ {right} & 7;")
+    intdiv_programs = list(INTDIV_PROGRAMS)
+    for _ in range(128):
+        numerator = rng.randrange(-100000, 100001)
+        denominator = rng.choice([n for n in range(-100, 101) if n])
+        intdiv_programs.append(f"echo intdiv({numerator},{denominator});")
+    abs_programs = list(ABS_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-1000, 1001)
+        abs_programs.append(f"$x={value}; echo abs($x+({delta}));")
+    shifts = list(SHIFT_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        count = rng.randrange(0, 72)
+        op = rng.choice(["<<", ">>"])
+        shifts.append(f"$x={value}; echo $x {op} {count};")
+    spaceship = list(SPACESHIP_PROGRAMS)
+    for _ in range(64):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        spaceship.append(f"$x={left}; $y={right}; echo ($x+1)<=>($y*2);")
+    for _ in range(32):
+        left = rng.randrange(-500, 501)
+        right = rng.randrange(-500, 501)
+        spaceship.append(f"$x={left}; $y={right}; echo ($x<=>$y)===-1;")
+    type_predicates = list(TYPE_PREDICATE_PROGRAMS)
+    for _ in range(96):
+        value = rng.randrange(-100000, 100001)
+        predicate = rng.choice(["is_int", "IS_INT", "is_integer", "is_long", "is_bool", "IS_BOOL"])
+        type_predicates.append(f"$x={value}; echo {predicate}($x);")
+    for _ in range(32):
+        left = rng.randrange(-100, 101)
+        right = rng.randrange(-100, 101)
+        predicate = rng.choice(["is_int", "is_bool"])
+        type_predicates.append(f"$x=({left}<{right}); echo {predicate}($x);")
+    variable_probes = list(VARIABLE_PROBE_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        other = rng.choice(["null", "true", "false", "0", "1"])
+        variable_probes.append(
+            f"$x={value}; $y={other}; echo isset($x,$y,);"
+        )
+        variable_probes.append(f"$x={value}; echo empty($x);")
+        variable_probes.append(f"$x={value}; echo isset($x,$missing);")
+    increments = list(INCREMENT_PROGRAMS)
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        amount = rng.randrange(1, 5)
+        op = rng.choice(["++", "--"])
+        placement = rng.choice(["prefix", "postfix"])
+        update = f"{op}$x;" if placement == "prefix" else f"$x{op};"
+        increments.append(f"$x={start}; " + update * amount + " echo $x;")
+        increments.append(f"$x={start}; " + update * amount + " echo is_int($x);")
+    increment_expressions = list(INCREMENT_EXPRESSION_PROGRAMS)
+    for _ in range(96):
+        start = rng.randrange(-100000, 100001)
+        op = rng.choice(["++", "--"])
+        if rng.randrange(2):
+            increment_expressions.append(
+                f"$x={start}; echo $x{op},$x,$x{op};"
+            )
+        else:
+            increment_expressions.append(
+                f"$x={start}; echo {op}$x,($x+3),is_int($x);"
+            )
+    unset_programs = list(UNSET_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        unset_programs.append(f"$x={value}; unset($x); echo isset($x);")
+        unset_programs.append(f"$x={value}; unset($x); $x={other}; echo $x;")
+        unset_programs.append(
+            f"$x={value}; $y={other}; unset($x,$y,); echo empty($y);"
+        )
+        unset_programs.append(f"$x={value}; unset($missing); echo $x;")
+    empty_expressions = list(EMPTY_EXPRESSION_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-500, 501)
+        delta = rng.randrange(-500, 501)
+        empty_expressions.append(f"$x={value}; echo empty($x+({delta}));")
+        empty_expressions.append(f"$x={value}; echo is_bool(empty($x+({delta})));")
+    null_programs = list(NULL_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        null_programs.append(f"echo null<=>{value};")
+        null_programs.append(f"echo {value}<=>null;")
+        null_programs.append(f"echo is_null(min(null,{value}));")
+        null_programs.append(f"echo is_numeric({value});")
+        null_programs.append(f"$x=null; echo is_scalar($x+{value});")
+    scalar_conversions = list(SCALAR_CONVERSION_PROGRAMS)
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        delta = rng.randrange(-1000, 1001)
+        scalar_conversions.append(f"$x={value}; echo boolval($x+({delta}));")
+        scalar_conversions.append(f"$x={value}; echo intval(boolval($x+({delta})));")
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        scalar_conversions.append(f"$x={value}; echo is_bool(boolval($x));")
+        scalar_conversions.append(f"$x={value}; echo is_int(intval($x));")
+    for _ in range(128):
+        value = rng.randrange(-100000, 100001)
+        base = rng.choice([-100, -1, 0, 1, 2, 8, 10, 16, 36, 37, 999])
+        scalar_conversions.append(f"$x={value}; echo intval($x,{base});")
+        scalar_conversions.append(
+            f"$x={value}; echo is_int(intval(boolval($x),{base}));"
+        )
+    casts = list(CAST_PROGRAMS)
+    for _ in range(96):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        cast = rng.choice(["int", "integer", "INT", "bool", "boolean", "BOOL"])
+        casts.append(f"$x={value}; echo ({cast})($x+({other}));")
+        casts.append(f"$x={value}; echo is_bool(({cast})$x);")
+        casts.append(f"echo ({cast})({value}<{other});")
+        casts.append(f"echo ({cast})({value}**2);")
+    extrema_programs = list(MIN_MAX_PROGRAMS)
+    for _ in range(192):
+        function = rng.choice(["min", "max", "MIN", "MAX"])
+        count = rng.randrange(2, 6)
+        operands = [
+            rng.choice(["true", "false", str(rng.randrange(-200, 201))])
+            for _ in range(count)
+        ]
+        expression = f"{function}({','.join(operands)})"
+        extrema_programs.append(f"echo {expression};")
+        extrema_programs.append(f"echo is_bool({expression});")
+    integer_constants = list(INTEGER_CONSTANT_PROGRAMS)
+    for _ in range(96):
+        offset = rng.randrange(0, 100_001)
+        integer_constants.append(f"echo PHP_INT_MAX-({offset});")
+        integer_constants.append(f"echo PHP_INT_MIN+({offset});")
+        integer_constants.append(f"echo (PHP_INT_MAX-({offset}))>(PHP_INT_MIN+({offset}));")
+    # Probe PHP's line accounting for bare CR, bare LF, and CRLF across
+    # different token positions, not just a single hard-coded line number.
+    absent_kind = list(ABSENT_KIND_PROGRAMS)
+    for _ in range(96):
+        function = rng.choice(ABSENT_KIND_PREDICATES)
+        argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
+        absent_kind.append(f"echo {function}({argument});")
+    callable_scalars = list(CALLABLE_SCALAR_PROGRAMS)
+    for _ in range(96):
+        argument = rng.choice(["true", "false", "null", str(rng.randrange(-1000, 1001)), "is_int(1)"])
+        second = rng.choice(["", ",true", ",false", ",0", ",1", ",null", ",true,"])
+        callable_scalars.append(f"echo is_callable({argument}{second});")
+    builtin_trailing_commas = list(BUILTIN_TRAILING_COMMA_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        divisor = rng.randrange(1, 100)
+        function = rng.choice([
+            "abs", "is_int", "is_bool", "is_null", "is_scalar",
+            "is_numeric", "is_finite", "is_nan", "boolval", "intval",
+        ])
+        builtin_trailing_commas.append(f"echo {function}({value},);")
+        builtin_trailing_commas.append(f"echo intdiv({value},{divisor},);")
+        builtin_trailing_commas.append(f"echo min({value},{other},);")
+        builtin_trailing_commas.append(f"echo max({value},{other},);")
+    float_classification = list(FLOAT_CLASSIFICATION_PROGRAMS)
+    for _ in range(96):
+        function = rng.choice(["is_finite", "is_infinite", "is_nan"])
+        argument = rng.choice(["true", "false", "null", str(rng.randrange(-100000, 100001)), "is_int(1)"])
+        float_classification.append(f"echo {function}({argument});")
+    empty_returns = list(EMPTY_RETURN_PROGRAMS)
+    for _ in range(48):
+        left = rng.randrange(-1000, 1001)
+        right = rng.randrange(-1000, 1001)
+        empty_returns.append(
+            ";" * rng.randrange(1, 9) + f"echo {left};"
+            + ";" * rng.randrange(1, 9) + f"return {right};"
+        )
+    multi_statements = list(MULTI_STATEMENT_PROGRAMS)
+    for _ in range(96):
+        first = rng.randrange(-10000, 10001)
+        delta = rng.randrange(-1000, 1001)
+        multi_statements.append(
+            f"$x={first}; echo $x; $x+=({delta}); print $x; echo is_int($x);"
+        )
+    line_magic = list(LINE_MAGIC_PROGRAMS)
+    for count in range(1, 33):
+        newline = ["\\n", "\\r", "\\r\\n"][count % 3]
+        line_magic.append(newline.encode("ascii").decode("unicode_escape") * count + "echo __LINE__;")
+    comments = list(COMMENT_PROGRAMS)
+    for _ in range(48):
+        left = rng.randrange(0, 100)
+        right = rng.randrange(0, 100)
+        comments.append(rng.choice([
+            f"echo {left}/*c*/+/*d*/{right};",
+            f"echo {left}; // c\necho {right};",
+            f"echo {left}; # c\necho {right};",
+            f"echo ({left}/*c*/+{right});",
+        ]))
+    echo_arguments = list(ECHO_ARGUMENT_PROGRAMS)
+    for _ in range(64):
+        left = rng.randrange(-10000, 10001)
+        right = rng.randrange(-10000, 10001)
+        extra = rng.randrange(-100, 101)
+        echo_arguments.append(
+            f"$x={left}; echo $x,({right}<0),({extra}*2);"
+        )
+    export_scalars = list(VAR_EXPORT_SCALAR_PROGRAMS)
+    for _ in range(64):
+        number = rng.randrange(-9223372036854775807, 9223372036854775808)
+        export_scalars.append(f"var_export({number});")
+        export_scalars.append(f"$x={number}; var_export($x); echo is_null(var_export(false));")
+    print_r_scalars = list(PRINT_R_SCALAR_PROGRAMS)
+    for _ in range(64):
+        value = rng.randrange(-100000, 100001)
+        other = rng.randrange(-100000, 100001)
+        print_r_scalars.append(f"$x={value}; print_r($x++); print_r($x);")
+        print_r_scalars.append(
+            f"echo is_bool(print_r({value},false)),print_r({other},false);"
+        )
+    dump_programs = list(VAR_DUMP_PROGRAMS)
+    for _ in range(64):
+        first = rng.randrange(-10000, 10001)
+        delta = rng.randrange(-1000, 1001)
+        dump_programs.append(
+            f"$x={first}; var_dump($x, $x+({delta}), $x++, $x);"
+        )
+    dump_expressions = list(VAR_DUMP_EXPRESSION_PROGRAMS)
+    for _ in range(48):
+        first = rng.randrange(-10000, 10001)
+        second = rng.randrange(-10000, 10001)
+        dump_expressions.append(
+            f"$x={first}; echo is_null(var_dump($x, {second},));"
+        )
+    pow_scalars = list(POW_SCALAR_PROGRAMS)
+    for _ in range(128):
+        base = rng.randrange(-12, 13)
+        exponent = rng.randrange(0, 9)
+        pow_scalars.append(f"echo pow({base},{exponent});")
+    strlen_scalars = list(STRLEN_SCALAR_PROGRAMS)
+    for _ in range(48):
+        number = rng.randrange(-9223372036854775807, 9223372036854775808)
+        strlen_scalars.append(f"echo strlen({number});")
+        strlen_scalars.append(f"$x={number}; echo strlen($x++),$x;")
+    expression_statements = list(EXPRESSION_STATEMENT_PROGRAMS)
+    for _ in range(64):
+        left = rng.randrange(-10000, 10001)
+        right = rng.randrange(-10000, 10001)
+        expression_statements.append(
+            f"({left}+({right})); echo {left}+({right});"
+        )
+    cases = (
+        expression_statements
+        + [f"echo {expr};" for expr in expressions]
+        + variable_programs + radix_programs + arithmetic_programs + comparisons + powers
+        + booleans + logical_not + bitwise_not + bitwise_binary + shifts + spaceship
+        + intdiv_programs + abs_programs + type_predicates + extrema_programs
+        + scalar_conversions + casts + null_programs + variable_probes + empty_expressions
+        + unset_programs + compound_assignments + increments + increment_expressions + TERMINAL_PRINT_PROGRAMS + PRINT_EXPRESSION_PROGRAMS
+        + echo_arguments + integer_constants + UPLOAD_ERROR_CONSTANT_PROGRAMS + ERROR_LEVEL_CONSTANT_PROGRAMS + ERROR_CONTROL_PROGRAMS + line_magic + comments + absent_kind + float_classification + callable_scalars + pow_scalars + strlen_scalars + builtin_trailing_commas + multi_statements + dump_programs + dump_expressions + export_scalars + print_r_scalars + empty_returns + TERMINAL_CLOSE_TAG_PROGRAMS + INLINE_TEMPLATE_PROGRAMS + INLINE_LITERAL_OPENERS + TERMINAL_MUTATION_CLOSE_TAG_PROGRAMS + EXIT_ZERO_PROGRAMS
+    )
+    failures = 0
+    for index, program in enumerate(cases):
+        code = ("<?php " + program).encode("ascii")
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL case={index} program={program!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
+    for index, program in enumerate(OPEN_TAG_PROGRAMS):
+        code = program.encode("ascii")
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL opening_tag={index} program={program!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
+    # Raw HTML after ?> is byte-oriented in PHP, including NUL and invalid UTF-8.
+    # Return/exit suppress the unreachable suffix. Keep PHP re-entry a strict
+    # rejection until the mixed PHP/HTML lexer is implemented.
+    binary_templates = [
+        b"<?php echo 7 ?>\xff\x00\x80",
+        b"<?php echo 7 ?>\r\n\xff",
+        b"<?php echo 7 ?><?xml\xff",
+        b"<?php echo 7 ?>\xc3\xa9\xff",
+        b"<?php echo 7 ?>\xff<?foo",
+        b"<?php echo 7 ?>\x00\xff",
+        b"<?php echo 1 ?>\xff",
+        b"\xef\xbb\xbf<?php echo 7;",
+        b"\xef\xbb\xbf<?=1?>",
+        b"\xef\xbb\xbf<?PHP echo 2; return 1; ?>\xff",
+        b"\xef\xbb\xbf<?php echo 1 ?>\xff",
+        b"<?php echo 7; return 1; ?>\xff",
+        b"<?php echo 7; exit(0); ?>\xff",
+    ]
+    for index, code in enumerate(binary_templates):
+        php = execute([args.php_bin, "-d", "display_errors=0", "-d", "short_open_tag=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode != 0 or rust.returncode != 0 or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL binary_template={index} code={code!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
+    # PHP 8.4 has no 1024-byte stdout cap, but rustpon must fail closed
+    # without partial output when binary HTML crosses its shared byte budget.
+    # Include the three-byte UTF-8 BOM in that budget.
+    for prefix, scalar_bytes in [
+        (b"<?php echo 7 ?>", b"7"),
+        (b"\xef\xbb\xbf<?php echo 7 ?>", b"\xef\xbb\xbf7"),
+    ]:
+        for suffix_len in [1024 - len(scalar_bytes), 1025 - len(scalar_bytes)]:
+            code = prefix + b"\xff" * suffix_len
+            expected = scalar_bytes + b"\xff" * suffix_len
+            php = execute([args.php_bin, "-d", "display_errors=0", "-d", "short_open_tag=0"], code)
+            rust = execute([str(args.rust_bin)], code)
+            within_limit = len(expected) <= 1024
+            if (php.returncode != 0 or php.stdout != expected
+                    or (within_limit and (rust.returncode != 0 or rust.stdout != expected))
+                    or (not within_limit and (rust.returncode == 0 or rust.stdout))):
+                failures += 1
+                print(
+                    f"FAIL binary_output_budget={len(scalar_bytes)}:{suffix_len} "
+                    f"php={php.returncode}:{len(php.stdout)} "
+                    f"rust={rust.returncode}:{len(rust.stdout)}",
+                    file=sys.stderr,
+                )
+
+    # Exit status is part of the CLI observable behavior, not merely stdout.
+    # Keep nonzero exit programs separate from the ordinary success corpus.
+    for index, program in enumerate(EXIT_NONZERO_PROGRAMS):
+        code = ("<?php " + program).encode("ascii")
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if php.returncode == 0 or php.returncode != rust.returncode or php.stdout != rust.stdout:
+            failures += 1
+            print(
+                f"FAIL exit_status={index} program={program!r} "
+                f"php={php.returncode}:{php.stdout!r} "
+                f"rust={rust.returncode}:{rust.stdout!r} "
+                f"stderr={rust.stderr[:160]!r}",
+                file=sys.stderr,
+            )
+
+    invalid = [
+        b"<?php echo @;",
+        b"<?php echo @",
+        b"<?php echo @1/0;",
+        b"<?php echo @($missing/0);",
+        b"<?php echo @($missing+1); echo $missing;",
+        b"<?php echo @($missing+1),$other;",
+        b"<?php echo @($missing++);",
+        b"<?php echo @strange(1);",
+        b"<?php echo print;",
+        b"<?php echo e_error;",
+        b"<?php echo E_ERROR_EXTRA;",
+        b"<?php echo E_ALLX;",
+        b"<?php echo E_STRICT_1;",
+        b"<?php echo E_ERROR();",
+        b"<?php echo print();",
+        b"<?php echo print 1,;",
+        b"<?php 1/0;",
+        b"<?php echo 1; 1/0;",
+        b"<?php 1+;",
+        b"<?php echo 1 ?><?php echo 2;",
+        b"<?php echo 1 ?><?=2?>",
+        b"<?php nonexistent(1);",
+        b"<?php (1+2;",
+        b"<?php 1+2 3;",
+        b"<?php echo var_dump();",
+        b"<?php echo var_dump(1,,2);",
+        b"<?php echo var_dump(1); echo $missing;",
+        b"<?php echo var_dump(1); echo 1/0;",
+        b"<?php echo var_dumpx(1);",
+        b"<?php echo " + b"var_dump(" * 33 + b"1" + b")" * 33 + b";",
+        b"<?=",
+        b"<?= ?>",
+        b"<?= 1",
+        b"<?= ;",
+        b"<?= 1, ?>",
+        b"<?= 1; /* unterminated",
+        b"<?= 1; exit(0); echo 2;",
+        b"<?PHPecho 7;",
+        b"<?php echo 7; $x= ?>",
+        b"<?php echo 1; exit(1,2);",
+        b"<?php echo 1; exit(1/0);",
+        b"<?php echo 1; exit($missing);",
+        b"<?php echo 1; exit(0); echo 2;",
+        b"<?php echo 1; exit(0); /* unterminated",
+        b"<?php echo 1; exit 3;",
+        b"<?php echo 1; exit(1",
+        b"<?php echo 1; diex(1);",
+        b"<?php echo 1; /* unterminated",
+        b"<?php echo 1; /*/",
+        b"<?php echo 1; /* never closes\n",
+        b"<?php echo 1; #[A] echo 2;",
+        b"<?php echo intdiv(9,3,,);",
+        b"<?php echo intdiv(9,);",
+        b"<?php echo abs(1,,);",
+        b"<?php echo min(1,2,,);",
+        b"<?php echo max(1,2,,);",
+        b"<?php echo is_int(1,,);",
+        b"<?php echo boolval(1,,);",
+        b"<?php echo intval(1,2,,);",
+        b"<?php echo empty(1,);",
+        b"<?php echo isset(($x)+1);",
+        b"<?php echo isset(($x[0]));",
+        b"<?php echo empty(($x,));",
+        b"<?php echo empty(($missing+1));",
+        b"<?php echo is_callable();",
+        b"<?php echo is_callable(1,2,3);",
+        b"<?php echo is_callable(1,,);",
+        b"<?php echo is_callable(1,true,,);",
+        b"<?php echo is_callable(1,$missing);",
+        b"<?php echo is_callable(1,1/0);",
+        b"<?php echo is_callablex(1);",
+        b"<?php echo is_callable(1,2",
+        b"<?php echo strlen();",
+        b"<?php echo strlen(1,2);",
+        b"<?php echo strlen(1,,);",
+        b"<?php echo strlenx(1);",
+        b"<?php echo strlen($missing);",
+        b"<?php echo strlen(1/0);",
+        b"<?php echo strlen(1); echo $missing;",
+        b"<?php echo strlen(1,2",
+        b"<?php echo is_finite();",
+        b"<?php echo is_finite(1,2);",
+        b"<?php echo is_infinite(1,2);",
+        b"<?php echo is_nan();",
+        b"<?php echo is_nan(1,2);",
+        b"<?php echo is_finiteness(1);",
+        b"<?php echo is_nanny(1);",
+        b"<?php echo is_nan($missing);",
+        b"<?php echo 1; return 1/0;",
+        b"<?php echo 1; return $missing;",
+        b"<?php echo 1; return 1; echo 2;",
+        b"<?php echo 1; return 1",
+        b"<?php echo 1; return; /* unterminated",
+        b"<?php return 1,2;",
+        b"<?php return 1; ;",
+        b"<?php returner 1;",
+        b"<?php print;",
+        b"<?php echo 1; print 2,3;",
+        b"<?php echo 1; echo 2,;",
+        b"<?php echo 1; echo 1/0;",
+        b"<?php echo 1; echo $missing;",
+        b"<?php echo 1; echo 2; unknown;",
+        b"<?php print 1,2;",
+        b"<?php echo 1,;",
+        b"<?php echo 1,,2;",
+        b"<?php echo (1,2);",
+        b"<?php echo 1,2,;",
+        b"<?php echo 1,$missing;",
+        b"<?php echo 1,1/0;",
+        b"<?php print 1+;",
+        b"<?php printx 1;",
+        b"<?php PRINT 1/0;",
+        b"<?php print $missing;",
+        b"<?php PRINT (int);",
+        b"<?php echoer 1;",
+        b"<?php echo 08;",
+        b"<?php echo 09;",
+        b"<?php echo 0_8;",
+        b"<?php echo 00_8;",
+        b"<?php echo 0o8;",
+        b"<?php echo 0b102;",
+        b"<?php echo 0o78;",
+        b"<?php echo 0x;",
+        b"<?php echo 0b;",
+        b"<?php echo 0o;",
+        b"<?php echo 0x_1;",
+        b"<?php echo 0b_1;",
+        b"<?php echo 0o_1;",
+        b"<?php echo 1_;",
+        b"<?php echo 1__0;",
+        b"<?php echo 0x1_;",
+        b"<?php echo 0b1_;",
+        b"<?php echo 0o7_;",
+        b"<?php echo 0x1g;",
+        b"<?php echo 0x8000000000000000;",
+        b"<?php echo 0xffffffffffffffff;",
+        b"<?php echo 1/2;",
+        b"<?php echo -3/2;",
+        b"<?php echo 1/0;",
+        b"<?php echo 2**-1;",
+        b"<?php echo 0**-1;",
+        b"<?php echo 2**63;",
+        b"<?php echo (-2)**64;",
+        b"<?php echo 2**4294967296;",
+        b"<?php echo 2**;",
+        b"<?php echo 2***3;",
+        b"<?php echo 2**3**;",
+        b"<?php echo 1<;",
+        b"<?php echo 1!==;",
+        b"<?php echo 1<2<3;",
+        b"<?php echo 1<=>;",
+        b"<?php echo 1<=>2<=>3;",
+        b"<?php echo 1<==>2;",
+        # Undefined upload constants must never match case-insensitively or
+        # as a prefix of a supported constant.
+        b"<?php echo upload_err_ok;",
+        b"<?php echo UPLOAD_ERR_OK_extra;",
+        b"<?php echo UPLOAD_ERR_NO_TMP_DIRX;",
+        b"<?php echo UPLOAD_ERR_5;",
+        b"<?php echo UPLOAD_ERR_EXTENSION();",
+        b"<?php echo truex;",
+        b"<?php echo FALSE_1;",
+        b"<?php echo true&&false;",
+        b"<?php echo intdiv();",
+        b"<?php echo intdiv(1);",
+        b"<?php echo intdiv(1,2,3);",
+        b"<?php echo intdiv(1,);",
+        b"<?php echo intdiv(,2);",
+        b"<?php echo intdivide(1,2);",
+        b"<?php echo intdiv(1,2;",
+        b"<?php echo intdiv($missing,2);",
+        b"<?php echo is_int();",
+        b"<?php echo is_bool();",
+        b"<?php echo is_int(1,2);",
+        b"<?php echo is_integer(,1);",
+        b"<?php echo is_long(1;",
+        b"<?php echo is_intx(1);",
+        b"<?php echo is_boolean(true);",
+        b"<?php echo is_int($missing);",
+        b"<?php echo isset();",
+        b"<?php echo empty();",
+        b"<?php echo isset(1);",
+        b"<?php echo empty(0,1);",
+        b"<?php echo empty(0,);",
+        b"<?php echo empty(1+);",
+        b"<?php echo empty($missing+1);",
+        b"<?php echo isset($x,1);",
+        b"<?php echo empty($x,$y);",
+        b"<?php echo empty($x,);",
+        b"<?php echo isset($x,,);",
+        b"<?php echo isset($x;",
+        b"<?php echo empty($x;",
+        b"<?php echo issetx($x);",
+        b"<?php echo emptyx($x);",
+        b"<?php echo isset($x[0]);",
+        b"<?php echo empty($x->foo);",
+        b"<?php $x=1; unset($x); echo $x;",
+        b"<?php unset(); echo 1;",
+        b"<?php unset($x,,); echo 1;",
+        b"<?php unset($x,1); echo 1;",
+        b"<?php unset($x[0]); echo 1;",
+        b"<?php unset($GLOBALS); echo 1;",
+        b"<?php unset($x; echo 1;",
+        b"<?php unset($x) echo 1;",
+        b"<?php unsetx($x); echo 1;",
+        b"<?php echo nullx;",
+        b"<?php echo null();",
+        b"<?php echo is_null();",
+        b"<?php echo is_null(1,2);",
+        b"<?php echo is_scalar();",
+        b"<?php echo is_numeric();",
+        b"<?php echo is_scalar($missing);",
+        b"<?php echo abs();",
+        b"<?php echo abs(1,2);",
+        b"<?php echo abs(,1);",
+        b"<?php echo abs(1;",
+        b"<?php echo absolute(-1);",
+        b"<?php echo abs($missing);",
+        b"<?php echo boolval();",
+        b"<?php echo intval();",
+        b"<?php echo boolval(1,2);",
+        b"<?php echo intval(1,2,3);",
+        b"<?php echo intval(1,,2);",
+        b"<?php echo intval(1,$missing);",
+        b"<?php echo intval(1,1/0);",
+        b"<?php echo intval(,1);",
+        b"<?php echo boolvalue(1);",
+        b"<?php echo integer_value(1);",
+        b"<?php echo boolval($missing);",
+        b"<?php echo intval($missing);",
+        b"<?php echo boolval(1;",
+        b"<?php echo (int);",
+        b"<?php echo (bool);",
+        b"<?php echo (integer)();",
+        b"<?php echo (int)$missing;",
+        b"<?php echo (bool)(1/2);",
+        b"<?php echo (int)2**-1;",
+        b"<?php echo (bool)2**63;",
+        b"<?php echo (string)1;",
+        b"<?php echo (float)1;",
+        b"<?php echo (int)1+;",
+        b"<?php echo (int)(1+);",
+        b"<?php echo (bool)truex;",
+        b"<?php echo (int)(1/0);",
+        b"<?php echo " + b"(int)" * 33 + b"1;",
+        b"<?php echo " + b"+".join([b"(int)1"] * 100) + b";",
+        b"<?php echo min();",
+        b"<?php echo max();",
+        b"<?php echo min(1);",
+        b"<?php echo max(true);",
+        b"<?php echo min(1,);",
+        b"<?php echo max(,2);",
+        b"<?php echo min(1,2;",
+        b"<?php echo minx(1,2);",
+        b"<?php echo maximal(1,2);",
+        b"<?php echo max($missing,2);",
+        # PHP promotes abs(PHP_INT_MIN) to float; intentionally unsupported.
+        b"<?php echo abs(0-9223372036854775807-1);",
+        b"<?php echo 1&;",
+        b"<?php echo 1^;",
+        b"<?php echo 1|;",
+        b"<?php echo &1;",
+        b"<?php echo ^1;",
+        b"<?php echo |1;",
+        b"<?php echo 1<<;",
+        b"<?php echo 1>>;",
+        b"<?php echo <<1;",
+        b"<?php echo >>1;",
+        b"<?php echo 1<<<2;",
+        b"<?php echo 1>>>2;",
+        b"<?php echo 1&&2;",
+        b"<?php echo 1||2;",
+        b"<?php echo 1&$missing;",
+        b"<?php echo 1^$missing;",
+        b"<?php echo !;",
+        b"<?php echo !();",
+        b"<?php echo !!!;",
+        b"<?php echo !$missing;",
+        b"<?php echo true<false<true;",
+        b"<?php echo (1<2;",
+        b"<?php echo 1%0;",
+        b"<?php echo (0-9223372036854775807-1)/-1;",
+        b"<?php echo $x;",
+        b"<?php echo 1+;",
+        b"<?php echo 1--2;",
+        b"<?php echo 1++2;",
+        b"<?php ++$x; echo 1;",
+        b"<?php echo ++$missing;",
+        b"<?php echo $missing++;",
+        b"<?php $x=1; echo ++($x);",
+        b"<?php $x=1; echo ($x)++;",
+        b"<?php $x=1; echo ++$x++;",
+        b"<?php $x=1; echo ($x++)++;",
+        b"<?php $x=9223372036854775807; echo $x++;",
+        b"<?php $x=0-9223372036854775807-1; echo --$x;",
+        b"<?php $x=9223372036854775807; echo 1,$x++;",
+        b"<?php $x=1; $x+++; echo $x;",
+        b"<?php $x=1; ++$x echo $x;",
+        b"<?php $x=9223372036854775807; $x++; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; --$x; echo $x;",
+        b"<?php echo 9223372036854775807+1;",
+        b"<?php echo " + b"(" * 33 + b"1" + b")" * 33 + b";",
+        b"<?php echo " + b"+".join([b"1"] * 130) + b";",
+        b"<?php echo 1;" + b" " * 4096,
+        b"<?php echo $missing;",
+        b"<?php $x+=1; echo $x;",
+        b"<?php $x=1; $x+=; echo $x;",
+        b"<?php $x=1; $x+ =2; echo $x;",
+        b"<?php $x=1; $x-=1/0; echo $x;",
+        b"<?php $x/=1; echo $x;",
+        b"<?php $x=2; $x/=; echo $x;",
+        b"<?php $x=2; $x/ =1; echo $x;",
+        b"<?php $x=2; $x/=0; echo $x;",
+        b"<?php $x=2; $x/=false; echo $x;",
+        b"<?php $x=2; $x/=null; echo $x;",
+        b"<?php $x=2; $x/=1/0; echo $x;",
+        b"<?php $x=3; $x/=2; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; $x/=-1; echo $x;",
+        b"<?php $x=2; $x/=$missing; echo $x;",
+        b"<?php $x*=2; echo $x;",
+        b"<?php $x=2; $x*=; echo $x;",
+        b"<?php $x=2; $x* =3; echo $x;",
+        b"<?php $x=2; $x*=1/0; echo $x;",
+        b"<?php $x%=2; echo $x;",
+        b"<?php $x=2; $x%=; echo $x;",
+        b"<?php $x=2; $x% =3; echo $x;",
+        b"<?php $x=2; $x%=0; echo $x;",
+        b"<?php $x=2; $x%=false; echo $x;",
+        b"<?php $x=2; $x%=null; echo $x;",
+        b"<?php $x=2; $x%=1/0; echo $x;",
+        b"<?php $x&=2; echo $x;",
+        b"<?php $x^=2; echo $x;",
+        b"<?php $x|=2; echo $x;",
+        b"<?php $x=2; $x&=; echo $x;",
+        b"<?php $x=2; $x^=; echo $x;",
+        b"<?php $x=2; $x|=; echo $x;",
+        b"<?php $x=2; $x& =3; echo $x;",
+        b"<?php $x=2; $x^ =3; echo $x;",
+        b"<?php $x=2; $x| =3; echo $x;",
+        b"<?php $x=2; $x&=1/0; echo $x;",
+        b"<?php $x=2; $x|=$missing; echo $x;",
+        b"<?php $x=2; $x&=3&&4; echo $x;",
+        b"<?php $x=2; $x^=3||4; echo $x;",
+        b"<?php $x<<=2; echo $x;",
+        b"<?php $x>>=2; echo $x;",
+        b"<?php $x**=2; echo $x;",
+        b"<?php $x=2; $x**=; echo $x;",
+        b"<?php $x=2; $x** =3; echo $x;",
+        b"<?php $x=2; $x**=-1; echo $x;",
+        b"<?php $x=2; $x**=63; echo $x;",
+        b"<?php $x=2; $x**=1/0; echo $x;",
+        b"<?php $x=2; $x<<=; echo $x;",
+        b"<?php $x=2; $x>>=; echo $x;",
+        b"<?php $x=2; $x<< =3; echo $x;",
+        b"<?php $x=2; $x>> =3; echo $x;",
+        b"<?php $x=2; $x<<=1/0; echo $x;",
+        b"<?php $x=2; $x>>=$missing; echo $x;",
+        # PHP promotes integer overflow to float; intentionally unsupported.
+        b"<?php $x=9223372036854775807; $x+=1; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; $x-=1; echo $x;",
+        b"<?php $x=9223372036854775807; $x*=2; echo $x;",
+        b"<?php $x=0-9223372036854775807-1; $x*=-1; echo $x;",
+        b"<?php $x=1; echo $missing;",
+        b"<?php $x=$x+1; echo $x;",
+        b"<?php $x==1; echo $x;",
+        b"<?php $GLOBALS=2; echo 1;",
+        b"<?php $" + b"a" * 65 + b"=1; echo 1;",
+        b"<?php " + b"".join(f"$v{i}={i};".encode("ascii") for i in range(33)) + b"echo 1;",
+        b"<?php " + b"$x=1;" * 65 + b"echo $x;",
+    ]
+    # PHP's predefined integer constants are case-sensitive and must be
+    # complete identifiers; overflowing operations promote to unsupported
+    # floating-point values in PHP and must fail closed here.
+    invalid.extend([
+        b"<?php echo 7 ?>\xff<?php echo 8;",  # valid PHP re-entry, not yet supported
+        b"<?php echo is_float();",
+        b"<?php echo is_float(1,2);",
+        b"<?php echo is_countable(1,2);",
+        b"<?php echo is_floaty(1);",
+        b"<?php echo is_real(1);",
+        b"<?php echo is_iterable($missing);",
+        b"<?php echo __LINE__suffix;",
+        b"<?php echo __LINE___;",
+        b"<?php echo __LINE__();",
+        b"<?php echo __LINE__+__LINE__suffix;",
+        b"<?php echo php_int_max;",
+        b"<?php echo Php_Int_Min;",
+        b"<?php echo PHP_INT_MAXIMUM;",
+        b"<?php echo PHP_INT_MIN_suffix;",
+        b"<?php echo PHP_INT_SIZE_suffix;",
+        b"<?php echo PHP_INT_MAX+1;",
+        b"<?php echo PHP_INT_MIN-1;",
+        b"<?php echo -PHP_INT_MIN;",
+    ])
+    invalid.extend([
+        b"<?php print_r();",
+        b"<?php print_r(1,2,3);",
+        b"<?php print_r(1,,);",
+        b"<?php print_r(1,true);",  # valid PHP, unsupported string return
+        b"<?php print_r(1,1);",     # valid PHP, unsupported string return
+        b"<?php print_r(1,2,);",   # valid PHP, unsupported string return
+        b"<?php print_r(1); echo $missing;",
+        b"<?php print_r(1/0);",
+        b"<?php print_rx(1);",
+        b"<?php print_r(1); print_r(1,true);",
+        b"<?php var_export();",
+        b"<?php var_export(1,2,3);",
+        b"<?php var_export(1,,);",
+        b"<?php var_export(1,true);",  # valid PHP, unsupported string return
+        b"<?php var_export(1,1);",     # valid PHP, unsupported string return
+        b"<?php var_export(1); echo $missing;",
+        b"<?php var_export(1/0);",
+        b"<?php var_exportx(1);",
+        b"<?php var_dump();",
+        b"<?php var_dump(,1);",
+        b"<?php var_dump(1,,2);",
+        b"<?php var_dump(1,2",
+        b"<?php var_dump(1); var_dump($missing);",
+        b"<?php var_dump(1); echo 1/0;",
+        b"<?php var_dumpx(1);",
+        b"<?php var_dump(" + b",".join([b"PHP_INT_MAX"] * 48) + b");",
+    ])
+    invalid.extend([
+        b"<?php echo pow();",
+        b"<?php echo pow(1);",
+        b"<?php echo pow(1,2,3);",
+        b"<?php echo pow(1,,2);",
+        b"<?php echo pow(2,-1);",  # PHP returns float
+        b"<?php echo pow(-1,-3);",  # PHP returns float
+        b"<?php echo pow(2,63);",  # PHP returns float
+        b"<?php echo pow(2,PHP_INT_MAX);",  # PHP returns float
+        b"<?php echo pow(0,-1);",  # PHP returns INF
+        b"<?php echo pow(PHP_INT_MIN,2);",  # PHP returns float
+        b"<?php echo pow(1,2,,);",
+        b"<?php echo powx(2,3);",
+        b"<?php echo pow(2,3",
+        b"<?php echo pow(2,3); echo $missing;",
+    ])
+    for index, code in enumerate(invalid):
+        rust = execute([str(args.rust_bin)], code)
+        if rust.returncode == 0 or rust.stdout:
+            failures += 1
+            print(
+                f"FAIL invalid={index}: status={rust.returncode} stdout={rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    # Cross-check previously unsupported terminal template output in both
+    # implementations, including the consumed first newline.
+    for index, (code, expected) in enumerate([
+        (b"<?php echo 1 ?> ", b"1 "),
+        (b"<?php echo 1 ?>text", b"1text"),
+        (b"<?php echo 1 ?>\n\n", b"1\n"),
+        (b"<?php echo 1; ?>\r\r", b"1\r"),
+        (b"<?php print 2 ?>\t", b"2\t"),
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode != 0 or php.stdout != expected
+                or rust.returncode != 0 or rust.stdout != expected):
+            failures += 1
+            print(
+                f"FAIL close_tag_template={index} "
+                f"php={php.returncode}:{php.stdout[:80]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r} "
+                f"expected={expected!r}",
+                file=sys.stderr,
+            )
+
+    # PHP 8.4 rejects unterminated block comments at compile time,
+    # including when an earlier echo could otherwise produce output.
+    for index, code in enumerate([
+        b"<?php echo 1; /* unterminated",
+        b"<?php echo 1; /*/",
+        b"<?php echo 1; /* never closes\n",
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        if php.returncode == 0 or b"Unterminated comment" not in php.stderr or php.stdout:
+            failures += 1
+            print(
+                f"FAIL unterminated_comment={index} "
+                f"php={php.returncode}:{php.stdout[:80]!r}:{php.stderr[:120]!r}",
+                file=sys.stderr,
+            )
+
+    # print_r() requires one or two arguments in PHP 8.4. The Rust
+    # research evaluator rejects both arity errors without partial stdout.
+    for index, code in enumerate([
+        b"<?php print_r();",
+        b"<?php print_r(1,2,3);",
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"ArgumentCountError" not in php.stderr
+                or php.stdout or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL print_r_arg_count={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    # The PHP 8.4 oracle must report the same argument-count failure class
+    # for missing/excess strlen() arguments; Rust rejects before publishing.
+    for index, code in enumerate([
+        b"<?php echo strlen();",
+        b"<?php echo strlen(1,2);",
+        b"<?php echo strlen(1,2,);",
+    ]):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"ArgumentCountError" not in php.stderr
+                or php.stdout or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL strlen_arg_count={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    # PHP 8.4 raises TypeError for bitwise not applied to booleans.
+    # Unlike arbitrary unsupported syntax, these are verified on both runtimes.
+    type_errors = [
+        b"<?php echo ~true;",
+        b"<?php echo ~null;",
+        b"<?php echo ~false;",
+        b"<?php echo ~(1<2);",
+        b"<?php echo ~!0;",
+        b"<?php $x=true; echo ~$x;",
+    ]
+    for index, code in enumerate(type_errors):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"TypeError" not in php.stderr
+                or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL bitwise_type_error={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    # PHP 8.4 throws ArithmeticError for negative shift counts.
+    negative_shifts = [
+        b"<?php echo 1<<-1;",
+        b"<?php echo 1>>-1;",
+        b"<?php echo 1<<(0-2);",
+        b"<?php $x=-1; echo 2>>$x;",
+        b"<?php echo 1<<(-9223372036854775807);",
+        b"<?php $x=2; $x<<=-1; echo $x;",
+        b"<?php $x=2; $x>>=-1; echo $x;",
+        b"<?php $x=2; $x<<=(0-2); echo $x;",
+    ]
+    for index, code in enumerate(negative_shifts):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or b"ArithmeticError" not in php.stderr
+                or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL negative_shift={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    # intdiv() raises distinct PHP runtime exceptions for zero divisors
+    # and the one signed-64-bit overflow case.
+    intdiv_errors = [
+        (b"<?php echo intdiv(1,0);", b"DivisionByZeroError"),
+        (b"<?php echo intdiv(1,0*3);", b"DivisionByZeroError"),
+        (b"<?php echo intdiv(0-9223372036854775807-1,-1);", b"ArithmeticError"),
+    ]
+    for index, (code, error_class) in enumerate(intdiv_errors):
+        php = execute([args.php_bin, "-d", "display_errors=0"], code)
+        rust = execute([str(args.rust_bin)], code)
+        if (php.returncode == 0 or error_class not in php.stderr
+                or rust.returncode == 0 or rust.stdout):
+            failures += 1
+            print(
+                f"FAIL intdiv_error={index} php={php.returncode}:{php.stderr[:100]!r} "
+                f"rust={rust.returncode}:{rust.stdout[:80]!r}",
+                file=sys.stderr,
+            )
+
+    print(
+        f"PHP CLI integer-constants/integer/boolean/null/variable/comparison/spaceship/power/bitwise/shift/intdiv/abs/type-predicates/min-max/scalar-conversions/casts/empty-expression/unset-lifecycle/increment-decrement/expression-updates/terminal-print/echo-argument-list/scalar-var-dump/expression-var-dump/scalar-var-export/comments/empty-statements/terminal-close-tag/terminal-binary-template/terminal-return/terminal-exit/absent-kind-predicates/is-callable-scalar/strlen-scalar/pow-integer/print-r-scalar/error-control-undefined-reads differential: "
+        f"{len(cases)} compatible cases, {len(OPEN_TAG_PROGRAMS)} opening-tag cases, {len(binary_templates)} binary-template cases, {len(EXIT_NONZERO_PROGRAMS)} nonzero exit-status cases, {len(invalid)} strict rejections, "
+        f"{len(type_errors)} PHP TypeError rejections, "
+        f"{len(negative_shifts)} PHP shift ArithmeticError rejections, "
+        f"{len(intdiv_errors)} PHP intdiv runtime-error rejections, {failures} failures"
+    )
+    return int(failures != 0)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

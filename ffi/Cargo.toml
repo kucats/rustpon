@@ -1,0 +1,15 @@
+[package]
+name = "rustpon-ffi"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Experimental no-callback C ABI for bounded PHP-style request parsing"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+rustpon = { path = ".." }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
