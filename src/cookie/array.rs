@@ -76,12 +76,7 @@ impl Array {
         Ok(index)
     }
 
-    fn append(
-        &mut self,
-        value: Vec<u8>,
-        nodes: &mut usize,
-        max_nodes: usize,
-    ) -> Result<(), Error> {
+    fn append(&mut self, value: Vec<u8>, nodes: &mut usize, max_nodes: usize) -> Result<(), Error> {
         let index = self.append_index()?;
         self.insert(Key::Integer(index), value, nodes, max_nodes)
     }
@@ -118,11 +113,7 @@ impl Array {
         Ok(array)
     }
 
-    fn append_nested(
-        &mut self,
-        nodes: &mut usize,
-        max_nodes: usize,
-    ) -> Result<&mut Array, Error> {
+    fn append_nested(&mut self, nodes: &mut usize, max_nodes: usize) -> Result<&mut Array, Error> {
         let index = self.append_index()?;
         self.nested_mut(Key::Integer(index), nodes, max_nodes)
     }
