@@ -219,3 +219,22 @@ fn cookie_cli_rejects_unimplemented_ini_nesting_above_hard_limit() {
     assert!(stdout.is_empty());
     assert!(stderr.contains("NestingLevel"), "{stderr}");
 }
+
+#[test]
+fn cookie_cli_configured_128_level_depth_and_129_guard() {
+    let boundary = format!("a{}=accepted", "[x]".repeat(128));
+    let (ok, stdout, stderr) = run_nesting(boundary.as_bytes(), "128", None);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","6163636570746564"]"#));
+
+    let reset = format!("a=old; a{}=ignored; b=kept", "[x]".repeat(129));
+    let (ok, stdout, stderr) = run_nesting(reset.as_bytes(), "128", None);
+    assert!(ok, "{stderr}");
+    assert!(!stdout.contains(r#"["s","61"]"#));
+    assert!(stdout.contains(r#"["s","62"]"#));
+
+    let (ok, stdout, stderr) = run_nesting(b"a[x]=value", "129", None);
+    assert!(!ok);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("NestingLevel"), "{stderr}");
+}

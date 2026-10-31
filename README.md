@@ -1923,14 +1923,14 @@ The independent hard name, pair, header, value and retained-byte quotas
 continue to apply. The explicit
 `cookie::array::parse_one_level_header_with_php_ini_limits` API and
 `cookie --php-arrays --php-max-input-nesting-level N` CLI flag also model
-PHP 8.4's configurable INI nesting limit (0–64), including zero disabling
+PHP 8.4's configurable INI nesting limit (0–128), including zero disabling
 all array registration and an over-depth pair deleting its existing root.
 These settings can be combined with `--php-max-input-vars N` independently.
-Values above 64 fail with `NestingLevel` instead of claiming compatibility
+Values above 128 fail with `NestingLevel` instead of claiming compatibility
 with a configuration the Rust prototype cannot represent.
 
-For an over-depth path (65 or more complete bracket levels), PHP 8.4 HTTP
-SAPI removes the previously registered normalized root, discards that
+At the default depth, an over-depth path (65 or more complete bracket
+levels) causes PHP 8.4 HTTP SAPI to remove the previously registered normalized root, discards that
 variable, and may register a later valid occurrence of the same name.
 The Rust projection now matches this behavior; the ignored wire name
 still counts against `max_input_vars`. Malformed bracket paths, including
@@ -1938,10 +1938,12 @@ unfinished nested brackets and an opening bracket after arbitrary trailing
 text, still fail closed with `UnsupportedArrayName`. Exhausted append
 indices fail closed with `AppendExhausted` rather than wrapping.
 
-Linux CI compares 5-, 6-, 16-, 32-, 64- and 65-level cases with the real
-PHP 8.4 HTTP SAPI, including over-depth root removal and subsequent
-re-registration; Rust tests cover the boundary, quotas and malformed
-inputs on Linux/macOS. This remains standalone request metadata projection,
+Linux CI compares the default 64-level boundary and configured 127-/128-level
+registration against PHP 8.4 HTTP SAPI, with 129-level overflow, root removal,
+re-registration and independent input-variable quotas. Rust tests cover the
+configured boundary and malformed inputs on Linux/macOS. The explicit 128-level
+maximum bounds the stack-index table and is distinct from PHP's default 64;
+no compatibility is claimed for PHP INI settings greater than 128. This remains standalone request metadata projection,
 not native Zend/$_COOKIE integration, an FPM implementation, or a claim
 of full PHP INI compatibility.
 

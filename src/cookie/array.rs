@@ -1,13 +1,15 @@
-//! Experimental bounded PHP 8.4 Cookie registration with 64 array levels.
+//! Experimental bounded PHP 8.4 Cookie registration with configurable nesting.
 //!
-//! The default PHP 8.4 max_input_nesting_level is 64. A deeper path removes
+//! PHP 8.4 defaults max_input_nesting_level to 64; explicit settings up to
+//! 128 are supported. A deeper path removes
 //! its previously registered root without publishing a partial value.
 //! Malformed paths still fail closed; this is not a Zend/SAPI registration API.
 
 use super::{Error, Limits, decode_cookie_value};
 use std::io::{self, Write};
 
-const MAX_ARRAY_DEPTH: usize = 64;
+const MAX_ARRAY_DEPTH: usize = 128;
+const DEFAULT_PHP_DEPTH: usize = 64;
 
 #[derive(Debug, PartialEq, Eq)]
 enum Key {
@@ -116,7 +118,7 @@ struct Entry {
 }
 
 /// Owns a bounded ordered projection of one validated Cookie header.
-/// This slice models scalar roots and PHP's default 64 bracket levels.
+/// This slice models scalar roots and up to 128 configured bracket levels.
 #[derive(Debug, PartialEq, Eq)]
 pub struct CookieTree {
     entries: Vec<Entry>,
@@ -180,7 +182,7 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 /// A trailing suffix after the final ']' is ignored; malformed paths fail
 /// closed without partial output. Hard header/pair/name/value limits remain.
 pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTree, Error> {
-    parse_one_level_header_inner(header, limits, None, MAX_ARRAY_DEPTH)
+    parse_one_level_header_inner(header, limits, None, DEFAULT_PHP_DEPTH)
 }
 
 /// Apply PHP 8.4 HTTP SAPI's Cookie max_input_vars quota before registering
@@ -190,12 +192,12 @@ pub fn parse_one_level_header_with_php_max_input_vars(
     limits: Limits,
     max_input_vars: usize,
 ) -> Result<CookieTree, Error> {
-    parse_one_level_header_inner(header, limits, Some(max_input_vars), MAX_ARRAY_DEPTH)
+    parse_one_level_header_inner(header, limits, Some(max_input_vars), DEFAULT_PHP_DEPTH)
 }
 
 /// Model both PHP 8.4 HTTP SAPI INI limits. A nesting value of zero
 /// rejects every array path by discarding its existing normalized root,
-/// while scalar cookies remain admissible. The independent hard cap of 64
+/// while scalar cookies remain admissible. The independent hard cap of 128
 /// levels is intentional: larger PHP configurations return NestingLevel
 /// rather than silently truncating registration.
 pub fn parse_one_level_header_with_php_ini_limits(
@@ -276,7 +278,7 @@ fn parse_one_level_header_inner(
             });
         if let Some((open, close)) = bracket {
             // Fixed stack storage avoids a separate allocation for bracket
-            // paths while bounding parser work at PHP's default nesting limit.
+            // paths while bounding parser work at the supported nesting cap.
             let mut indexes: [&[u8]; MAX_ARRAY_DEPTH] = [&[]; MAX_ARRAY_DEPTH];
             indexes[0] = &raw_name[open + 1..close];
             let mut depth = 1;
@@ -760,11 +762,11 @@ mod tests {
 
     #[test]
     fn php_cookie_default_64_level_boundary_matches_nested_scalar() {
-        let header = format!("a{}=ok", "[x]".repeat(MAX_ARRAY_DEPTH));
+        let header = format!("a{}=ok", "[x]".repeat(DEFAULT_PHP_DEPTH));
         let tree = parse(header.as_bytes());
         assert_eq!(tree.entries.len(), 1);
         let mut value = &tree.entries[0].value;
-        for _ in 0..MAX_ARRAY_DEPTH {
+        for _ in 0..DEFAULT_PHP_DEPTH {
             let Value::Array(array) = value else {
                 panic!("expected nested array through 64 levels");
             };
@@ -778,7 +780,7 @@ mod tests {
     fn php_cookie_overdepth_discards_prior_root_and_later_registration_recovers() {
         let header = format!(
             "a=old; b=keep; a{}=oversize; a[y]=reborn",
-            "[x]".repeat(MAX_ARRAY_DEPTH + 1)
+            "[x]".repeat(DEFAULT_PHP_DEPTH + 1)
         );
         let tree = parse(header.as_bytes());
         assert_eq!(tree.entries.len(), 2);
@@ -793,7 +795,7 @@ mod tests {
         // Even a discarded over-depth pair consumes a PHP input-variable slot.
         let header = format!(
             "a=old; a{}=ignored; b=excluded",
-            "[x]".repeat(MAX_ARRAY_DEPTH + 1)
+            "[x]".repeat(DEFAULT_PHP_DEPTH + 1)
         );
         let limited =
             parse_one_level_header_with_php_max_input_vars(header.as_bytes(), Limits::default(), 1)
@@ -863,8 +865,72 @@ mod tests {
         .unwrap();
         assert_eq!(accepted.entries.len(), 1);
         assert_eq!(
-            parse_one_level_header_with_php_ini_limits(b"a=ok", Limits::default(), None, 65,)
+            parse_one_level_header_with_php_ini_limits(b"a=ok", Limits::default(), None, 129,)
                 .unwrap_err(),
+            Error::NestingLevel
+        );
+    }
+
+    #[test]
+    fn php_cookie_configured_128_level_boundary_and_overflow_reset() {
+        let accepted = format!("a{}=at_limit; b=keep", "[x]".repeat(128));
+        let tree = parse_one_level_header_with_php_ini_limits(
+            accepted.as_bytes(),
+            Limits::default(),
+            None,
+            128,
+        )
+        .unwrap();
+        assert_eq!(tree.entries.len(), 2);
+        let mut value = &tree.entries[0].value;
+        for _ in 0..128 {
+            let Value::Array(array) = value else {
+                panic!("expected a nested array through configured 128 levels");
+            };
+            assert_eq!(array.elements.len(), 1);
+            value = &array.elements[0].value;
+        }
+        assert_eq!(value, &Value::Scalar(b"at_limit".to_vec()));
+
+        let overflow = format!("a=old; a{}=discarded; b=after", "[x]".repeat(129));
+        let reset = parse_one_level_header_with_php_ini_limits(
+            overflow.as_bytes(),
+            Limits::default(),
+            None,
+            128,
+        )
+        .unwrap();
+        assert_eq!(reset.entries.len(), 1);
+        assert_eq!(reset.entries[0].key, Key::Bytes(b"b".to_vec()));
+
+        let at_lower_limit = format!("a=old; a{}=discarded; b=after", "[x]".repeat(128));
+        let reset = parse_one_level_header_with_php_ini_limits(
+            at_lower_limit.as_bytes(),
+            Limits::default(),
+            None,
+            127,
+        )
+        .unwrap();
+        assert_eq!(reset.entries.len(), 1);
+        assert_eq!(reset.entries[0].key, Key::Bytes(b"b".to_vec()));
+
+        // The ignored 129-level pair consumes the second input-variable slot.
+        let quota = parse_one_level_header_with_php_ini_limits(
+            overflow.as_bytes(),
+            Limits::default(),
+            Some(2),
+            128,
+        )
+        .unwrap();
+        assert!(quota.entries.is_empty());
+        assert_eq!(
+            parse_one_level_header_with_php_ini_limits(
+                b"a=ok",
+                Limits::default(),
+                None,
+                129,
+            )
+            .unwrap_err(),
             Error::NestingLevel
         );
     }

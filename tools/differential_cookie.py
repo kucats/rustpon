@@ -115,6 +115,10 @@ NESTING_CASES = [
     ("mixed-depth-roots", b"alpha[x][y][z]=deep; beta[x]=shallow; gamma[x][y]=medium; tail=ok"),
     ("64-level-exact", b"a" + b"[x]" * 64 + b"=value; tail=ok"),
     ("65-level-then-recovery", b"a[x]=one; a" + b"[x]" * 65 + b"=skip; a[y]=after"),
+    ("127-level-boundary", b"a" + b"[x]" * 127 + b"=value; tail=ok"),
+    ("128-level-boundary", b"a" + b"[x]" * 128 + b"=value; tail=ok"),
+    ("129-level-reset-recovery", b"a=old; a" + b"[x]" * 129 + b"=skip; a[y]=after"),
+    ("129-level-quota-independent", b"a[x]=old; a" + b"[x]" * 129 + b"=skip; b=keep"),
     ("scalar-promoted-or-reset", b"a=old; a[x]=candidate; b=ok"),
 ]
 
@@ -241,7 +245,7 @@ def main():
             finally:
                 server.terminate()
                 server.wait(timeout=10)
-    for depth in (0, 1, 2, 3, 64):
+    for depth in (0, 1, 2, 3, 64, 127, 128):
         server, port = start_server(
             args.php_bin, 1, array_router, max_input_nesting_level=depth,
         )
@@ -295,7 +299,7 @@ def main():
         f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
         f"({len(CASES)} scalar, {len(ARRAY_CASES)} up-to-64-level array, "
         f"{4 * (5 + len(LIMIT_CASES))} quota cases, "
-        f"{5 * len(NESTING_CASES) + 1} configured nesting cases)"
+        f"{7 * len(NESTING_CASES) + 1} configured nesting cases)"
     )
 
 
