@@ -142,9 +142,8 @@ fn cookie_cli_three_level_arrays_preserve_last_wins_and_binary_data() {
 
 #[test]
 fn cookie_cli_four_level_arrays_preserve_binary_last_wins_and_append() {
-    let (ok, stdout, stderr) = run_array(
-        b"a[x][y][z][w]=%00%FF; a[x][y][z][w]=last; a[x][y][z][]=tail",
-    );
+    let (ok, stdout, stderr) =
+        run_array(b"a[x][y][z][w]=%00%FF; a[x][y][z][w]=last; a[x][y][z][]=tail");
     assert!(ok, "{stderr}");
     assert!(stdout.contains(r#"["s","6c617374"]"#));
     assert!(stdout.contains(r#"["s","7461696c"]"#));
