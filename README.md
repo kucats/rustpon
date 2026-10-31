@@ -123,7 +123,8 @@ then verifies that the opened inode has zero remaining hard links before writing
 request bytes. A staging file with an unexpected second hard link is rejected
 *before* unlinking its generated name; the failure leaves the empty named file
 for trusted spool cleanup rather than deleting it. Link-count checks narrow
-the race window but cannot substitute for directory-FD-relative operations. The opened inode must also remain a regular file with no
+the race window but cannot substitute for directory-FD-relative operations.
+The opened inode must also remain a regular file with no
 group/other or setuid/setgid/sticky permission bits, and its owner must match
 the spool directory's owner both before and after unlink.
 During multipart upload ingress, each staged-file write block uses a cloned
