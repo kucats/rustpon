@@ -167,19 +167,23 @@ fn parse_scalar_header_inner(
             Some(pos) => (&segment[..pos], &segment[pos + 1..]),
             None => (segment, b"".as_slice()),
         };
+        // The PHP variable quota stops registration, not independent hard
+        // accounting for the total number of wire Cookie pairs.
+        let mut skipped_by_php_quota = false;
         if !raw_name.is_empty()
             && let Some(remaining) = php_remaining.as_mut()
         {
             if *remaining == 0 {
-                break;
+                skipped_by_php_quota = true;
+            } else {
+                *remaining -= 1;
             }
-            *remaining -= 1;
         }
         pairs = pairs.checked_add(1).ok_or(Error::Pairs)?;
         if pairs > limits.pairs {
             return Err(Error::Pairs);
         }
-        if raw_name.is_empty() {
+        if skipped_by_php_quota || raw_name.is_empty() {
             continue;
         }
         if raw_name.len() > limits.name_bytes {
@@ -397,6 +401,48 @@ mod tests {
                 1,
             )
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn php_cookie_variable_quota_cannot_bypass_hard_pair_budget() {
+        let limits = Limits {
+            pairs: 2,
+            name_bytes: 1,
+            ..Limits::default()
+        };
+        let accepted = parse_scalar_header_with_php_max_input_vars(
+            b"a=1; very_long_skipped_name=2",
+            limits,
+            1,
+        )
+        .unwrap();
+        assert_eq!(accepted.entries().len(), 1);
+
+        // The skipped name bypasses PHP registration and name validation,
+        // but its pair still consumes the parser's independent hard budget.
+        assert_eq!(
+            parse_scalar_header_with_php_max_input_vars(
+                b"a=1; very_long_skipped_name=2; b=3",
+                limits,
+                1,
+            )
+            .unwrap_err(),
+            Error::Pairs
+        );
+        assert_eq!(
+            parse_scalar_header_with_php_max_input_vars(
+                b"a=1; =ignored; b=3",
+                limits,
+                1,
+            )
+            .unwrap_err(),
+            Error::Pairs
+        );
+        assert_eq!(
+            parse_scalar_header_with_php_max_input_vars(b"a=1; b=2; c=3", limits, 0)
+                .unwrap_err(),
+            Error::Pairs
         );
     }
 

@@ -1970,6 +1970,10 @@ PHP `max_input_vars=0` admits no Cookie variables. Each nonempty wire name
 consumes a slot, including duplicates and names PHP ignores because the root
 starts with `[`; empty names (`=value`) and separator-only segments do not.
 Once the quota is reached, later variables are not registered or decoded.
+Every remaining nonempty wire segment still counts against the independent
+hard `Limits::pairs` budget, including variables skipped by PHP's quota.
+An over-budget header fails without publishing partial JSON; PHP's
+`max_input_vars` must not bypass the server's resource limit.
 The entire header still undergoes hard byte-size and CR/LF/NUL validation.
 A real PHP 8.4 HTTP SAPI is used as the differential oracle with limits
 0, 1, 2 and 3. This is a standalone experimental admission adapter, not a

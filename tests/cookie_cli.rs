@@ -132,6 +132,22 @@ fn cookie_cli_php_variable_quota_bounds_array_projection() {
 }
 
 #[test]
+fn cookie_cli_enforces_hard_pair_budget_after_php_variable_quota() {
+    let boundary = vec!["a=1"; 128].join("; ");
+    let overflow = format!("{boundary}; b=2");
+    for array_mode in [false, true] {
+        let (ok, stdout, stderr) = run_limited(boundary.as_bytes(), array_mode, "1");
+        assert!(ok, "{stderr}");
+        assert!(!stdout.is_empty());
+
+        let (ok, stdout, stderr) = run_limited(overflow.as_bytes(), array_mode, "1");
+        assert!(!ok);
+        assert!(stdout.is_empty(), "no partial Cookie JSON on error");
+        assert!(stderr.contains("Pairs"), "{stderr}");
+    }
+}
+
+#[test]
 fn cookie_cli_three_level_arrays_preserve_last_wins_and_binary_data() {
     let (ok, stdout, stderr) = run_array(b"a[x][y][z]=%00%FF; a[x][y][z]=last; a[x][y][]=tail");
     assert!(ok, "{stderr}");

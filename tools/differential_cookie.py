@@ -146,6 +146,9 @@ LIMIT_CASES = [
     ("ignored-empty-name", b"=ignored; a=1; b=2; c=3"),
     ("blank-separators", b";; a=1;;b=2; c=3"),
     ("ignored-bracket-root", b"[bad]=ignored; a=1; b=2"),
+    # Exactly the independent 128-pair hard ceiling, even when PHP only
+    # admits the first 0-3 variables and all later wire pairs are duplicates.
+    ("hard-pair-budget-at-boundary", b"; ".join([b"a=1"] * 128)),
     ("array-append", b"a[]=first; a[]=second; a[]=third"),
     ("array-promotion", b"a=one; a[x]=two; b=three"),
     ("array-duplicate-index", b"a[x]=one; a[x]=two; b=three"),
@@ -238,7 +241,7 @@ def main():
     scalar_router = Path(__file__).resolve().with_name("cookie_projection.php")
     for limit in (0, 1, 2, 3):
         for arrays, router, expected_key, cases in (
-            (False, scalar_router, "cookie_pairs", LIMIT_CASES[:5]),
+            (False, scalar_router, "cookie_pairs", LIMIT_CASES[:6]),
             (True, array_router, "cookie_tree", LIMIT_CASES),
         ):
             server, port = start_server(
@@ -318,7 +321,7 @@ def main():
     print(
         f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
         f"({len(CASES)} scalar, {len(ARRAY_CASES)} up-to-64-level array, "
-        f"{4 * (5 + len(LIMIT_CASES))} quota cases, "
+        f"{4 * (6 + len(LIMIT_CASES))} quota cases, "
         f"{7 * len(NESTING_CASES) + 1} configured nesting cases)"
     )
 
