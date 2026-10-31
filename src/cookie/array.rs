@@ -289,15 +289,18 @@ fn parse_one_level_header_inner(
                 let Some(rest) = trailing.strip_prefix(b"[") else {
                     break;
                 };
-                // PHP 8.4 keeps the last complete array path when a
-                // subsequent opening bracket has no closing bracket.
-                let Some(end) = rest.iter().position(|&byte| byte == b']') else {
-                    break;
-                };
-                if depth == MAX_ARRAY_DEPTH {
+                // PHP counts a directly following opening bracket against
+                // max_input_nesting_level even when its closing ']' is absent.
+                // An over-depth name removes the already registered root.
+                if depth >= max_input_nesting_level || depth == MAX_ARRAY_DEPTH {
                     too_deep = true;
                     break;
                 }
+                // If capacity remains, an unfinished suffix registers only
+                // the preceding complete path (the PHP 8.4 behavior).
+                let Some(end) = rest.iter().position(|&byte| byte == b']') else {
+                    break;
+                };
                 indexes[depth] = &rest[..end];
                 depth += 1;
                 trailing = &rest[end + 1..];
@@ -515,7 +518,7 @@ mod tests {
             b"a[x][=one; b=excluded",
             Limits::default(),
             Some(1),
-            1,
+            2,
         )
         .unwrap();
         assert_eq!(limited.entries.len(), 1);
@@ -523,6 +526,15 @@ mod tests {
             panic!("expected array root");
         };
         assert_eq!(root.elements[0].value, Value::Scalar(b"one".to_vec()));
+        let over_depth = parse_one_level_header_with_php_ini_limits(
+            b"a=old; a[x][=ignored; b=ok",
+            Limits::default(),
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(over_depth.entries.len(), 1);
+        assert_eq!(over_depth.entries[0].key, Key::Bytes(b"b".to_vec()));
     }
 
     #[test]
