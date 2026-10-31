@@ -308,3 +308,29 @@ fn cookie_cli_configured_128_level_depth_and_129_guard() {
     assert!(stdout.is_empty());
     assert!(stderr.contains("NestingLevel"), "{stderr}");
 }
+
+#[test]
+fn cookie_cli_rejects_disallowed_field_controls_before_php_quota() {
+    for control in [0x00, 0x01, 0x1f, 0x7f, b'\r', b'\n'] {
+        for arrays in [false, true] {
+            let (ok, stdout, stderr) = run_limited(&[b'a', b'=', control], arrays, "0");
+            assert!(!ok);
+            assert!(stdout.is_empty(), "must not publish partial Cookie JSON");
+            assert!(stderr.contains("InvalidHeader"), "{stderr}");
+        }
+    }
+}
+
+#[test]
+fn cookie_cli_preserves_htab_and_obs_text_in_both_modes() {
+    let header = b"a\tb=one; raw=\xff\x80";
+    let (ok, stdout, stderr) = run(header);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["610962","6f6e65"]"#));
+    assert!(stdout.contains(r#"["726177","ff80"]"#));
+
+    let (ok, stdout, stderr) = run_array(header);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","610962"]"#));
+    assert!(stdout.contains(r#"["s","ff80"]"#));
+}

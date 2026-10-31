@@ -6,7 +6,7 @@
 //! PHP 8.4 ignores trailing text and incomplete later brackets after a
 //! complete array path. This is not a Zend/SAPI registration API.
 
-use super::{Error, Limits, decode_cookie_value};
+use super::{Error, Limits, decode_cookie_value, valid_header_value};
 use std::io::{self, Write};
 
 const MAX_ARRAY_DEPTH: usize = 128;
@@ -249,10 +249,8 @@ fn parse_one_level_header_inner(
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
     }
-    if header
-        .iter()
-        .any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n'))
-    {
+    // Validate even when PHP's variable quota would skip every registration.
+    if !valid_header_value(header) {
         return Err(Error::InvalidHeader);
     }
     let mut entries: Vec<Entry> = Vec::new();
@@ -498,6 +496,34 @@ mod tests {
 
     fn parse(header: &[u8]) -> CookieTree {
         parse_one_level_header(header, Limits::default()).unwrap()
+    }
+
+    #[test]
+    fn cookie_array_field_value_rejects_controls_but_preserves_htab_and_obs_text() {
+        for control in [0x00, 0x01, 0x1f, 0x7f, b'\r', b'\n'] {
+            let header = [b'a', b'[', b'x', b']', b'=', control];
+            for quota in [None, Some(0)] {
+                assert_eq!(
+                    parse_one_level_header_with_php_ini_limits(
+                        &header,
+                        Limits::default(),
+                        quota,
+                        64,
+                    )
+                    .unwrap_err(),
+                    Error::InvalidHeader
+                );
+            }
+        }
+        let parsed = parse(b"a[\t]=tab; a[]=next; raw=\xff\x80");
+        assert_eq!(parsed.entries.len(), 2);
+        let Value::Array(array) = &parsed.entries[0].value else {
+            panic!("array root expected");
+        };
+        assert_eq!(array.elements.len(), 2);
+        assert_eq!(array.elements[0].key, Key::Integer(0));
+        assert_eq!(array.elements[1].key, Key::Integer(1));
+        assert_eq!(parsed.entries[1].value, Value::Scalar(b"\xff\x80".to_vec()));
     }
 
     #[test]

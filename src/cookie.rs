@@ -97,6 +97,14 @@ fn hex(byte: u8) -> Option<u8> {
     }
 }
 
+// RFC 9110 field values permit HTAB, SP, VCHAR, and obs-text. Check the
+// already-extracted value before PHP quotas can skip malformed wire content.
+fn valid_header_value(header: &[u8]) -> bool {
+    header
+        .iter()
+        .all(|&byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
+}
+
 /// PHP Cookie registration raw-URL-decodes values but does not map '+' to
 /// space and does not percent-decode names.
 fn decode_cookie_value(raw: &[u8]) -> Result<Vec<u8>, Error> {
@@ -150,12 +158,9 @@ fn parse_scalar_header_inner(
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
     }
-    // These bytes cannot occur in a valid HTTP header field value. Reject
-    // them instead of silently modeling PHP's transport-specific truncation.
-    if header
-        .iter()
-        .any(|&byte| matches!(byte, b'\0' | b'\r' | b'\n'))
-    {
+    // Reject malformed HTTP field bytes rather than attempting PHP's
+    // transport-dependent behavior for invalid requests.
+    if !valid_header_value(header) {
         return Err(Error::InvalidHeader);
     }
 
@@ -295,6 +300,29 @@ mod tests {
         let mut json = Vec::new();
         output.write_json(&mut json).unwrap();
         assert_eq!(json, br#"[["61","ff"]]"#);
+    }
+
+    #[test]
+    fn cookie_scalar_field_value_rejects_controls_but_preserves_htab_and_obs_text() {
+        assert_eq!(
+            pairs(b"a\tb=one; raw=\xff\x80"),
+            vec![
+                (b"a\tb".to_vec(), b"one".to_vec()),
+                (b"raw".to_vec(), b"\xff\x80".to_vec()),
+            ]
+        );
+        for control in [0x00, 0x01, 0x1f, 0x7f, b'\r', b'\n'] {
+            let header = [b'a', b'=', control];
+            assert_eq!(
+                parse_scalar_header(&header, Limits::default()).unwrap_err(),
+                Error::InvalidHeader
+            );
+            assert_eq!(
+                parse_scalar_header_with_php_max_input_vars(&header, Limits::default(), 0)
+                    .unwrap_err(),
+                Error::InvalidHeader
+            );
+        }
     }
 
     #[test]
