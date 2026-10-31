@@ -3,7 +3,8 @@
 //! PHP 8.4 defaults max_input_nesting_level to 64; explicit settings up to
 //! 128 are supported. A deeper path removes
 //! its previously registered root without publishing a partial value.
-//! Malformed paths still fail closed; this is not a Zend/SAPI registration API.
+//! PHP 8.4 ignores trailing text and incomplete later brackets after a
+//! complete array path. This is not a Zend/SAPI registration API.
 
 use super::{Error, Limits, decode_cookie_value};
 use std::io::{self, Write};
@@ -179,8 +180,8 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 /// max_input_nesting_level of 64, independently of input-variable quotas.
 /// Deeper paths remove their normalized root, matching PHP HTTP SAPI.
 /// One ASCII whitespace byte also acts as an append key.
-/// A trailing suffix after the final ']' is ignored; malformed paths fail
-/// closed without partial output. Hard header/pair/name/value limits remain.
+/// A trailing suffix after the final ']' is ignored, including an opening
+/// bracket without a matching close. Hard header/pair/name/value limits remain.
 pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTree, Error> {
     parse_one_level_header_inner(header, limits, None, DEFAULT_PHP_DEPTH)
 }
@@ -288,10 +289,11 @@ fn parse_one_level_header_inner(
                 let Some(rest) = trailing.strip_prefix(b"[") else {
                     break;
                 };
-                let end = rest
-                    .iter()
-                    .position(|&byte| byte == b']')
-                    .ok_or(Error::UnsupportedArrayName)?;
+                // PHP 8.4 keeps the last complete array path when a
+                // subsequent opening bracket has no closing bracket.
+                let Some(end) = rest.iter().position(|&byte| byte == b']') else {
+                    break;
+                };
                 if depth == MAX_ARRAY_DEPTH {
                     too_deep = true;
                     break;
@@ -300,9 +302,6 @@ fn parse_one_level_header_inner(
                 depth += 1;
                 trailing = &rest[end + 1..];
                 too_deep = depth > max_input_nesting_level;
-            }
-            if !too_deep && trailing.contains(&b'[') {
-                return Err(Error::UnsupportedArrayName);
             }
             if too_deep {
                 // php_register_variable_ex removes an existing normalized
@@ -462,6 +461,60 @@ mod tests {
         parse_one_level_header(header, Limits::default()).unwrap()
     }
 
+
+    #[test]
+    fn php_cookie_ignores_incomplete_or_noncontiguous_trailing_array_brackets() {
+        let keys: [&[u8]; 4] = [b"x", b"y", b"z", b"w"];
+        for (header, depth, expected) in [
+            (b"a[x][=one".as_slice(), 1, b"one".as_slice()),
+            (b"a[x][y][=two", 2, b"two"),
+            (b"a[x][y][z][=three", 3, b"three"),
+            (b"a[x][y][z][w][v=four", 4, b"four"),
+            (b"a[x]noise[y]=one", 1, b"one"),
+            (b"a[x][y]noise[z]=two", 2, b"two"),
+            (b"a[x][y][z]noise[w]=three", 3, b"three"),
+            (b"a[x][y[z]=bracket", 2, b"bracket"),
+        ] {
+            let tree = parse(header);
+            assert_eq!(tree.entries.len(), 1);
+            assert_eq!(tree.entries[0].key, Key::Bytes(b"a".to_vec()));
+            let mut value = &tree.entries[0].value;
+            for index in &keys[..depth] {
+                let Value::Array(array) = value else {
+                    panic!("expected PHP array at depth");
+                };
+                assert_eq!(array.elements.len(), 1);
+                assert_eq!(array.elements[0].key, Key::Bytes(index.to_vec()));
+                value = &array.elements[0].value;
+            }
+            assert_eq!(value, &Value::Scalar(expected.to_vec()));
+        }
+
+        // A later valid assignment replaces the earlier leaf. An ignored
+        // suffix does not consume an additional array depth.
+        let tree = parse(b"a[x]tail[y]=first; a[x]=second; b=ok");
+        assert_eq!(tree.entries.len(), 2);
+        let Value::Array(root) = &tree.entries[0].value else {
+            panic!("expected array root");
+        };
+        assert_eq!(root.elements.len(), 1);
+        assert_eq!(root.elements[0].value, Value::Scalar(b"second".to_vec()));
+        assert_eq!(tree.entries[1].value, Value::Scalar(b"ok".to_vec()));
+
+        let limited = parse_one_level_header_with_php_ini_limits(
+            b"a[x][=one; b=excluded",
+            Limits::default(),
+            Some(1),
+            1,
+        )
+        .unwrap();
+        assert_eq!(limited.entries.len(), 1);
+        let Value::Array(root) = &limited.entries[0].value else {
+            panic!("expected array root");
+        };
+        assert_eq!(root.elements[0].value, Value::Scalar(b"one".to_vec()));
+    }
+
     #[test]
     fn array_indices_overwrite_while_scalar_roots_are_first_wins() {
         let tree = parse(b"a=first; a=second; a[x]=one; a[x]=two; a[y]=three; a=last");
@@ -506,15 +559,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_paths_fail_closed_and_limits_cover_overwrites() {
-        assert_eq!(
-            parse_one_level_header(b"a[x][y][z][w][v=1", Limits::default()).unwrap_err(),
-            Error::UnsupportedArrayName
-        );
-        assert_eq!(
-            parse_one_level_header(b"a[x][=1", Limits::default()).unwrap_err(),
-            Error::UnsupportedArrayName
-        );
+    fn php_cookie_array_limits_and_invalid_headers_fail_closed() {
         let limited = Limits {
             retained_bytes: 9,
             ..Limits::default()
@@ -566,17 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn php_cookie_two_level_limits_and_malformed_paths_fail_closed() {
-        for invalid in [
-            b"a[x][y][z][w][v=one".as_slice(),
-            b"a[x][y][=two",
-            b"a[x]noise[y]=three",
-        ] {
-            assert_eq!(
-                parse_one_level_header(invalid, Limits::default()).unwrap_err(),
-                Error::UnsupportedArrayName
-            );
-        }
+    fn php_cookie_two_level_limits_fail_closed() {
         let limited = Limits {
             retained_bytes: 12,
             ..Limits::default()
@@ -687,18 +722,7 @@ mod tests {
     }
 
     #[test]
-    fn php_cookie_three_level_depth_and_quota_fail_closed() {
-        for invalid in [
-            b"a[x][y][z][w][v=one".as_slice(),
-            b"a[x][y][=one",
-            b"a[x][y]noise[z]=one",
-            b"a[x][y][z]noise[w]=one",
-        ] {
-            assert_eq!(
-                parse_one_level_header(invalid, Limits::default()).unwrap_err(),
-                Error::UnsupportedArrayName
-            );
-        }
+    fn php_cookie_three_level_depth_and_quota_limits() {
         let limited = Limits {
             retained_bytes: 12,
             ..Limits::default()
@@ -759,18 +783,7 @@ mod tests {
     }
 
     #[test]
-    fn php_cookie_four_level_depth_and_input_limits_fail_closed() {
-        for invalid in [
-            b"a[x][y][z][w][v=one".as_slice(),
-            b"a[x][y][z][=one",
-            b"a[x][y][z]noise[w]=one",
-            b"a[x][y][z][w]noise[v]=one",
-        ] {
-            assert_eq!(
-                parse_one_level_header(invalid, Limits::default()).unwrap_err(),
-                Error::UnsupportedArrayName
-            );
-        }
+    fn php_cookie_four_level_depth_and_input_limits() {
         let limited = Limits {
             retained_bytes: 16,
             ..Limits::default()
