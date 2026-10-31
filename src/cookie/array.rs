@@ -631,9 +631,8 @@ mod tests {
 
     #[test]
     fn exhausted_php_cookie_append_is_ignored_without_losing_following_values() {
-        let tree = parse(
-            b"a[9223372036854775807]=max; a[]=skipped; a[][x]=skipped; a[0]=zero; b=kept",
-        );
+        let tree =
+            parse(b"a[9223372036854775807]=max; a[]=skipped; a[][x]=skipped; a[0]=zero; b=kept");
         assert_eq!(tree.entries.len(), 2);
         let Value::Array(root) = &tree.entries[0].value else {
             panic!("array root expected");
@@ -645,9 +644,8 @@ mod tests {
         assert_eq!(root.elements[1].value, Value::Scalar(b"zero".to_vec()));
         assert_eq!(tree.entries[1].value, Value::Scalar(b"kept".to_vec()));
 
-        let nested = parse(
-            b"a[x][9223372036854775807]=max; a[x][]=skipped; a[x][][y]=skipped; b=ok",
-        );
+        let nested =
+            parse(b"a[x][9223372036854775807]=max; a[x][]=skipped; a[x][][y]=skipped; b=ok");
         assert_eq!(nested.entries.len(), 2);
         let Value::Array(root) = &nested.entries[0].value else {
             panic!("array root expected");
