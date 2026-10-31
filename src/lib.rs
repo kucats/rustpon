@@ -1276,8 +1276,10 @@ impl Parser {
     }
 }
 
+// The unrestricted writer is retained only for isolated fault-injection
+// tests; upload ingress always uses the inode-checked writer.
 // Unlike Write::write_all, do not retry an indefinitely Interrupted writer.
-// Any successful write resets the consecutive-interrupt budget.
+#[cfg(test)]
 fn write_chunk(writer: &mut impl Write, bytes: &[u8]) -> io::Result<()> {
     write_chunk_checked(writer, bytes, || Ok(()))
 }
