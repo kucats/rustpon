@@ -1933,8 +1933,25 @@ prototype deliberately rejects them instead of silently bypassing admission.
 
 The `cookie` CLI reads at most 64 KiB plus one overflow byte from stdin
 and prints the tagged `cookie_pairs` array only on complete success.
-Linux CI compares scalar cases with a real PHP 8.4 HTTP SAPI, including
-duplicate names, percent escapes, whitespace and a multi-block value.
+It accepts `--max-cookie-header-bytes N`, `--max-cookie-pairs N`,
+`--max-cookie-name-bytes N`, `--max-cookie-value-bytes N`, and
+`--max-cookie-retained-bytes N` in scalar and `--php-arrays` modes.
+These options **only tighten** the built-in hard ceilings (64 KiB header,
+128 wire components, 1,024 raw name bytes, 8,192 raw value bytes, and
+64 KiB retained bytes); attempts to raise a ceiling or repeat an option
+are rejected before stdin is read. The header-byte cap is parsed before
+reading stdin, so an explicitly smaller cap also reduces the CLI's
+maximum input allocation. A zero cap is valid and rejects any input
+consuming the corresponding budget. These are independent Rust resource
+limits rather than PHP INI settings. In particular, they still reject
+overlong Cookie names and values after PHP `max_input_vars` skips registration,
+and no partial JSON is published on failure.
+
+Linux CI compares scalar and array Cookie values under these tightened
+budgets with a real PHP 8.4 HTTP SAPI at exact accepted boundaries;
+the distinct Rust-only rejection behavior has separate CLI boundary tests.
+The default-mode suite also checks duplicate names, percent escapes,
+whitespace and multi-block values.
 
 ### PHP 8.4 default-depth Cookie array registration (opt-in)
 
