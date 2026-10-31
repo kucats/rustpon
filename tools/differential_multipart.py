@@ -97,6 +97,12 @@ CASES = [
     ("file-prewrite-snapshot-oracle", [
         (b"upload", bytes((i * 19 + 7) % 256 for i in range(8192 * 2 + 3)), b"snapshot.bin")
     ]),
+    # Ingress inode-privacy revalidation must leave untampered uploads
+    # unchanged. Compare all 16,401 bytes and typed FILES metadata with
+    # the real PHP 8.4 HTTP SAPI.
+    ("file-ingress-inode-guard-oracle", [
+        (b"upload", bytes((i * 71 + 23) % 256 for i in range(8192 * 2 + 17)), b"ingress-guard.bin")
+    ]),
     # Distinct data at every copy boundary: catch skipped/repeated source blocks.
     # Post-write readback companion: byte-varying data crosses three full
     # blocks and a short final block in both the Rust and PHP 8.4 paths.
