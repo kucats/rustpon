@@ -1909,12 +1909,13 @@ without converting '+' to space, and binary values including decoded NUL.
 Cookie *names* are not percent-decoded. The result owns ordered, normalized
 scalar name/value byte pairs and can emit binary-safe hex tuple JSON.
 The caller must validate HTTP framing and the behavior of multiple headers.
-The scalar and array adapters now reject HTTP field-value control bytes
-other than horizontal tab (including DEL), even when `max_input_vars=0`.
-They preserve valid horizontal tabs and RFC 9110 obs-text (0x80–0xff),
-which are covered by PHP 8.4 HTTP SAPI oracle comparisons. This is a
-fail-closed input check, not an attempt to reproduce PHP behavior on
-malformed HTTP headers.
+The scalar and array adapters reject NUL, CR, LF, DEL, and other control
+bytes except HTAB, VT, and FF, even when `max_input_vars=0`. Strict HTTP
+field grammar permits only HTAB among those three, but PHP 8.4 HTTP SAPI
+registers VT/FF bracket indices as array appends. The parser deliberately
+preserves this measured legacy behavior; strict HTTP field validation remains
+an upstream transport responsibility. Horizontal tabs and obs-text
+(0x80–0xff) are also covered by PHP 8.4 SAPI oracle comparisons.
 
 PHP 8.4 flattens an **unterminated** bracket in a Cookie name to an
 underscore (for example, `foo[bar` becomes `foo_bar`), and ignores a

@@ -95,6 +95,7 @@ ARRAY_CASES = [
     ("two-level-binary", b"a[x][y]=%00%FF+"),
     ("one-level-vertical-tab-append", b"a[\x0b]=first; a[]=second"),
     ("one-level-horizontal-tab-append", b"a[\t]=first; a[]=second"),
+    ("one-level-form-feed-append", b"a[\x0c]=first; a[]=second"),
     ("array-obs-text-cookie-value", b"a[x]=\xff\x80; b=ok"),
     ("three-level-siblings", b"a[x][y][z]=one; a[x][y][w]=two"),
     ("three-level-overwrite", b"a[x][y][z]=old; a[x][y][z]=new"),

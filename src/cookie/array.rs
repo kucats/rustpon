@@ -515,6 +515,15 @@ mod tests {
                 );
             }
         }
+        // PHP 8.4 HTTP SAPI also treats VT/FF bracket indices as append
+        // markers, even though these bytes are invalid in strict HTTP fields.
+        let legacy = parse(b"a[\x0b]=vt; a[\x0c]=ff");
+        let Value::Array(legacy_array) = &legacy.entries[0].value else {
+            panic!("array root expected");
+        };
+        assert_eq!(legacy_array.elements[0].key, Key::Integer(0));
+        assert_eq!(legacy_array.elements[1].key, Key::Integer(1));
+
         let parsed = parse(b"a[\t]=tab; a[]=next; raw=\xff\x80");
         assert_eq!(parsed.entries.len(), 2);
         let Value::Array(array) = &parsed.entries[0].value else {

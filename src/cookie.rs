@@ -97,12 +97,15 @@ fn hex(byte: u8) -> Option<u8> {
     }
 }
 
-// RFC 9110 field values permit HTAB, SP, VCHAR, and obs-text. Check the
-// already-extracted value before PHP quotas can skip malformed wire content.
+// Strict HTTP field values allow HTAB but not VT/FF. PHP 8.4 SAPI still
+// registers Cookie brackets containing VT/FF as append indices, so retain
+// those legacy cases while rejecting other controls and DEL, including
+// after max_input_vars is exhausted. Upstream HTTP framing is authoritative.
 fn valid_header_value(header: &[u8]) -> bool {
-    header
-        .iter()
-        .all(|&byte| byte == b'\t' || (byte >= b' ' && byte != 0x7f))
+    header.iter().all(|&byte| {
+        matches!(byte, b'\t' | b'\x0b' | b'\x0c')
+            || (byte >= b' ' && byte != 0x7f)
+    })
 }
 
 /// PHP Cookie registration raw-URL-decodes values but does not map '+' to
