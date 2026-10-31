@@ -214,7 +214,7 @@ fn cookie_cli_configurable_nesting_zero_and_overflow_reset() {
 
 #[test]
 fn cookie_cli_rejects_unimplemented_ini_nesting_above_hard_limit() {
-    let (ok, stdout, stderr) = run_nesting(b"a[x]=value", "65", None);
+    let (ok, stdout, stderr) = run_nesting(b"a[x]=value", "129", None);
     assert!(!ok);
     assert!(stdout.is_empty());
     assert!(stderr.contains("NestingLevel"), "{stderr}");
