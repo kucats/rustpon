@@ -461,7 +461,6 @@ mod tests {
         parse_one_level_header(header, Limits::default()).unwrap()
     }
 
-
     #[test]
     fn php_cookie_ignores_incomplete_or_noncontiguous_trailing_array_brackets() {
         let keys: [&[u8]; 4] = [b"x", b"y", b"z", b"w"];
@@ -499,10 +498,7 @@ mod tests {
             panic!("expected nested array");
         };
         assert_eq!(child.elements[0].key, Key::Bytes(b"y[z".to_vec()));
-        assert_eq!(
-            child.elements[0].value,
-            Value::Scalar(b"bracket".to_vec())
-        );
+        assert_eq!(child.elements[0].value, Value::Scalar(b"bracket".to_vec()));
 
         // A later valid assignment replaces the earlier leaf. An ignored
         // suffix does not consume an additional array depth.
