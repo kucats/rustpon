@@ -160,8 +160,7 @@ fn cookie_cli_trailing_unclosed_fifth_bracket_replaces_complete_leaf() {
 
 #[test]
 fn cookie_cli_noncontiguous_brackets_use_only_the_complete_path() {
-    let (ok, stdout, stderr) =
-        run_array(b"a[x]noise[y]=first; a[x]=second; a[x][=third; b=ok");
+    let (ok, stdout, stderr) = run_array(b"a[x]noise[y]=first; a[x]=second; a[x][=third; b=ok");
     assert!(ok, "{stderr}");
     assert!(stdout.contains(r#"["s","7468697264"]"#));
     assert!(!stdout.contains(r#"["s","6669727374"]"#));
