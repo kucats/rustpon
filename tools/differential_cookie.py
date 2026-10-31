@@ -108,6 +108,16 @@ ARRAY_CASES = [
     ("65-level-recreates-root-last", b"a=old; b=keep; a" + b"[x]" * 65 + b"=ignored; a[y]=reborn"),
 ]
 
+# The INI depth setting is independent of max_input_vars. Over-depth
+# registration deletes the normalized root even when it existed already.
+NESTING_CASES = [
+    ("existing-root-reset", b"a[x]=old; a[x][y]=nested; b=ok; a[z]=restored"),
+    ("mixed-depth-roots", b"alpha[x][y][z]=deep; beta[x]=shallow; gamma[x][y]=medium; tail=ok"),
+    ("64-level-exact", b"a" + b"[x]" * 64 + b"=value; tail=ok"),
+    ("65-level-then-recovery", b"a[x]=one; a" + b"[x]" * 65 + b"=skip; a[y]=after"),
+    ("scalar-promoted-or-reset", b"a=old; a[x]=candidate; b=ok"),
+]
+
 LIMIT_CASES = [
     ("ordinary", b"a=1; b=2; c=3; d=4"),
     ("duplicate-consumes-slot", b"a=1; a=2; b=3"),
@@ -137,10 +147,14 @@ def php_cookie(port, header, key="cookie_pairs"):
         connection.close()
 
 
-def rust_cookie(binary, header, arrays=False, max_input_vars=None):
+def rust_cookie(binary, header, arrays=False, max_input_vars=None,
+                max_input_nesting_level=None):
     command = [str(binary)] + (["--php-arrays"] if arrays else [])
     if max_input_vars is not None:
         command.extend(["--php-max-input-vars", str(max_input_vars)])
+    if max_input_nesting_level is not None:
+        command.extend(["--php-max-input-nesting-level",
+                        str(max_input_nesting_level)])
     result = subprocess.run(
         command,
         input=header, capture_output=True, timeout=15, check=False,
@@ -227,12 +241,61 @@ def main():
             finally:
                 server.terminate()
                 server.wait(timeout=10)
+    for depth in (0, 1, 2, 3, 64):
+        server, port = start_server(
+            args.php_bin, 1, array_router, max_input_nesting_level=depth,
+        )
+        try:
+            for label, header in NESTING_CASES:
+                try:
+                    expected = php_cookie(port, header, key="cookie_tree")
+                    actual = rust_cookie(
+                        args.rust_bin, header, arrays=True,
+                        max_input_nesting_level=depth,
+                    )
+                    if expected != actual:
+                        raise AssertionError(f"PHP={expected!r}, Rust={actual!r}")
+                    passed += 1
+                except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+                    failures += 1
+                    print(
+                        f"FAIL Cookie max_input_nesting_level={depth} {label}: {error}",
+                        file=sys.stderr,
+                    )
+        finally:
+            server.terminate()
+            server.wait(timeout=10)
+
+    # An over-depth wire pair still consumes a max_input_vars slot, and
+    # can delete the root before the quota skips the next pair.
+    server, port = start_server(
+        args.php_bin, 1, array_router, max_input_vars=2,
+        max_input_nesting_level=1,
+    )
+    try:
+        header = b"a[x]=old; a[x][y]=too_deep; b=quota_skipped"
+        expected = php_cookie(port, header, key="cookie_tree")
+        actual = rust_cookie(
+            args.rust_bin, header, arrays=True, max_input_vars=2,
+            max_input_nesting_level=1,
+        )
+        if expected != actual:
+            raise AssertionError(f"PHP={expected!r}, Rust={actual!r}")
+        passed += 1
+    except (AssertionError, RuntimeError, ValueError, KeyError) as error:
+        failures += 1
+        print(f"FAIL Cookie combined PHP INI limits: {error}", file=sys.stderr)
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
+
     if failures:
         raise SystemExit(f"{failures} PHP 8.4 HTTP Cookie cases failed")
     print(
         f"PHP {version} Cookie HTTP SAPI: {passed} cases matched "
         f"({len(CASES)} scalar, {len(ARRAY_CASES)} up-to-64-level array, "
-        f"{4 * (5 + len(LIMIT_CASES))} quota cases)"
+        f"{4 * (5 + len(LIMIT_CASES))} quota cases, "
+        f"{5 * len(NESTING_CASES) + 1} configured nesting cases)"
     )
 
 

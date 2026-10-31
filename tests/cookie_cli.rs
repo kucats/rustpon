@@ -171,3 +171,48 @@ fn cookie_cli_64_level_boundary_and_65_level_root_reset() {
     assert!(stdout.contains(r#"["s","62"],["s","6f6b"]"#));
     assert!(!stdout.contains(r#"["s","61"]"#));
 }
+
+fn run_nesting(header: &[u8], level: &str, max_vars: Option<&str>) -> (bool, String, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cookie"));
+    command.args(["--php-arrays", "--php-max-input-nesting-level", level]);
+    if let Some(max_vars) = max_vars {
+        command.args(["--php-max-input-vars", max_vars]);
+    }
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(header).unwrap();
+    let result = child.wait_with_output().unwrap();
+    (
+        result.status.success(),
+        String::from_utf8(result.stdout).unwrap(),
+        String::from_utf8(result.stderr).unwrap(),
+    )
+}
+
+#[test]
+fn cookie_cli_configurable_nesting_zero_and_overflow_reset() {
+    let (ok, stdout, stderr) = run_nesting(b"a=old; a[x]=discarded; b=ok", "0", None);
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, "{\"cookie_tree\":[\"a\",[[[\"s\",\"62\"],[\"s\",\"6f6b\"]]]]}\n");
+
+    let (ok, stdout, stderr) =
+        run_nesting(b"a[x]=old; a[x][y]=discarded; b=too_late", "1", Some("2"));
+    assert!(ok, "{stderr}");
+    assert_eq!(stdout, "{\"cookie_tree\":[\"a\",[]]}\n");
+
+    let (ok, stdout, stderr) = run_nesting(b"a[x][y]=accepted", "2", None);
+    assert!(ok, "{stderr}");
+    assert!(stdout.contains(r#"["s","6163636570746564"]"#));
+}
+
+#[test]
+fn cookie_cli_rejects_unimplemented_ini_nesting_above_hard_limit() {
+    let (ok, stdout, stderr) = run_nesting(b"a[x]=value", "65", None);
+    assert!(!ok);
+    assert!(stdout.is_empty());
+    assert!(stderr.contains("NestingLevel"), "{stderr}");
+}

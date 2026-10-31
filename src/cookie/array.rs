@@ -180,7 +180,7 @@ fn charge(retained: &mut usize, bytes: usize, limits: Limits) -> Result<(), Erro
 /// A trailing suffix after the final ']' is ignored; malformed paths fail
 /// closed without partial output. Hard header/pair/name/value limits remain.
 pub fn parse_one_level_header(header: &[u8], limits: Limits) -> Result<CookieTree, Error> {
-    parse_one_level_header_inner(header, limits, None)
+    parse_one_level_header_inner(header, limits, None, MAX_ARRAY_DEPTH)
 }
 
 /// Apply PHP 8.4 HTTP SAPI's Cookie max_input_vars quota before registering
@@ -190,7 +190,21 @@ pub fn parse_one_level_header_with_php_max_input_vars(
     limits: Limits,
     max_input_vars: usize,
 ) -> Result<CookieTree, Error> {
-    parse_one_level_header_inner(header, limits, Some(max_input_vars))
+    parse_one_level_header_inner(header, limits, Some(max_input_vars), MAX_ARRAY_DEPTH)
+}
+
+/// Model both PHP 8.4 HTTP SAPI INI limits. A nesting value of zero
+/// rejects every array path by discarding its existing normalized root,
+/// while scalar cookies remain admissible. The independent hard cap of 64
+/// levels is intentional: larger PHP configurations return NestingLevel
+/// rather than silently truncating registration.
+pub fn parse_one_level_header_with_php_ini_limits(
+    header: &[u8],
+    limits: Limits,
+    max_input_vars: Option<usize>,
+    max_input_nesting_level: usize,
+) -> Result<CookieTree, Error> {
+    parse_one_level_header_inner(header, limits, max_input_vars, max_input_nesting_level)
 }
 
 fn is_append_index(index: &[u8]) -> bool {
@@ -203,7 +217,11 @@ fn parse_one_level_header_inner(
     header: &[u8],
     limits: Limits,
     mut php_remaining: Option<usize>,
+    max_input_nesting_level: usize,
 ) -> Result<CookieTree, Error> {
+    if max_input_nesting_level > MAX_ARRAY_DEPTH {
+        return Err(Error::NestingLevel);
+    }
     if header.len() > limits.header_bytes {
         return Err(Error::HeaderBytes);
     }
@@ -263,8 +281,11 @@ fn parse_one_level_header_inner(
             indexes[0] = &raw_name[open + 1..close];
             let mut depth = 1;
             let mut trailing = &raw_name[close + 1..];
-            let mut too_deep = false;
-            while let Some(rest) = trailing.strip_prefix(b"[") {
+            let mut too_deep = depth > max_input_nesting_level;
+            while !too_deep {
+                let Some(rest) = trailing.strip_prefix(b"[") else {
+                    break;
+                };
                 let end = rest
                     .iter()
                     .position(|&byte| byte == b']')
@@ -276,6 +297,7 @@ fn parse_one_level_header_inner(
                 indexes[depth] = &rest[..end];
                 depth += 1;
                 trailing = &rest[end + 1..];
+                too_deep = depth > max_input_nesting_level;
             }
             if !too_deep && trailing.contains(&b'[') {
                 return Err(Error::UnsupportedArrayName);
@@ -792,4 +814,78 @@ mod tests {
             Error::NameBytes
         );
     }
+
+    #[test]
+    fn php_cookie_configured_zero_nesting_discards_roots_and_preserves_scalars() {
+        let tree = parse_one_level_header_with_php_ini_limits(
+            b"a=old; a[x]=ignored; b=ok; c[x]=discarded",
+            Limits::default(),
+            None,
+            0,
+        )
+        .unwrap();
+        assert_eq!(tree.entries.len(), 1);
+        assert_eq!(tree.entries[0].key, Key::Bytes(b"b".to_vec()));
+        assert_eq!(tree.entries[0].value, Value::Scalar(b"ok".to_vec()));
+    }
+
+    #[test]
+    fn php_cookie_configured_nesting_boundary_and_quota_are_independent() {
+        let header = b"a[x]=one; a[x][y]=two; b=tail";
+        let level_one = parse_one_level_header_with_php_ini_limits(
+            header,
+            Limits::default(),
+            None,
+            1,
+        )
+        .unwrap();
+        assert_eq!(level_one.entries.len(), 1);
+        assert_eq!(level_one.entries[0].key, Key::Bytes(b"b".to_vec()));
+
+        let level_two = parse_one_level_header_with_php_ini_limits(
+            header,
+            Limits::default(),
+            None,
+            2,
+        )
+        .unwrap();
+        assert_eq!(level_two.entries.len(), 2);
+        let Value::Array(a) = &level_two.entries[0].value else {
+            panic!("expected nested root at the configured boundary");
+        };
+        let Value::Array(x) = &a.elements[0].value else {
+            panic!("expected nested child");
+        };
+        assert_eq!(x.elements[0].value, Value::Scalar(b"two".to_vec()));
+
+        let quota = parse_one_level_header_with_php_ini_limits(
+            header,
+            Limits::default(),
+            Some(2),
+            1,
+        )
+        .unwrap();
+        assert!(quota.entries.is_empty());
+
+        let depth_64 = format!("a{}=accepted", "[x]".repeat(64));
+        let accepted = parse_one_level_header_with_php_ini_limits(
+            depth_64.as_bytes(),
+            Limits::default(),
+            None,
+            64,
+        )
+        .unwrap();
+        assert_eq!(accepted.entries.len(), 1);
+        assert_eq!(
+            parse_one_level_header_with_php_ini_limits(
+                b"a=ok",
+                Limits::default(),
+                None,
+                65,
+            )
+            .unwrap_err(),
+            Error::NestingLevel
+        );
+    }
+
 }

@@ -1920,8 +1920,14 @@ stack array stores the parsed indices; append markers, nested scalar
 promotion, integer keys, replacement and binary-safe tagged JSON are
 preserved at every supported level. Scalar root names remain first-wins.
 The independent hard name, pair, header, value and retained-byte quotas
-continue to apply. The implementation does not accept an override of
-PHP's INI nesting limit.
+continue to apply. The explicit
+`cookie::array::parse_one_level_header_with_php_ini_limits` API and
+`cookie --php-arrays --php-max-input-nesting-level N` CLI flag also model
+PHP 8.4's configurable INI nesting limit (0–64), including zero disabling
+all array registration and an over-depth pair deleting its existing root.
+These settings can be combined with `--php-max-input-vars N` independently.
+Values above 64 fail with `NestingLevel` instead of claiming compatibility
+with a configuration the Rust prototype cannot represent.
 
 For an over-depth path (65 or more complete bracket levels), PHP 8.4 HTTP
 SAPI removes the previously registered normalized root, discards that

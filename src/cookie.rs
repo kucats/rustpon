@@ -21,6 +21,7 @@ pub enum Error {
     InvalidHeader,
     UnsupportedArrayName,
     AppendExhausted,
+    NestingLevel,
 }
 
 #[derive(Clone, Copy, Debug)]
