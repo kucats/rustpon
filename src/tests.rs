@@ -721,6 +721,65 @@ fn boundary_and_configuration_validation() {
 }
 
 #[test]
+fn anonymous_upload_ingress_checks_inode_identity_and_privacy_before_more_bytes() {
+    // Tamper the live anonymous inode after creation, and again after one
+    // successful 8 KiB flush. Neither path may write another payload byte.
+    // PHP-mode recovery must not turn an integrity violation into error=7.
+    for (first_chunk, mode, php_recovery) in [
+        (false, 0o644, false),
+        (true, 0o400, false),
+        (false, 0o644, true),
+    ] {
+        let spool = Spool::new();
+        let mut parser = Parser::new(b"AaB03x", Limits::default(), &spool.0).unwrap();
+        parser.php_recover_write_errors = php_recovery;
+        parser
+            .feed(b"--AaB03x\r\nContent-Disposition: form-data; name=file; filename=x.bin\r\n\r\n")
+            .unwrap();
+        let probe = match &parser.active.as_ref().unwrap().payload {
+            Payload::File(upload) => upload.file.as_ref().unwrap().try_clone().unwrap(),
+            Payload::Field(_) => panic!("expected staged upload"),
+        };
+        if first_chunk {
+            parser.feed(&vec![b'x'; BLOCK + WINDOW + 8]).unwrap();
+        }
+        let bytes_before = probe.metadata().unwrap().len();
+        if first_chunk {
+            assert!(bytes_before >= BLOCK as u64);
+        } else {
+            assert_eq!(bytes_before, 0);
+        }
+        probe
+            .set_permissions(fs::Permissions::from_mode(mode))
+            .unwrap();
+        assert_eq!(
+            parser.feed(b"tail\r\n--AaB03x--").unwrap_err(),
+            Error::InvalidSpoolDirectory
+        );
+        assert_eq!(probe.metadata().unwrap().len(), bytes_before);
+        assert!(parser.request.is_none());
+        spool.empty();
+    }
+}
+
+#[test]
+fn anonymous_upload_ingress_keeps_binary_content_across_multiple_writes() {
+    let spool = Spool::new();
+    let payload: Vec<u8> = (0..(BLOCK * 2 + 17))
+        .map(|index| ((index * 71 + 23) % 256) as u8)
+        .collect();
+    let mut request = parse(&body(&[(FILE, &payload)]), Limits::default(), &spool).unwrap();
+    let mut copied = Vec::new();
+    assert_eq!(
+        request.upload_mut(0).unwrap().copy_to(&mut copied).unwrap(),
+        payload.len() as u64
+    );
+    assert_eq!(copied, payload);
+    drop(request);
+    spool.empty();
+}
+
+#[test]
 fn file_creation_write_and_reader_failures_discard_staging() {
     let spool = Spool::new();
     let prefix = b"--AaB03x\r\nContent-Disposition: form-data; name=old; filename=old\r\n\r\nold\r\n--AaB03x\r\n";
